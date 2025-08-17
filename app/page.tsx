@@ -22,7 +22,7 @@ type VoiceResponse = {
 };
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";   // e.g. https://ellie-api-1.onrender.com
-const USER_ID = "default-user";                       // swap with your auth id if you have one
+const USER_ID = "default-user";                       // swap with your real user id if you have one
 
 // Keep in sync with server SUPPORTED_LANGUAGES
 const LANGS: LangOption[] = [
@@ -71,7 +71,8 @@ export default function Page() {
   useEffect(() => {
     (async () => {
       if (!API) return;
-      // 1) If we already stored a language locally, sync to backend and continue
+
+      // 1) Local storage wins (and syncs to backend)
       const stored = typeof window !== "undefined"
         ? (localStorage.getItem("ellie_language") as LangCode | null)
         : null;
@@ -87,7 +88,7 @@ export default function Page() {
         return;
       }
 
-      // 2) Ask backend if a language already exists for this user
+      // 2) Otherwise ask backend
       try {
         const r = await fetch(`${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`);
         const data = (await r.json()) as GetLanguageResponse;
@@ -101,12 +102,12 @@ export default function Page() {
         /* fall through to picker */
       }
 
-      // 3) Not set → show picker (block UI)
+      // 3) Not set → show picker
       setLangReady(false);
     })();
   }, []);
 
-  async function confirmLanguage() {
+  async function confirmLanguage(): Promise<void> {
     if (!API) return;
     try {
       const r = await fetch(`${API}/api/set-language`, {
@@ -115,11 +116,8 @@ export default function Page() {
         body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
       });
       const data = (await r.json()) as SetLanguageResponse;
-      if (data?.language) {
-        localStorage.setItem("ellie_language", data.language);
-      } else {
-        localStorage.setItem("ellie_language", chosenLang);
-      }
+      const saved = data?.language ?? chosenLang;
+      localStorage.setItem("ellie_language", saved);
       setLangReady(true);
     } catch {
       alert("Could not save language. Please try again.");
@@ -129,11 +127,11 @@ export default function Page() {
   // ────────────────────────────────────────────────────────────
   // Chat helpers
   // ────────────────────────────────────────────────────────────
-  function append(from: "you" | "ellie", text: string) {
+  function append(from: "you" | "ellie", text: string): void {
     setMessages((prev) => [...prev, { from, text }]);
   }
 
-  async function sendText() {
+  async function sendText(): Promise<void> {
     if (!API || !langReady) return;
     const msg = input.trim();
     if (!msg) return;
@@ -155,7 +153,7 @@ export default function Page() {
     }
   }
 
-  async function resetConversation() {
+  async function resetConversation(): Promise<void> {
     if (!API) return;
     setMessages([]);
     await fetch(`${API}/api/reset`, {
@@ -169,7 +167,7 @@ export default function Page() {
   // Voice recording → /api/voice-chat
   // (language already chosen on first load)
   // ────────────────────────────────────────────────────────────
-  async function sendVoiceBlob(blob: Blob) {
+  async function sendVoiceBlob(blob: Blob): Promise<void> {
     if (!API || !langReady) return;
     setLoading(true);
     try {
@@ -194,13 +192,13 @@ export default function Page() {
     }
   }
 
-  async function startRecording() {
+  async function startRecording(): Promise<void> {
     if (!langReady) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
       chunksRef.current = [];
-      mr.ondataavailable = (ev: BlobEvent) => {
+      mr.ondataavailable = (ev: { data: Blob }) => {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       mr.onstop = () => {
@@ -216,7 +214,7 @@ export default function Page() {
     }
   }
 
-  function stopRecording() {
+  function stopRecording(): void {
     const mr = mediaRecorderRef.current;
     if (mr && mr.state !== "inactive") mr.stop();
     setRecording(false);
@@ -295,9 +293,12 @@ export default function Page() {
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type a message…"
           style={{ flex: 1, padding: 12, borderRadius: 8, border: "1px solid #333", background: "#101015", color: "#fff" }}
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void sendText();
+          }}
         />
         <button
-          onClick={sendText}
+          onClick={() => void sendText()}
           disabled={loading || !input.trim()}
           style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #444", background: "#fff", color: "#000" }}
         >
@@ -308,7 +309,7 @@ export default function Page() {
       <section style={{ display: "flex", gap: 8 }}>
         {!recording ? (
           <button
-            onClick={startRecording}
+            onClick={() => void startRecording()}
             disabled={loading}
             style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #0a7", background: "#0a7", color: "#fff" }}
           >
@@ -316,7 +317,7 @@ export default function Page() {
           </button>
         ) : (
           <button
-            onClick={stopRecording}
+            onClick={() => stopRecording()}
             style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #a00", background: "#a00", color: "#fff" }}
           >
             ⏹ Stop & send
