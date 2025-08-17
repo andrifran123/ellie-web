@@ -15,7 +15,7 @@ async function sendToEllie(userInput: string) {
   const res = await fetch(`${API_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: userInput, userId: USER_ID }), // <-- exact shape the API expects
+    body: JSON.stringify({ message: userInput, userId: USER_ID }),
   });
 
   if (!res.ok) {
@@ -38,23 +38,102 @@ async function resetConversation() {
   }).catch(() => {});
 }
 
+// Text → Speech (MP3 buffer)
+async function textToSpeech(text: string) {
+  const res = await fetch(`${API_URL}/api/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`TTS failed: ${res.status} ${t}`);
+  }
+  const blob = await res.blob();
+  return blob;
+}
+
+// Audio (webm/ogg/mp3…) → text (Whisper)
+async function uploadAudioAndTranscribe(file: Blob) {
+  const form = new FormData();
+  form.append('audio', file, 'audio.webm');
+  const res = await fetch(`${API_URL}/api/upload-audio`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`Transcribe failed: ${res.status} ${t}`);
+  }
+  const data = (await res.json()) as { text?: string };
+  if (!data?.text) throw new Error('No text from transcription');
+  return data.text;
+}
+
 export default function Page() {
+  // TEXT CHAT STATE
   const [messages, setMessages] = useState<Msg[]>([
     { role: 'assistant', content: `Hey there! 😊 How’s it going, Andri?` },
   ]);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [bannerError, setBannerError] = useState<string | null>(null);
-
   const listRef = useRef<HTMLDivElement>(null);
 
-  // auto-scroll
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, isSending]);
+  // VOICE MODE STATE
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [micReady, setMicReady] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [callStatus, setCallStatus] = useState<'idle'|'listening'|'thinking'|'speaking'>('idle');
 
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // auto-scroll for text chat
+  useEffect(() => {
+    if (!voiceMode) {
+      listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, [messages, isSending, voiceMode]);
+
+  // Toggle Voice Mode ON/OFF
+  async function handleToggleVoiceMode(on: boolean) {
+    setBannerError(null);
+    setVoiceMode(on);
+
+    if (on) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+        setMicReady(true);
+        setCallStatus('idle');
+        // Start continuous loop: after a short delay, listen
+        setTimeout(() => {
+          if (voiceMode) tryStartRecording();
+        }, 800);
+      } catch (e: any) {
+        setMicReady(false);
+        setVoiceMode(false);
+        setBannerError('Mic permission denied. Please allow microphone to use Voice Mode.');
+      }
+    } else {
+      // cleanup
+      tryStopRecording();
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop());
+        mediaStreamRef.current = null;
+      }
+      setMicReady(false);
+      setCallStatus('idle');
+    }
+  }
+
+  // TEXT CHAT handlers
   async function handleSend(e?: React.FormEvent) {
     e?.preventDefault();
+    if (voiceMode) return;
     const text = input.trim();
     if (!text || isSending) return;
 
@@ -81,17 +160,118 @@ export default function Page() {
     await resetConversation();
   }
 
+  // VOICE MODE helpers
+  function tryStartRecording() {
+    if (!micReady || recording || !voiceMode) return;
+    if (!mediaStreamRef.current) return;
+
+    chunksRef.current = [];
+    const mr = new MediaRecorder(mediaStreamRef.current);
+    mediaRecorderRef.current = mr;
+
+    mr.ondataavailable = (evt) => {
+      if (evt.data && evt.data.size > 0) {
+        chunksRef.current.push(evt.data);
+      }
+    };
+
+    mr.onstop = async () => {
+      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      chunksRef.current = [];
+      setCallStatus('thinking');
+
+      try {
+        const userText = await uploadAudioAndTranscribe(blob);
+        const replyText = await sendToEllie(userText);
+        setCallStatus('speaking');
+
+        const mp3 = await textToSpeech(replyText);
+        playAudioBlob(mp3, () => {
+          if (voiceMode) {
+            // restart loop: listen again automatically
+            tryStartRecording();
+          } else {
+            setCallStatus('idle');
+          }
+        });
+      } catch (e: any) {
+        console.error(e);
+        setBannerError(e?.message || 'Voice error');
+        setCallStatus('idle');
+      }
+    };
+
+    mr.start();
+    setRecording(true);
+    setCallStatus('listening');
+
+    // auto-stop after 5s if user stays silent
+    setTimeout(() => {
+      if (recording && mr.state === 'recording') {
+        tryStopRecording();
+      }
+    }, 5000);
+  }
+
+  function tryStopRecording() {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== 'inactive') {
+      mr.stop();
+    }
+    setRecording(false);
+  }
+
+  function playAudioBlob(blob: Blob, onended?: () => void) {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
+    }
+    const url = URL.createObjectURL(blob);
+    audioRef.current.src = url;
+    audioRef.current.onended = () => {
+      URL.revokeObjectURL(url);
+      if (onended) onended();
+    };
+    audioRef.current.play().catch(err => {
+      console.error('Audio play failed:', err);
+      if (onended) onended();
+    });
+  }
+
+  // UI
   return (
     <main className="min-h-screen bg-[#0b0e14] text-white flex flex-col items-center py-8">
       <div className="w-full max-w-3xl px-4">
+        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-semibold">Ellie</h1>
-          <button
-            onClick={handleReset}
-            className="rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 transition"
-          >
-            Reset
-          </button>
+
+          <div className="flex items-center gap-2">
+            {/* Voice Mode Toggle */}
+            <label className="flex items-center gap-2">
+              <span className="text-sm text-white/70">Voice Mode</span>
+              <button
+                aria-label="Toggle Voice Mode"
+                onClick={() => handleToggleVoiceMode(!voiceMode)}
+                className={`w-12 h-7 rounded-full relative transition ${
+                  voiceMode ? 'bg-green-500/80' : 'bg-white/20'
+                }`}
+              >
+                <span
+                  className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white transition-transform ${
+                    voiceMode ? 'translate-x-5' : ''
+                  }`}
+                />
+              </button>
+            </label>
+
+            {/* Reset */}
+            <button
+              onClick={handleReset}
+              className="rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 transition"
+            >
+              Reset
+            </button>
+          </div>
         </div>
 
         {bannerError && (
@@ -100,49 +280,69 @@ export default function Page() {
           </div>
         )}
 
-        <div
-          ref={listRef}
-          className="rounded-2xl bg-white/5 border border-white/10 p-4 h-[60vh] overflow-y-auto"
-        >
-          {messages.map((m, i) => (
+        {/* TEXT CHAT */}
+        {!voiceMode && (
+          <>
             <div
-              key={i}
-              className={`mb-3 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              ref={listRef}
+              className="rounded-2xl bg-white/5 border border-white/10 p-4 h-[60vh] overflow-y-auto"
             >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                  m.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white/10 text-white'
-                }`}
-              >
-                {m.content}
-              </div>
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  className={`mb-3 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-4 py-2 ${
+                      m.role === 'user'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white/10 text-white'
+                    }`}
+                  >
+                    {m.content}
+                  </div>
+                </div>
+              ))}
+
+              {isSending && (
+                <div className="text-sm text-white/60 mt-2">Ellie is typing...</div>
+              )}
             </div>
-          ))}
 
-          {isSending && (
-            <div className="text-sm text-white/60 mt-2">Ellie is typing...</div>
-          )}
-        </div>
+            <form onSubmit={handleSend} className="mt-4 flex gap-2">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Say something…"
+                className="flex-1 rounded-xl px-4 py-3 bg-white/10 border border-white/10 outline-none focus:border-white/30"
+              />
+              <button
+                type="submit"
+                disabled={isSending || !input.trim()}
+                className="rounded-xl px-5 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition"
+              >
+                Send
+              </button>
+            </form>
+          </>
+        )}
 
-        <form onSubmit={handleSend} className="mt-4 flex gap-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Say something…"
-            className="flex-1 rounded-xl px-4 py-3 bg-white/10 border border-white/10 outline-none focus:border-white/30"
-          />
-          <button
-            type="submit"
-            disabled={isSending || !input.trim()}
-            className="rounded-xl px-5 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition"
-          >
-            Send
-          </button>
-        </form>
+        {/* VOICE CALL MODE */}
+        {voiceMode && (
+          <div className="rounded-2xl bg-white/5 border border-white/10 p-6 h-[60vh] flex flex-col items-center justify-center">
+            <div className="mb-6 text-white/70">
+              {callStatus === 'idle' && (micReady ? 'Ready…' : 'Mic not ready')}
+              {callStatus === 'listening' && 'Listening…'}
+              {callStatus === 'thinking' && 'Thinking…'}
+              {callStatus === 'speaking' && 'Speaking…'}
+            </div>
+            <div className="text-sm text-white/50">
+              Voice Mode is continuous — just speak when Ellie finishes.
+            </div>
+          </div>
+        )}
 
-        {/* Optional tiny debug footer so you can see which API base is used */}
+        {/* Debug footer */}
         <div className="mt-3 text-xs text-white/40">
           Using API:{' '}
           <code className="text-white/60">
