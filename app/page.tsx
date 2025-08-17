@@ -1,15 +1,31 @@
 // app/page.tsx
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 type ChatMsg = { from: "you" | "ellie"; text: string };
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";          // e.g. https://ellie-api-1.onrender.com
-const USER_ID = "default-user";                              // swap to your real user id if you have auth
+type LangCode =
+  | "en" | "is" | "pt" | "es" | "fr" | "de" | "it" | "sv"
+  | "da" | "no" | "nl" | "pl" | "ar" | "hi" | "ja" | "ko" | "zh";
 
-// Keep this list in sync with server's SUPPORTED_LANGUAGES
-const LANGS = [
+type LangOption = { code: LangCode; name: string };
+
+type GetLanguageResponse = { language?: LangCode | null };
+type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string };
+type ChatResponse = { reply?: string; language?: LangCode };
+type VoiceResponse = {
+  text?: string;
+  reply?: string;
+  language?: LangCode;
+  audioMp3Base64?: string | null;
+};
+
+const API = process.env.NEXT_PUBLIC_API_URL || "";   // e.g. https://ellie-api-1.onrender.com
+const USER_ID = "default-user";                       // swap with your auth id if you have one
+
+// Keep in sync with server SUPPORTED_LANGUAGES
+const LANGS: LangOption[] = [
   { code: "en", name: "English" },
   { code: "is", name: "Icelandic" },
   { code: "pt", name: "Portuguese" },
@@ -29,119 +45,162 @@ const LANGS = [
   { code: "zh", name: "Chinese" },
 ];
 
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
 export default function Page() {
-  // Chat state
+  // Chat UI
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Voice state
+  // Voice recording
   const [recording, setRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
 
-  // Language gate state
+  // Language gate
   const [langReady, setLangReady] = useState(false);
-  const [chosenLang, setChosenLang] = useState<string>("en");
+  const [chosenLang, setChosenLang] = useState<LangCode>("en");
 
-  // ─────────────────────────────────────────────────────────────
-  // First-run language gate:
-  // 1) If localStorage has language, sync to backend & continue.
-  // 2) Else ask backend (/api/get-language). If found, store & continue.
-  // 3) Else block UI and show picker modal.
-  // ─────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────
+  // First-run language picker logic
+  // ────────────────────────────────────────────────────────────
   useEffect(() => {
     (async () => {
+      if (!API) return;
+      // 1) If we already stored a language locally, sync to backend and continue
+      const stored = typeof window !== "undefined"
+        ? (localStorage.getItem("ellie_language") as LangCode | null)
+        : null;
+
+      if (stored) {
+        await fetch(`${API}/api/set-language`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: USER_ID, language: stored }),
+        }).catch(() => {});
+        setChosenLang(stored);
+        setLangReady(true);
+        return;
+      }
+
+      // 2) Ask backend if a language already exists for this user
       try {
-        if (!API) return; // don't proceed if env missing
-        const stored = typeof window !== "undefined" ? localStorage.getItem("ellie_language") : null;
-        if (stored) {
-          await fetch(`${API}/api/set-language`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId: USER_ID, language: stored }),
-          });
-          setChosenLang(stored);
-          setLangReady(true);
-          return;
-        }
         const r = await fetch(`${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`);
-        const data = await r.json();
+        const data = (await r.json()) as GetLanguageResponse;
         if (data?.language) {
           localStorage.setItem("ellie_language", data.language);
           setChosenLang(data.language);
           setLangReady(true);
-        } else {
-          setLangReady(false); // show modal
+          return;
         }
       } catch {
-        // If network hiccups, still show picker so the user can proceed
-        setLangReady(false);
+        /* fall through to picker */
       }
+
+      // 3) Not set → show picker (block UI)
+      setLangReady(false);
     })();
   }, []);
 
   async function confirmLanguage() {
     if (!API) return;
     try {
-      await fetch(`${API}/api/set-language`, {
+      const r = await fetch(`${API}/api/set-language`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
       });
-      localStorage.setItem("ellie_language", chosenLang);
+      const data = (await r.json()) as SetLanguageResponse;
+      if (data?.language) {
+        localStorage.setItem("ellie_language", data.language);
+      } else {
+        localStorage.setItem("ellie_language", chosenLang);
+      }
       setLangReady(true);
     } catch {
       alert("Could not save language. Please try again.");
     }
   }
 
-  const add = (m: ChatMsg) => setMessages((prev) => [...prev, m]);
+  // ────────────────────────────────────────────────────────────
+  // Chat helpers
+  // ────────────────────────────────────────────────────────────
+  function append(from: "you" | "ellie", text: string) {
+    setMessages((prev) => [...prev, { from, text }]);
+  }
 
-  // ─────────────────────────────────────────────────────────────
-  // Text chat
-  // ─────────────────────────────────────────────────────────────
-  const sendText = useCallback(async () => {
-    if (!input.trim() || !API || !langReady) return;
-    const you = input.trim();
+  async function sendText() {
+    if (!API || !langReady) return;
+    const msg = input.trim();
+    if (!msg) return;
     setInput("");
-    add({ from: "you", text: you });
+    append("you", msg);
     setLoading(true);
     try {
       const r = await fetch(`${API}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: USER_ID, message: you }),
+        body: JSON.stringify({ userId: USER_ID, message: msg }),
       });
-      const data = await r.json();
-      add({ from: "ellie", text: data?.reply || "(no reply)" });
-    } catch (e: any) {
-      add({ from: "ellie", text: `Error: ${e?.message || e}` });
+      const data = (await r.json()) as ChatResponse;
+      append("ellie", data?.reply ?? "(no reply)");
+    } catch (e) {
+      append("ellie", `Error: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
-  }, [API, input, langReady]);
+  }
 
-  // Ctrl/Cmd+Enter to send text
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendText();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [sendText]);
+  async function resetConversation() {
+    if (!API) return;
+    setMessages([]);
+    await fetch(`${API}/api/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: USER_ID }),
+    }).catch(() => {});
+  }
 
-  // ─────────────────────────────────────────────────────────────
-  // Voice chat: record via MediaRecorder → POST /api/voice-chat
-  // (No language prompt here; language set on first load)
-  // ─────────────────────────────────────────────────────────────
-  const startRecording = useCallback(async () => {
+  // ────────────────────────────────────────────────────────────
+  // Voice recording → /api/voice-chat
+  // (language already chosen on first load)
+  // ────────────────────────────────────────────────────────────
+  async function sendVoiceBlob(blob: Blob) {
     if (!API || !langReady) return;
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, "clip.webm");
+      fd.append("userId", USER_ID);
+
+      const r = await fetch(`${API}/api/voice-chat`, { method: "POST", body: fd });
+      const data = (await r.json()) as VoiceResponse;
+
+      if (data?.text) append("you", data.text);
+      if (data?.reply) append("ellie", data.reply);
+
+      if (data?.audioMp3Base64) {
+        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
+        try { await audio.play(); } catch { /* autoplay may be blocked */ }
+      }
+    } catch (e) {
+      append("ellie", `Voice error: ${errorMessage(e)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startRecording() {
+    if (!langReady) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
       chunksRef.current = [];
-      mr.ondataavailable = (ev) => {
+      mr.ondataavailable = (ev: BlobEvent) => {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       mr.onstop = () => {
@@ -155,57 +214,19 @@ export default function Page() {
     } catch {
       alert("I need microphone permission to record.");
     }
-  }, [API, langReady]);
+  }
 
-  const stopRecording = useCallback(() => {
+  function stopRecording() {
     const mr = mediaRecorderRef.current;
     if (mr && mr.state !== "inactive") mr.stop();
     setRecording(false);
-  }, []);
-
-  async function sendVoiceBlob(blob: Blob) {
-    if (!API || !langReady) return;
-    setLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append("audio", blob, "clip.webm");
-      fd.append("userId", USER_ID);
-
-      const r = await fetch(`${API}/api/voice-chat`, { method: "POST", body: fd });
-      const data = await r.json();
-
-      const transcript = data?.text || "";
-      const reply = data?.reply || "";
-      if (transcript) add({ from: "you", text: transcript });
-      if (reply) add({ from: "ellie", text: reply });
-
-      if (data?.audioMp3Base64) {
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
-        try {
-          await audio.play();
-        } catch {
-          // some browsers require a user gesture; ignore if blocked
-        }
-      }
-    } catch (e: any) {
-      add({ from: "ellie", text: `Voice error: ${e?.message || e}` });
-    } finally {
-      setLoading(false);
-    }
   }
 
-  // Optional: reset conversation button (hits your /api/reset)
-  async function resetConversation() {
-    if (!API) return;
-    setMessages([]);
-    await fetch(`${API}/api/reset`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: USER_ID }),
-    }).catch(() => {});
-  }
+  // ────────────────────────────────────────────────────────────
+  // UI
+  // ────────────────────────────────────────────────────────────
 
-  // If language not chosen yet, show blocking modal
+  // Block UI with language picker until chosen
   if (!langReady) {
     return (
       <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0b0b0f", color: "#fff" }}>
@@ -214,7 +235,7 @@ export default function Page() {
           <p style={{ opacity: 0.8, marginBottom: 12 }}>Ellie will use this for voice and text.</p>
           <select
             value={chosenLang}
-            onChange={(e) => setChosenLang(e.target.value)}
+            onChange={(e) => setChosenLang(e.target.value as LangCode)}
             style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#1a1a1f", color: "#fff" }}
           >
             {LANGS.map((o) => (
@@ -234,13 +255,15 @@ export default function Page() {
     );
   }
 
-  // Main UI after language is set
+  // Main chat UI
   return (
     <div style={{ maxWidth: 820, margin: "32px auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", color: "#fff", background: "#0b0b0f", minHeight: "100vh" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <h1 style={{ fontSize: 28, margin: 0 }}>Ellie</h1>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <small style={{ opacity: 0.7 }}>Language: {typeof window !== "undefined" ? localStorage.getItem("ellie_language") : ""}</small>
+          <small style={{ opacity: 0.7 }}>
+            Language: {typeof window !== "undefined" ? localStorage.getItem("ellie_language") : ""}
+          </small>
           <button onClick={resetConversation} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #444", background: "#16161c", color: "#fff" }}>
             Reset
           </button>
