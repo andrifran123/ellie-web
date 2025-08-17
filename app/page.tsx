@@ -4,14 +4,18 @@ import { useEffect, useRef, useState } from 'react';
 
 type Msg = { role: 'assistant' | 'user'; content: string };
 
+// Backend base URL (empty string = use Next.js rewrite /api/*)
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   process.env.NEXT_PUBLIC_BACKEND_URL ||
-  ''; // empty = use /api/* via next.config.ts rewrite
+  '';
 
 const USER_ID = 'andri'; // keep a stable id
 
-async function sendToEllie(userInput: string) {
+/* ──────────────────────────────────────────────────────────────
+   Helpers to call your backend
+   ────────────────────────────────────────────────────────────── */
+async function sendToEllie(userInput: string): Promise<string> {
   const res = await fetch(`${API_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -23,117 +27,108 @@ async function sendToEllie(userInput: string) {
     throw new Error(`HTTP ${res.status} ${text}`);
   }
 
-  const data = (await res.json()) as { reply?: string };
+  const data: { reply?: string } = await res.json();
   if (!data || typeof data.reply !== 'string') {
     throw new Error('Bad response shape');
   }
   return data.reply;
 }
 
-async function resetConversation() {
-  await fetch(`${API_URL}/api/reset`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId: USER_ID }),
-  }).catch(() => {});
+async function resetConversation(): Promise<void> {
+  try {
+    await fetch(`${API_URL}/api/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: USER_ID }),
+    });
+  } catch {
+    /* ignore */
+  }
 }
 
-// Text → Speech (MP3 buffer)
-async function textToSpeech(text: string) {
+/* ──────────────────────────────────────────────────────────────
+   Voice helpers (upload mic → STT → chat → TTS → play)
+   ────────────────────────────────────────────────────────────── */
+async function ttsToAudioBuffer(text: string): Promise<AudioBuffer> {
   const res = await fetch(`${API_URL}/api/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    // voice is set to "sage" on the server; sending blank is fine
     body: JSON.stringify({ text }),
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`TTS failed: ${res.status} ${t}`);
-  }
-  const blob = await res.blob();
-  return blob;
+  if (!res.ok) throw new Error('TTS failed');
+  const arrayBuf = await res.arrayBuffer();
+  const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+  return audioCtx.decodeAudioData(arrayBuf);
 }
 
-// Audio (webm/ogg/mp3…) → text (Whisper)
-async function uploadAudioAndTranscribe(file: Blob) {
+async function playBuffer(buf: AudioBuffer): Promise<void> {
+  const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  src.start(0);
+  await new Promise<void>((resolve) => {
+    src.onended = () => resolve();
+  });
+}
+
+async function recordOnce(stream: MediaStream, ms: number): Promise<Blob> {
+  return new Promise<Blob>((resolve, reject) => {
+    const rec = new MediaRecorder(stream);
+    const chunks: BlobPart[] = [];
+    rec.ondataavailable = (ev: BlobEvent) => {
+      if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+    };
+    rec.onerror = () => reject(new Error('Recorder error'));
+    rec.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }));
+    rec.start();
+
+    setTimeout(() => {
+      if (rec.state !== 'inactive') rec.stop();
+    }, ms);
+  });
+}
+
+async function transcribe(blob: Blob): Promise<string> {
   const form = new FormData();
-  form.append('audio', file, 'audio.webm');
+  form.append('audio', blob, 'clip.webm');
   const res = await fetch(`${API_URL}/api/upload-audio`, {
     method: 'POST',
     body: form,
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`Transcribe failed: ${res.status} ${t}`);
-  }
-  const data = (await res.json()) as { text?: string };
-  if (!data?.text) throw new Error('No text from transcription');
-  return data.text;
+  if (!res.ok) throw new Error('Transcription failed');
+  const data: { text?: string } = await res.json();
+  return data.text ?? '';
 }
 
+/* ──────────────────────────────────────────────────────────────
+   React component
+   ────────────────────────────────────────────────────────────── */
 export default function Page() {
-  // TEXT CHAT STATE
+  // chat (text) state
   const [messages, setMessages] = useState<Msg[]>([
     { role: 'assistant', content: `Hey there! 😊 How’s it going, Andri?` },
   ]);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [bannerError, setBannerError] = useState<string | null>(null);
+
+  // voice mode state
+  const [voiceMode, setVoiceMode] = useState(false);
+  const voiceLoopOnRef = useRef(false);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
   const listRef = useRef<HTMLDivElement>(null);
 
-  // VOICE MODE STATE
-  const [voiceMode, setVoiceMode] = useState(false);
-  const [micReady, setMicReady] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [callStatus, setCallStatus] = useState<'idle'|'listening'|'thinking'|'speaking'>('idle');
-
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // auto-scroll for text chat
+  // auto-scroll
   useEffect(() => {
-    if (!voiceMode) {
-      listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-    }
-  }, [messages, isSending, voiceMode]);
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
+  }, [messages, isSending]);
 
-  // Toggle Voice Mode ON/OFF
-  async function handleToggleVoiceMode(on: boolean) {
-    setBannerError(null);
-    setVoiceMode(on);
-
-    if (on) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaStreamRef.current = stream;
-        setMicReady(true);
-        setCallStatus('idle');
-        // Start continuous loop: after a short delay, listen
-        setTimeout(() => {
-          if (voiceMode) tryStartRecording();
-        }, 800);
-      } catch (e: any) {
-        setMicReady(false);
-        setVoiceMode(false);
-        setBannerError('Mic permission denied. Please allow microphone to use Voice Mode.');
-      }
-    } else {
-      // cleanup
-      tryStopRecording();
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(t => t.stop());
-        mediaStreamRef.current = null;
-      }
-      setMicReady(false);
-      setCallStatus('idle');
-    }
-  }
-
-  // TEXT CHAT handlers
-  async function handleSend(e?: React.FormEvent) {
-    e?.preventDefault();
-    if (voiceMode) return;
+  /* ───────── text chat handlers ───────── */
+  async function handleSend(event?: React.FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     const text = input.trim();
     if (!text || isSending) return;
 
@@ -160,117 +155,118 @@ export default function Page() {
     await resetConversation();
   }
 
-  // VOICE MODE helpers
-  function tryStartRecording() {
-    if (!micReady || recording || !voiceMode) return;
-    if (!mediaStreamRef.current) return;
+  /* ───────── voice mode (continuous) ───────── */
+  async function startVoiceLoop(): Promise<void> {
+    // request mic
+    if (!mediaStreamRef.current) {
+      mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    voiceLoopOnRef.current = true;
 
-    chunksRef.current = [];
-    const mr = new MediaRecorder(mediaStreamRef.current);
-    mediaRecorderRef.current = mr;
+    // greeting (audio)
+    try {
+      const greet = await ttsToAudioBuffer(`Hi Andri. Voice mode is on. Just talk, and I’ll answer. Say "stop" or switch the toggle to turn me off.`);
+      await playBuffer(greet);
+    } catch (e) {
+      console.error(e);
+    }
 
-    mr.ondataavailable = (evt) => {
-      if (evt.data && evt.data.size > 0) {
-        chunksRef.current.push(evt.data);
-      }
-    };
-
-    mr.onstop = async () => {
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-      chunksRef.current = [];
-      setCallStatus('thinking');
-
+    // loop: record → transcribe → chat → tts → play
+    while (voiceLoopOnRef.current) {
       try {
-        const userText = await uploadAudioAndTranscribe(blob);
-        const replyText = await sendToEllie(userText);
-        setCallStatus('speaking');
+        const stream = mediaStreamRef.current!;
+        const chunk = await recordOnce(stream, 5000); // ~5s clip
+        const text = (await transcribe(chunk)).trim();
 
-        const mp3 = await textToSpeech(replyText);
-        playAudioBlob(mp3, () => {
-          if (voiceMode) {
-            // restart loop: listen again automatically
-            tryStartRecording();
-          } else {
-            setCallStatus('idle');
-          }
-        });
-      } catch (e: any) {
-        console.error(e);
-        setBannerError(e?.message || 'Voice error');
-        setCallStatus('idle');
+        if (!text) {
+          // no speech detected; keep listening
+          continue;
+        }
+
+        // small “stop” voice command
+        if (/^\s*(stop|turn off|quit)\s*$/i.test(text)) {
+          break;
+        }
+
+        const reply = await sendToEllie(text);
+        const buf = await ttsToAudioBuffer(reply);
+        await playBuffer(buf);
+      } catch (err) {
+        console.error('voice loop error:', err);
+        // surface the error once
+        setBannerError('Voice error. Check mic permissions and reload.');
+        break;
       }
-    };
-
-    mr.start();
-    setRecording(true);
-    setCallStatus('listening');
-
-    // auto-stop after 5s if user stays silent
-    setTimeout(() => {
-      if (recording && mr.state === 'recording') {
-        tryStopRecording();
-      }
-    }, 5000);
-  }
-
-  function tryStopRecording() {
-    const mr = mediaRecorderRef.current;
-    if (mr && mr.state !== 'inactive') {
-      mr.stop();
     }
-    setRecording(false);
-  }
 
-  function playAudioBlob(blob: Blob, onended?: () => void) {
-    if (!audioRef.current) {
-      audioRef.current = new Audio();
+    // clean up
+    voiceLoopOnRef.current = false;
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
     }
-    const url = URL.createObjectURL(blob);
-    audioRef.current.src = url;
-    audioRef.current.onended = () => {
-      URL.revokeObjectURL(url);
-      if (onended) onended();
-    };
-    audioRef.current.play().catch(err => {
-      console.error('Audio play failed:', err);
-      if (onended) onended();
-    });
   }
 
-  // UI
+  function stopVoiceLoop(): void {
+    voiceLoopOnRef.current = false;
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+    }
+  }
+
+  async function handleToggleVoice(nextOn: boolean): Promise<void> {
+    setVoiceMode(nextOn);
+    setBannerError(null);
+
+    if (nextOn) {
+      // switch UI into “call mode” by clearing messages
+      setMessages([]);
+      await startVoiceLoop();
+      // when the loop exits (user said stop or toggled off), flip toggle off in UI
+      setVoiceMode(false);
+    } else {
+      stopVoiceLoop();
+      // leave “call mode” back to text intro
+      setMessages([{ role: 'assistant', content: `Hey there! 😊 How’s it going, Andri?` }]);
+    }
+  }
+
+  /* ───────── UI ───────── */
   return (
     <main className="min-h-screen bg-[#0b0e14] text-white flex flex-col items-center py-8">
       <div className="w-full max-w-3xl px-4">
-        {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-2xl font-semibold">Ellie</h1>
 
-          <div className="flex items-center gap-2">
-            {/* Voice Mode Toggle */}
-            <label className="flex items-center gap-2">
-              <span className="text-sm text-white/70">Voice Mode</span>
+          <div className="flex items-center gap-3">
+            {/* Voice toggle */}
+            <label className="flex items-center gap-2 text-sm">
+              <span className="opacity-80">Voice mode</span>
               <button
-                aria-label="Toggle Voice Mode"
-                onClick={() => handleToggleVoiceMode(!voiceMode)}
-                className={`w-12 h-7 rounded-full relative transition ${
-                  voiceMode ? 'bg-green-500/80' : 'bg-white/20'
-                }`}
+                type="button"
+                onClick={() => handleToggleVoice(!voiceMode)}
+                className={`w-[56px] h-[32px] rounded-full relative transition
+                  ${voiceMode ? 'bg-green-500/80' : 'bg-white/15'}`}
+                aria-pressed={voiceMode}
+                aria-label="Toggle voice mode"
               >
                 <span
-                  className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-white transition-transform ${
-                    voiceMode ? 'translate-x-5' : ''
-                  }`}
+                  className={`absolute top-1 left-1 w-[28px] h-[28px] rounded-full bg-white transition-transform
+                    ${voiceMode ? 'translate-x-[24px]' : 'translate-x-0'}`}
                 />
               </button>
             </label>
 
-            {/* Reset */}
-            <button
-              onClick={handleReset}
-              className="rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 transition"
-            >
-              Reset
-            </button>
+            {/* Reset button (hidden in voice call mode) */}
+            {!voiceMode && (
+              <button
+                onClick={handleReset}
+                className="rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 transition"
+              >
+                Reset
+              </button>
+            )}
           </div>
         </div>
 
@@ -280,8 +276,16 @@ export default function Page() {
           </div>
         )}
 
-        {/* TEXT CHAT */}
-        {!voiceMode && (
+        {/* Call mode screen (no text bubbles) */}
+        {voiceMode ? (
+          <div className="rounded-2xl bg-white/5 border border-white/10 p-8 h-[60vh] flex flex-col items-center justify-center text-center">
+            <div className="text-3xl mb-2">🎧 Voice call with Ellie</div>
+            <div className="text-white/70">
+              Speak naturally. I’ll reply out loud. Say <em>“stop”</em> or toggle off to end.
+            </div>
+            <div className="mt-6 animate-pulse text-white/60">Listening…</div>
+          </div>
+        ) : (
           <>
             <div
               ref={listRef}
@@ -312,7 +316,7 @@ export default function Page() {
             <form onSubmit={handleSend} className="mt-4 flex gap-2">
               <input
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(ev) => setInput(ev.target.value)}
                 placeholder="Say something…"
                 className="flex-1 rounded-xl px-4 py-3 bg-white/10 border border-white/10 outline-none focus:border-white/30"
               />
@@ -324,31 +328,16 @@ export default function Page() {
                 Send
               </button>
             </form>
+
+            {/* tiny debug footer */}
+            <div className="mt-3 text-xs text-white/40">
+              Using API:{' '}
+              <code className="text-white/60">
+                {API_URL ? `${API_URL}/api` : '/api (rewrite)'}
+              </code>
+            </div>
           </>
         )}
-
-        {/* VOICE CALL MODE */}
-        {voiceMode && (
-          <div className="rounded-2xl bg-white/5 border border-white/10 p-6 h-[60vh] flex flex-col items-center justify-center">
-            <div className="mb-6 text-white/70">
-              {callStatus === 'idle' && (micReady ? 'Ready…' : 'Mic not ready')}
-              {callStatus === 'listening' && 'Listening…'}
-              {callStatus === 'thinking' && 'Thinking…'}
-              {callStatus === 'speaking' && 'Speaking…'}
-            </div>
-            <div className="text-sm text-white/50">
-              Voice Mode is continuous — just speak when Ellie finishes.
-            </div>
-          </div>
-        )}
-
-        {/* Debug footer */}
-        <div className="mt-3 text-xs text-white/40">
-          Using API:{' '}
-          <code className="text-white/60">
-            {API_URL ? `${API_URL}/api` : '/api (rewrite)'}
-          </code>
-        </div>
       </div>
     </main>
   );
