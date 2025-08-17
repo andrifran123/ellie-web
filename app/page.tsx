@@ -1,344 +1,306 @@
-'use client';
+// app/page.tsx
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
-type Msg = { role: 'assistant' | 'user'; content: string };
+type ChatMsg = { from: "you" | "ellie"; text: string };
 
-// Backend base URL (empty string = use Next.js rewrite /api/*)
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  process.env.NEXT_PUBLIC_BACKEND_URL ||
-  '';
+const API = process.env.NEXT_PUBLIC_API_URL || "";          // e.g. https://ellie-api-1.onrender.com
+const USER_ID = "default-user";                              // swap to your real user id if you have auth
 
-const USER_ID = 'andri'; // keep a stable id
+// Keep this list in sync with server's SUPPORTED_LANGUAGES
+const LANGS = [
+  { code: "en", name: "English" },
+  { code: "is", name: "Icelandic" },
+  { code: "pt", name: "Portuguese" },
+  { code: "es", name: "Spanish" },
+  { code: "fr", name: "French" },
+  { code: "de", name: "German" },
+  { code: "it", name: "Italian" },
+  { code: "sv", name: "Swedish" },
+  { code: "da", name: "Danish" },
+  { code: "no", name: "Norwegian" },
+  { code: "nl", name: "Dutch" },
+  { code: "pl", name: "Polish" },
+  { code: "ar", name: "Arabic" },
+  { code: "hi", name: "Hindi" },
+  { code: "ja", name: "Japanese" },
+  { code: "ko", name: "Korean" },
+  { code: "zh", name: "Chinese" },
+];
 
-/* ──────────────────────────────────────────────────────────────
-   Helpers to call your backend
-   ────────────────────────────────────────────────────────────── */
-async function sendToEllie(userInput: string): Promise<string> {
-  const res = await fetch(`${API_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: userInput, userId: USER_ID }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`HTTP ${res.status} ${text}`);
-  }
-
-  const data: { reply?: string } = await res.json();
-  if (!data || typeof data.reply !== 'string') {
-    throw new Error('Bad response shape');
-  }
-  return data.reply;
-}
-
-async function resetConversation(): Promise<void> {
-  try {
-    await fetch(`${API_URL}/api/reset`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: USER_ID }),
-    });
-  } catch {
-    /* ignore */
-  }
-}
-
-/* ──────────────────────────────────────────────────────────────
-   Voice helpers (upload mic → STT → chat → TTS → play)
-   ────────────────────────────────────────────────────────────── */
-async function ttsToAudioBuffer(text: string): Promise<AudioBuffer> {
-  const res = await fetch(`${API_URL}/api/tts`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    // voice is set to "sage" on the server; sending blank is fine
-    body: JSON.stringify({ text }),
-  });
-  if (!res.ok) throw new Error('TTS failed');
-  const arrayBuf = await res.arrayBuffer();
-  const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-  return audioCtx.decodeAudioData(arrayBuf);
-}
-
-async function playBuffer(buf: AudioBuffer): Promise<void> {
-  const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  src.start(0);
-  await new Promise<void>((resolve) => {
-    src.onended = () => resolve();
-  });
-}
-
-async function recordOnce(stream: MediaStream, ms: number): Promise<Blob> {
-  return new Promise<Blob>((resolve, reject) => {
-    const rec = new MediaRecorder(stream);
-    const chunks: BlobPart[] = [];
-    rec.ondataavailable = (ev: BlobEvent) => {
-      if (ev.data && ev.data.size > 0) chunks.push(ev.data);
-    };
-    rec.onerror = () => reject(new Error('Recorder error'));
-    rec.onstop = () => resolve(new Blob(chunks, { type: 'audio/webm' }));
-    rec.start();
-
-    setTimeout(() => {
-      if (rec.state !== 'inactive') rec.stop();
-    }, ms);
-  });
-}
-
-async function transcribe(blob: Blob): Promise<string> {
-  const form = new FormData();
-  form.append('audio', blob, 'clip.webm');
-  const res = await fetch(`${API_URL}/api/upload-audio`, {
-    method: 'POST',
-    body: form,
-  });
-  if (!res.ok) throw new Error('Transcription failed');
-  const data: { text?: string } = await res.json();
-  return data.text ?? '';
-}
-
-/* ──────────────────────────────────────────────────────────────
-   React component
-   ────────────────────────────────────────────────────────────── */
 export default function Page() {
-  // chat (text) state
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: 'assistant', content: `Hey there! 😊 How’s it going, Andri?` },
-  ]);
-  const [input, setInput] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [bannerError, setBannerError] = useState<string | null>(null);
+  // Chat state
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  // voice mode state
-  const [voiceMode, setVoiceMode] = useState(false);
-  const voiceLoopOnRef = useRef(false);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
+  // Voice state
+  const [recording, setRecording] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
 
-  const listRef = useRef<HTMLDivElement>(null);
+  // Language gate state
+  const [langReady, setLangReady] = useState(false);
+  const [chosenLang, setChosenLang] = useState<string>("en");
 
-  // auto-scroll
+  // ─────────────────────────────────────────────────────────────
+  // First-run language gate:
+  // 1) If localStorage has language, sync to backend & continue.
+  // 2) Else ask backend (/api/get-language). If found, store & continue.
+  // 3) Else block UI and show picker modal.
+  // ─────────────────────────────────────────────────────────────
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, isSending]);
-
-  /* ───────── text chat handlers ───────── */
-  async function handleSend(event?: React.FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const text = input.trim();
-    if (!text || isSending) return;
-
-    setBannerError(null);
-    setInput('');
-    setMessages((m) => [...m, { role: 'user', content: text }]);
-    setIsSending(true);
-
-    try {
-      const reply = await sendToEllie(text);
-      setMessages((m) => [...m, { role: 'assistant', content: reply }]);
-    } catch (err) {
-      console.error(err);
-      setBannerError(`Couldn't reach Ellie. Is your API URL correct and running?`);
-      setMessages((m) => [...m, { role: 'assistant', content: 'Oops—API error.' }]);
-    } finally {
-      setIsSending(false);
-    }
-  }
-
-  async function handleReset() {
-    setBannerError(null);
-    setMessages([{ role: 'assistant', content: `Hey there! 😊 How’s it going, Andri?` }]);
-    await resetConversation();
-  }
-
-  /* ───────── voice mode (continuous) ───────── */
-  async function startVoiceLoop(): Promise<void> {
-    // request mic
-    if (!mediaStreamRef.current) {
-      mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-    }
-    voiceLoopOnRef.current = true;
-
-    // greeting (audio)
-    try {
-      const greet = await ttsToAudioBuffer(`Hi Andri. Voice mode is on. Just talk, and I’ll answer. Say "stop" or switch the toggle to turn me off.`);
-      await playBuffer(greet);
-    } catch (e) {
-      console.error(e);
-    }
-
-    // loop: record → transcribe → chat → tts → play
-    while (voiceLoopOnRef.current) {
+    (async () => {
       try {
-        const stream = mediaStreamRef.current!;
-        const chunk = await recordOnce(stream, 5000); // ~5s clip
-        const text = (await transcribe(chunk)).trim();
-
-        if (!text) {
-          // no speech detected; keep listening
-          continue;
+        if (!API) return; // don't proceed if env missing
+        const stored = typeof window !== "undefined" ? localStorage.getItem("ellie_language") : null;
+        if (stored) {
+          await fetch(`${API}/api/set-language`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: USER_ID, language: stored }),
+          });
+          setChosenLang(stored);
+          setLangReady(true);
+          return;
         }
-
-        // small “stop” voice command
-        if (/^\s*(stop|turn off|quit)\s*$/i.test(text)) {
-          break;
+        const r = await fetch(`${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`);
+        const data = await r.json();
+        if (data?.language) {
+          localStorage.setItem("ellie_language", data.language);
+          setChosenLang(data.language);
+          setLangReady(true);
+        } else {
+          setLangReady(false); // show modal
         }
-
-        const reply = await sendToEllie(text);
-        const buf = await ttsToAudioBuffer(reply);
-        await playBuffer(buf);
-      } catch (err) {
-        console.error('voice loop error:', err);
-        // surface the error once
-        setBannerError('Voice error. Check mic permissions and reload.');
-        break;
+      } catch {
+        // If network hiccups, still show picker so the user can proceed
+        setLangReady(false);
       }
-    }
+    })();
+  }, []);
 
-    // clean up
-    voiceLoopOnRef.current = false;
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-  }
-
-  function stopVoiceLoop(): void {
-    voiceLoopOnRef.current = false;
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-  }
-
-  async function handleToggleVoice(nextOn: boolean): Promise<void> {
-    setVoiceMode(nextOn);
-    setBannerError(null);
-
-    if (nextOn) {
-      // switch UI into “call mode” by clearing messages
-      setMessages([]);
-      await startVoiceLoop();
-      // when the loop exits (user said stop or toggled off), flip toggle off in UI
-      setVoiceMode(false);
-    } else {
-      stopVoiceLoop();
-      // leave “call mode” back to text intro
-      setMessages([{ role: 'assistant', content: `Hey there! 😊 How’s it going, Andri?` }]);
+  async function confirmLanguage() {
+    if (!API) return;
+    try {
+      await fetch(`${API}/api/set-language`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
+      });
+      localStorage.setItem("ellie_language", chosenLang);
+      setLangReady(true);
+    } catch {
+      alert("Could not save language. Please try again.");
     }
   }
 
-  /* ───────── UI ───────── */
-  return (
-    <main className="min-h-screen bg-[#0b0e14] text-white flex flex-col items-center py-8">
-      <div className="w-full max-w-3xl px-4">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-semibold">Ellie</h1>
+  const add = (m: ChatMsg) => setMessages((prev) => [...prev, m]);
 
-          <div className="flex items-center gap-3">
-            {/* Voice toggle */}
-            <label className="flex items-center gap-2 text-sm">
-              <span className="opacity-80">Voice mode</span>
-              <button
-                type="button"
-                onClick={() => handleToggleVoice(!voiceMode)}
-                className={`w-[56px] h-[32px] rounded-full relative transition
-                  ${voiceMode ? 'bg-green-500/80' : 'bg-white/15'}`}
-                aria-pressed={voiceMode}
-                aria-label="Toggle voice mode"
-              >
-                <span
-                  className={`absolute top-1 left-1 w-[28px] h-[28px] rounded-full bg-white transition-transform
-                    ${voiceMode ? 'translate-x-[24px]' : 'translate-x-0'}`}
-                />
-              </button>
-            </label>
+  // ─────────────────────────────────────────────────────────────
+  // Text chat
+  // ─────────────────────────────────────────────────────────────
+  const sendText = useCallback(async () => {
+    if (!input.trim() || !API || !langReady) return;
+    const you = input.trim();
+    setInput("");
+    add({ from: "you", text: you });
+    setLoading(true);
+    try {
+      const r = await fetch(`${API}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: USER_ID, message: you }),
+      });
+      const data = await r.json();
+      add({ from: "ellie", text: data?.reply || "(no reply)" });
+    } catch (e: any) {
+      add({ from: "ellie", text: `Error: ${e?.message || e}` });
+    } finally {
+      setLoading(false);
+    }
+  }, [API, input, langReady]);
 
-            {/* Reset button (hidden in voice call mode) */}
-            {!voiceMode && (
-              <button
-                onClick={handleReset}
-                className="rounded-xl px-4 py-2 bg-white/10 hover:bg-white/20 transition"
-              >
-                Reset
-              </button>
-            )}
-          </div>
+  // Ctrl/Cmd+Enter to send text
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendText();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sendText]);
+
+  // ─────────────────────────────────────────────────────────────
+  // Voice chat: record via MediaRecorder → POST /api/voice-chat
+  // (No language prompt here; language set on first load)
+  // ─────────────────────────────────────────────────────────────
+  const startRecording = useCallback(async () => {
+    if (!API || !langReady) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        sendVoiceBlob(blob);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setRecording(true);
+    } catch {
+      alert("I need microphone permission to record.");
+    }
+  }, [API, langReady]);
+
+  const stopRecording = useCallback(() => {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== "inactive") mr.stop();
+    setRecording(false);
+  }, []);
+
+  async function sendVoiceBlob(blob: Blob) {
+    if (!API || !langReady) return;
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, "clip.webm");
+      fd.append("userId", USER_ID);
+
+      const r = await fetch(`${API}/api/voice-chat`, { method: "POST", body: fd });
+      const data = await r.json();
+
+      const transcript = data?.text || "";
+      const reply = data?.reply || "";
+      if (transcript) add({ from: "you", text: transcript });
+      if (reply) add({ from: "ellie", text: reply });
+
+      if (data?.audioMp3Base64) {
+        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
+        try {
+          await audio.play();
+        } catch {
+          // some browsers require a user gesture; ignore if blocked
+        }
+      }
+    } catch (e: any) {
+      add({ from: "ellie", text: `Voice error: ${e?.message || e}` });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Optional: reset conversation button (hits your /api/reset)
+  async function resetConversation() {
+    if (!API) return;
+    setMessages([]);
+    await fetch(`${API}/api/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: USER_ID }),
+    }).catch(() => {});
+  }
+
+  // If language not chosen yet, show blocking modal
+  if (!langReady) {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0b0b0f", color: "#fff" }}>
+        <div style={{ background: "#111", padding: 24, borderRadius: 12, width: 360, border: "1px solid #222" }}>
+          <h2 style={{ marginTop: 0 }}>Choose your language</h2>
+          <p style={{ opacity: 0.8, marginBottom: 12 }}>Ellie will use this for voice and text.</p>
+          <select
+            value={chosenLang}
+            onChange={(e) => setChosenLang(e.target.value)}
+            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#1a1a1f", color: "#fff" }}
+          >
+            {LANGS.map((o) => (
+              <option key={o.code} value={o.code}>
+                {o.name} ({o.code})
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={confirmLanguage}
+            style={{ width: "100%", marginTop: 12, padding: "10px 16px", borderRadius: 8, border: "1px solid #444", background: "#fff", color: "#000" }}
+          >
+            Continue
+          </button>
         </div>
-
-        {bannerError && (
-          <div className="mb-4 rounded-xl bg-red-900/40 text-red-200 px-4 py-3">
-            {bannerError}
-          </div>
-        )}
-
-        {/* Call mode screen (no text bubbles) */}
-        {voiceMode ? (
-          <div className="rounded-2xl bg-white/5 border border-white/10 p-8 h-[60vh] flex flex-col items-center justify-center text-center">
-            <div className="text-3xl mb-2">🎧 Voice call with Ellie</div>
-            <div className="text-white/70">
-              Speak naturally. I’ll reply out loud. Say <em>“stop”</em> or toggle off to end.
-            </div>
-            <div className="mt-6 animate-pulse text-white/60">Listening…</div>
-          </div>
-        ) : (
-          <>
-            <div
-              ref={listRef}
-              className="rounded-2xl bg-white/5 border border-white/10 p-4 h-[60vh] overflow-y-auto"
-            >
-              {messages.map((m, i) => (
-                <div
-                  key={i}
-                  className={`mb-3 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                      m.role === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-white/10 text-white'
-                    }`}
-                  >
-                    {m.content}
-                  </div>
-                </div>
-              ))}
-
-              {isSending && (
-                <div className="text-sm text-white/60 mt-2">Ellie is typing...</div>
-              )}
-            </div>
-
-            <form onSubmit={handleSend} className="mt-4 flex gap-2">
-              <input
-                value={input}
-                onChange={(ev) => setInput(ev.target.value)}
-                placeholder="Say something…"
-                className="flex-1 rounded-xl px-4 py-3 bg-white/10 border border-white/10 outline-none focus:border-white/30"
-              />
-              <button
-                type="submit"
-                disabled={isSending || !input.trim()}
-                className="rounded-xl px-5 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 transition"
-              >
-                Send
-              </button>
-            </form>
-
-            {/* tiny debug footer */}
-            <div className="mt-3 text-xs text-white/40">
-              Using API:{' '}
-              <code className="text-white/60">
-                {API_URL ? `${API_URL}/api` : '/api (rewrite)'}
-              </code>
-            </div>
-          </>
-        )}
       </div>
-    </main>
+    );
+  }
+
+  // Main UI after language is set
+  return (
+    <div style={{ maxWidth: 820, margin: "32px auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", color: "#fff", background: "#0b0b0f", minHeight: "100vh" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h1 style={{ fontSize: 28, margin: 0 }}>Ellie</h1>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <small style={{ opacity: 0.7 }}>Language: {typeof window !== "undefined" ? localStorage.getItem("ellie_language") : ""}</small>
+          <button onClick={resetConversation} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #444", background: "#16161c", color: "#fff" }}>
+            Reset
+          </button>
+        </div>
+      </header>
+
+      <section
+        style={{
+          border: "1px solid #222",
+          borderRadius: 12,
+          padding: 12,
+          minHeight: 260,
+          marginBottom: 16,
+          background: "#101015",
+          overflowY: "auto",
+        }}
+      >
+        {messages.length === 0 && <div style={{ opacity: 0.6 }}>Say hi to Ellie…</div>}
+        {messages.map((m, i) => (
+          <div key={i} style={{ margin: "8px 0" }}>
+            <b>{m.from === "you" ? "You" : "Ellie"}</b>: {m.text}
+          </div>
+        ))}
+      </section>
+
+      <section style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Type a message…"
+          style={{ flex: 1, padding: 12, borderRadius: 8, border: "1px solid #333", background: "#101015", color: "#fff" }}
+        />
+        <button
+          onClick={sendText}
+          disabled={loading || !input.trim()}
+          style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #444", background: "#fff", color: "#000" }}
+        >
+          Send
+        </button>
+      </section>
+
+      <section style={{ display: "flex", gap: 8 }}>
+        {!recording ? (
+          <button
+            onClick={startRecording}
+            disabled={loading}
+            style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #0a7", background: "#0a7", color: "#fff" }}
+          >
+            🎤 Start voice
+          </button>
+        ) : (
+          <button
+            onClick={stopRecording}
+            style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #a00", background: "#a00", color: "#fff" }}
+          >
+            ⏹ Stop & send
+          </button>
+        )}
+        {loading && <span style={{ alignSelf: "center", opacity: 0.8 }}>Processing…</span>}
+      </section>
+    </div>
   );
 }
