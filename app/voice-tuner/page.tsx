@@ -1,5 +1,14 @@
 "use client";
 
+export default function Page() {
+  return (
+    <main style={{ padding: 24, fontFamily: "system-ui" }}>
+      <h1>Voice Tuner test</h1>
+      <p>If you can see this, the /voice-tuner route is working ✅</p>
+    </main>
+  );
+}
+
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
