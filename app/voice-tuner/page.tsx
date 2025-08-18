@@ -5,6 +5,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 /** Base voices available on your backend’s TTS (OpenAI) */
 const VOICES = ["alloy","ash","ballad","coral","echo","fable","onyx","nova","sage","shimmer","verse"];
 
+/** Small helper to turn unknown errors into readable strings */
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  try { return JSON.stringify(err); } catch { return String(err); }
+}
+
 /** Display helper */
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -27,7 +33,7 @@ export default function VoiceTuner() {
   );
   const [voice, setVoice] = useState<string>("sage");
 
-  // FX settings (these match your backend endpoints)
+  // FX settings (match backend endpoints)
   const [pitchSemi, setPitchSemi] = useState<number>(0);
   const [tempo, setTempo] = useState<number>(1.0);
   const [stability, setStability] = useState<number>(0.75);
@@ -35,9 +41,9 @@ export default function VoiceTuner() {
   const [style, setStyle] = useState<number>(0.2);
   const [speakerBoost, setSpeakerBoost] = useState<boolean>(false);
 
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
-  const [testText, setTestText] = useState("Hi, it’s Ellie. Let’s see how this voice sounds.");
+  const [loading, setLoading] = useState<boolean>(false);
+  const [status, setStatus] = useState<string>("");
+  const [testText, setTestText] = useState<string>("Hi, it’s Ellie. Let’s see how this voice sounds.");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const base = useMemo(() => {
@@ -52,22 +58,26 @@ export default function VoiceTuner() {
     }
   }, [apiBase, userId]);
 
-  async function fetchJson(url: string, init?: RequestInit) {
+  async function fetchJson<T = unknown>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, init);
     if (!res.ok) throw new Error(await res.text());
-    return res.json();
+    return (await res.json()) as T;
   }
-  async function fetchArrayBuffer(url: string, init?: RequestInit) {
+
+  async function fetchArrayBuffer(url: string, init?: RequestInit): Promise<ArrayBuffer> {
     const res = await fetch(url, init);
     if (!res.ok) throw new Error(await res.text());
     return res.arrayBuffer();
   }
 
-  async function loadFromServer() {
+  async function loadFromServer(): Promise<void> {
     try {
       setLoading(true);
       setStatus("Loading from server…");
-      const data = await fetchJson(`${base}/api/get-voice-settings?userId=${encodeURIComponent(userId)}`);
+      const data = await fetchJson<{ settings?: {
+        pitchSemi?: number; tempo?: number; stability?: number; clarity?: number; style?: number; speakerBoost?: boolean;
+      } }>(`${base}/api/get-voice-settings?userId=${encodeURIComponent(userId)}`);
+
       if (data?.settings) {
         const s = data.settings;
         setPitchSemi(Number(s.pitchSemi ?? 0));
@@ -75,17 +85,17 @@ export default function VoiceTuner() {
         setStability(Number(s.stability ?? 0.75));
         setClarity(Number(s.clarity ?? 0.6));
         setStyle(Number(s.style ?? 0.2));
-        setSpeakerBoost(!!s.speakerBoost);
+        setSpeakerBoost(Boolean(s.speakerBoost));
       }
       setStatus("Loaded current user settings.");
-    } catch (e: any) {
-      setStatus(`Load failed: ${e?.message || e}`);
+    } catch (e: unknown) {
+      setStatus(`Load failed: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
   }
 
-  async function saveToServer() {
+  async function saveToServer(): Promise<void> {
     try {
       setLoading(true);
       setStatus("Saving settings…");
@@ -98,14 +108,14 @@ export default function VoiceTuner() {
         })
       });
       setStatus("Saved! These FX will apply to future replies.");
-    } catch (e: any) {
-      setStatus(`Save failed: ${e?.message || e}`);
+    } catch (e: unknown) {
+      setStatus(`Save failed: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
   }
 
-  async function preview() {
+  async function preview(): Promise<void> {
     try {
       setLoading(true);
       setStatus("Generating preview…");
@@ -121,8 +131,8 @@ export default function VoiceTuner() {
         await audioRef.current.play().catch(() => { /* user can click play */ });
       }
       setStatus("Preview ready.");
-    } catch (e: any) {
-      setStatus(`Preview failed: ${e?.message || e}`);
+    } catch (e: unknown) {
+      setStatus(`Preview failed: ${errorMessage(e)}`);
     } finally {
       setLoading(false);
     }
