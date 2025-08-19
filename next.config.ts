@@ -7,11 +7,12 @@ const BACKEND =
 
 const nextConfig: NextConfig = {
   async rewrites() {
+    // Only add a rewrite if a backend base URL is set
     if (!BACKEND) return [];
     return [
       {
         source: "/api/:path*",
-        destination: `${BACKEND}/api/:path*`, // Fixed: added /api here
+        destination: `${BACKEND}/api/:path*`, // Fixed: ensure /api is included
       },
     ];
   },
