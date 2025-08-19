@@ -18,14 +18,13 @@ type VoiceResponse = {
   text?: string;
   reply?: string;
   language?: LangCode;
-  audioMp3Base64?: string | null;
   voiceMode?: string;
+  audioMp3Base64?: string | null;
 };
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";   // your backend url
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 const USER_ID = "default-user";
 
-// Keep in sync with server SUPPORTED_LANGUAGES
 const LANGS: LangOption[] = [
   { code: "en", name: "English" },
   { code: "is", name: "Icelandic" },
@@ -48,11 +47,14 @@ const LANGS: LangOption[] = [
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
-  try { return JSON.stringify(e); } catch { return String(e); }
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
 }
 
 export default function Page() {
-  // Chat UI
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -66,12 +68,12 @@ export default function Page() {
   const [langReady, setLangReady] = useState(false);
   const [chosenLang, setChosenLang] = useState<LangCode>("en");
 
-  // New: Track voice mode Ellie chooses
-  const [voiceMode, setVoiceMode] = useState<string>("default");
+  // VoiceMode flag Ellie can set
+  const [voiceMode, setVoiceMode] = useState<string | null>(null);
 
-  // ─────────────────────────────────────────────
-  // First-run language picker
-  // ─────────────────────────────────────────────
+  // ───────────────────────────────────────────────
+  // Language picker logic
+  // ───────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       if (!API) return;
@@ -92,7 +94,9 @@ export default function Page() {
       }
 
       try {
-        const r = await fetch(`${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`);
+        const r = await fetch(
+          `${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`
+        );
         const data = (await r.json()) as GetLanguageResponse;
         if (data?.language) {
           localStorage.setItem("ellie_language", data.language);
@@ -100,7 +104,9 @@ export default function Page() {
           setLangReady(true);
           return;
         }
-      } catch {}
+      } catch {
+        /* fall through */
+      }
 
       setLangReady(false);
     })();
@@ -123,9 +129,9 @@ export default function Page() {
     }
   }
 
-  // ─────────────────────────────────────────────
+  // ───────────────────────────────────────────────
   // Chat helpers
-  // ─────────────────────────────────────────────
+  // ───────────────────────────────────────────────
   function append(from: "you" | "ellie", text: string): void {
     setMessages((prev) => [...prev, { from, text }]);
   }
@@ -144,9 +150,7 @@ export default function Page() {
         body: JSON.stringify({ userId: USER_ID, message: msg }),
       });
       const data = (await r.json()) as ChatResponse;
-      append("ellie", data?.reply ?? "(no reply)");
-
-      // save voiceMode if backend sent it
+      if (data?.reply) append("ellie", data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
     } catch (e) {
       append("ellie", `Error: ${errorMessage(e)}`);
@@ -158,6 +162,7 @@ export default function Page() {
   async function resetConversation(): Promise<void> {
     if (!API) return;
     setMessages([]);
+    setVoiceMode(null);
     await fetch(`${API}/api/reset`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -165,9 +170,9 @@ export default function Page() {
     }).catch(() => {});
   }
 
-  // ─────────────────────────────────────────────
-  // Voice recording → /api/voice-chat
-  // ─────────────────────────────────────────────
+  // ───────────────────────────────────────────────
+  // Voice chat
+  // ───────────────────────────────────────────────
   async function sendVoiceBlob(blob: Blob): Promise<void> {
     if (!API || !langReady) return;
     setLoading(true);
@@ -176,17 +181,25 @@ export default function Page() {
       fd.append("audio", blob, "clip.webm");
       fd.append("userId", USER_ID);
 
-      const r = await fetch(`${API}/api/voice-chat`, { method: "POST", body: fd });
+      const r = await fetch(`${API}/api/voice-chat`, {
+        method: "POST",
+        body: fd,
+      });
       const data = (await r.json()) as VoiceResponse;
 
       if (data?.text) append("you", data.text);
       if (data?.reply) append("ellie", data.reply);
-
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
 
       if (data?.audioMp3Base64) {
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
-        try { await audio.play(); } catch {}
+        const audio = new Audio(
+          `data:audio/mpeg;base64,${data.audioMp3Base64}`
+        );
+        try {
+          await audio.play();
+        } catch {
+          /* autoplay block */
+        }
       }
     } catch (e) {
       append("ellie", `Voice error: ${errorMessage(e)}`);
@@ -205,7 +218,9 @@ export default function Page() {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
+        const blob = new Blob(chunksRef.current, {
+          type: mr.mimeType || "audio/webm",
+        });
         sendVoiceBlob(blob);
         stream.getTracks().forEach((t) => t.stop());
       };
@@ -213,7 +228,7 @@ export default function Page() {
       mr.start();
       setRecording(true);
     } catch {
-      alert("I need microphone permission to record.");
+      alert("Microphone permission required.");
     }
   }
 
@@ -223,19 +238,41 @@ export default function Page() {
     setRecording(false);
   }
 
-  // ─────────────────────────────────────────────
+  // ───────────────────────────────────────────────
   // UI
-  // ─────────────────────────────────────────────
+  // ───────────────────────────────────────────────
   if (!langReady) {
     return (
-      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0b0b0f", color: "#fff" }}>
-        <div style={{ background: "#111", padding: 24, borderRadius: 12, width: 360, border: "1px solid #222" }}>
-          <h2 style={{ marginTop: 0 }}>Choose your language</h2>
-          <p style={{ opacity: 0.8, marginBottom: 12 }}>Ellie will use this for voice and text.</p>
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "grid",
+          placeItems: "center",
+          background: "#0b0b0f",
+          color: "#fff",
+        }}
+      >
+        <div
+          style={{
+            background: "#111",
+            padding: 24,
+            borderRadius: 12,
+            width: 360,
+            border: "1px solid #222",
+          }}
+        >
+          <h2>Choose your language</h2>
           <select
             value={chosenLang}
             onChange={(e) => setChosenLang(e.target.value as LangCode)}
-            style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid #333", background: "#1a1a1f", color: "#fff" }}
+            style={{
+              width: "100%",
+              padding: 10,
+              borderRadius: 8,
+              border: "1px solid #333",
+              background: "#1a1a1f",
+              color: "#fff",
+            }}
           >
             {LANGS.map((o) => (
               <option key={o.code} value={o.code}>
@@ -245,7 +282,14 @@ export default function Page() {
           </select>
           <button
             onClick={confirmLanguage}
-            style={{ width: "100%", marginTop: 12, padding: "10px 16px", borderRadius: 8, border: "1px solid #444", background: "#fff", color: "#000" }}
+            style={{
+              width: "100%",
+              marginTop: 12,
+              padding: "10px 16px",
+              borderRadius: 8,
+              background: "#fff",
+              color: "#000",
+            }}
           >
             Continue
           </button>
@@ -255,15 +299,47 @@ export default function Page() {
   }
 
   return (
-    <div style={{ maxWidth: 820, margin: "32px auto", padding: 16, fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", color: "#fff", background: "#0b0b0f", minHeight: "100vh" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+    <div
+      style={{
+        maxWidth: 820,
+        margin: "32px auto",
+        padding: 16,
+        fontFamily:
+          "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        color: "#fff",
+        background: "#0b0b0f",
+        minHeight: "100vh",
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          marginBottom: 12,
+        }}
+      >
         <h1 style={{ fontSize: 28, margin: 0 }}>Ellie</h1>
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <small style={{ opacity: 0.7 }}>
-            Language: {typeof window !== "undefined" ? localStorage.getItem("ellie_language") : ""}
-          </small>
-          <small style={{ opacity: 0.7 }}>Voice mode: {voiceMode}</small>
-          <button onClick={resetConversation} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #444", background: "#16161c", color: "#fff" }}>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ opacity: 0.7 }}>
+            Lang:{" "}
+            {typeof window !== "undefined"
+              ? localStorage.getItem("ellie_language")
+              : ""}
+          </div>
+          {voiceMode && (
+            <div style={{ opacity: 0.7 }}>Mode: {voiceMode}</div>
+          )}
+          <button
+            onClick={resetConversation}
+            style={{
+              marginTop: 4,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid #444",
+              background: "#16161c",
+              color: "#fff",
+            }}
+          >
             Reset
           </button>
         </div>
@@ -280,7 +356,9 @@ export default function Page() {
           overflowY: "auto",
         }}
       >
-        {messages.length === 0 && <div style={{ opacity: 0.6 }}>Say hi to Ellie…</div>}
+        {messages.length === 0 && (
+          <div style={{ opacity: 0.6 }}>Say hi to Ellie…</div>
+        )}
         {messages.map((m, i) => (
           <div key={i} style={{ margin: "8px 0" }}>
             <b>{m.from === "you" ? "You" : "Ellie"}</b>: {m.text}
@@ -293,15 +371,28 @@ export default function Page() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Type a message…"
-          style={{ flex: 1, padding: 12, borderRadius: 8, border: "1px solid #333", background: "#101015", color: "#fff" }}
+          style={{
+            flex: 1,
+            padding: 12,
+            borderRadius: 8,
+            border: "1px solid #333",
+            background: "#101015",
+            color: "#fff",
+          }}
           onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void sendText();
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter")
+              void sendText();
           }}
         />
         <button
           onClick={() => void sendText()}
           disabled={loading || !input.trim()}
-          style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #444", background: "#fff", color: "#000" }}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            background: "#fff",
+            color: "#000",
+          }}
         >
           Send
         </button>
@@ -312,19 +403,35 @@ export default function Page() {
           <button
             onClick={() => void startRecording()}
             disabled={loading}
-            style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #0a7", background: "#0a7", color: "#fff" }}
+            style={{
+              padding: "12px 16px",
+              borderRadius: 8,
+              border: "1px solid #0a7",
+              background: "#0a7",
+              color: "#fff",
+            }}
           >
             🎤 Start voice
           </button>
         ) : (
           <button
             onClick={() => stopRecording()}
-            style={{ padding: "12px 16px", borderRadius: 8, border: "1px solid #a00", background: "#a00", color: "#fff" }}
+            style={{
+              padding: "12px 16px",
+              borderRadius: 8,
+              border: "1px solid #a00",
+              background: "#a00",
+              color: "#fff",
+            }}
           >
             ⏹ Stop & send
           </button>
         )}
-        {loading && <span style={{ alignSelf: "center", opacity: 0.8 }}>Processing…</span>}
+        {loading && (
+          <span style={{ alignSelf: "center", opacity: 0.8 }}>
+            Processing…
+          </span>
+        )}
       </section>
     </div>
   );
