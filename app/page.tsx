@@ -50,6 +50,95 @@ function errorMessage(e: unknown): string {
   try { return JSON.stringify(e); } catch { return String(e); }
 }
 
+/* ────────────────────────────────────────────────────────────
+   NEW: Simple Web Audio FX for audible differences on playback
+   (Adjust defaults below as you like)
+   ──────────────────────────────────────────────────────────── */
+const FX_DEFAULTS = {
+  pitchSemi: 2,     // +2 semitones (raise pitch a bit)
+  clarityDb: 5,     // +5 dB highshelf (~air/brightness)
+  gain: 1.15,       // +15% louder
+  tempo: 1.0,       // 1.0 = normal speed (change if you want)
+  compress: true,   // gentle dynamics control
+};
+
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function createAudioContext(): AudioContext | null {
+  const g = window as unknown as {
+    AudioContext?: { new(): AudioContext };
+    webkitAudioContext?: { new(): AudioContext };
+  };
+  const Ctor = g.AudioContext ?? g.webkitAudioContext;
+  if (!Ctor) return null;
+  return new Ctor();
+}
+
+async function playWithFXBase64Mp3(
+  base64: string,
+  opts: Partial<typeof FX_DEFAULTS> = {}
+): Promise<void> {
+  const settings = { ...FX_DEFAULTS, ...opts };
+
+  const ctx = createAudioContext();
+  if (!ctx) {
+    // Fallback: if AudioContext unsupported, use basic <audio> playback
+    const audio = new Audio(`data:audio/mpeg;base64,${base64}`);
+    // Autoplay may be blocked; user can hit play in UI if needed
+    try { await audio.play(); } catch { /* ignore */ }
+    return;
+  }
+
+  const arrayBuf = base64ToArrayBuffer(base64);
+  const audioBuf = await ctx.decodeAudioData(arrayBuf);
+
+  const src = ctx.createBufferSource();
+  src.buffer = audioBuf;
+
+  // tempo/pitch (simple approach: playbackRate + detune)
+  // tempo affects speed; detune shifts pitch (in cents)
+  src.playbackRate.value = settings.tempo;
+  src.detune.value = settings.pitchSemi * 100;
+
+  // highshelf EQ for clarity/air
+  const shelf = ctx.createBiquadFilter();
+  shelf.type = "highshelf";
+  shelf.frequency.value = 3000;
+  shelf.gain.value = settings.clarityDb;
+
+  // gentle compressor for stability
+  const comp = ctx.createDynamicsCompressor();
+  if (settings.compress) {
+    comp.threshold.value = -28;
+    comp.knee.value = 30;
+    comp.ratio.value = 6;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+  }
+
+  // output gain
+  const gain = ctx.createGain();
+  gain.gain.value = settings.gain;
+
+  // wire up: src → shelf → comp → gain → destination
+  src.connect(shelf);
+  if (settings.compress) {
+    shelf.connect(comp);
+    comp.connect(gain);
+  } else {
+    shelf.connect(gain);
+  }
+  gain.connect(ctx.destination);
+
+  src.start(0);
+}
+
 export default function Page() {
   // Chat UI
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -182,8 +271,25 @@ export default function Page() {
       if (data?.reply) append("ellie", data.reply);
 
       if (data?.audioMp3Base64) {
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
-        try { await audio.play(); } catch { /* autoplay may be blocked */ }
+        // OLD (kept, not deleted):
+        // const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
+        // try { await audio.play(); } catch { /* autoplay may be blocked */ }
+
+        // NEW: play Ellie’s audio through Web Audio FX so it’s audibly different
+        try {
+          await playWithFXBase64Mp3(data.audioMp3Base64, {
+            // tweak these if you want a different default
+            pitchSemi: FX_DEFAULTS.pitchSemi,
+            clarityDb: FX_DEFAULTS.clarityDb,
+            gain: FX_DEFAULTS.gain,
+            tempo: FX_DEFAULTS.tempo,
+            compress: FX_DEFAULTS.compress,
+          });
+        } catch {
+          // Fallback if FX fails
+          const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
+          try { await audio.play(); } catch { /* ignore */ }
+        }
       }
     } catch (e) {
       append("ellie", `Voice error: ${errorMessage(e)}`);
@@ -203,7 +309,7 @@ export default function Page() {
       };
       mr.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
-        sendVoiceBlob(blob);
+        void sendVoiceBlob(blob);
         stream.getTracks().forEach((t) => t.stop());
       };
       mediaRecorderRef.current = mr;
