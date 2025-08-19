@@ -1,4 +1,3 @@
-// app/page.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -174,7 +173,15 @@ export default function Page() {
   // Voice chat
   // ───────────────────────────────────────────────
 
-  // CHANGED: force safe MIME and pass it through to sendVoiceBlob
+  // Helper to check support for MediaRecorder MIME types without using `any`
+  const isTypeSupported = (mime: string): boolean => {
+    return (
+      typeof MediaRecorder !== "undefined" &&
+      typeof MediaRecorder.isTypeSupported === "function" &&
+      MediaRecorder.isTypeSupported(mime)
+    );
+  };
+
   async function startRecording(): Promise<void> {
     if (!langReady) return;
     try {
@@ -182,17 +189,16 @@ export default function Page() {
 
       const preferred = "audio/webm;codecs=opus";
       const fallback = "audio/webm";
-      const isSup = (window as any).MediaRecorder?.isTypeSupported?.bind(MediaRecorder);
-
-      const picked =
-        isSup && isSup(preferred) ? preferred :
-        isSup && isSup(fallback) ? fallback :
-        ""; // let browser decide as last resort
+      const picked = isTypeSupported(preferred)
+        ? preferred
+        : isTypeSupported(fallback)
+        ? fallback
+        : ""; // let browser decide as last resort
 
       const mr = new MediaRecorder(stream, picked ? { mimeType: picked } : undefined);
       chunksRef.current = [];
 
-      mr.ondataavailable = (ev: { data: Blob }) => {
+      mr.ondataavailable = (ev: BlobEvent) => {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       mr.onstop = () => {
@@ -215,7 +221,6 @@ export default function Page() {
     setRecording(false);
   }
 
-  // CHANGED: accept mimeType, set matching filename, and send language explicitly
   async function sendVoiceBlob(blob: Blob, mimeType?: string): Promise<void> {
     if (!API || !langReady) return;
     setLoading(true);
@@ -231,7 +236,12 @@ export default function Page() {
       const fd = new FormData();
       fd.append("audio", blob, `clip.${ext}`);
       fd.append("userId", USER_ID);
-      fd.append("language", (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || chosenLang || "en");
+      fd.append(
+        "language",
+        (typeof window !== "undefined" && (localStorage.getItem("ellie_language") as LangCode | null)) ||
+          chosenLang ||
+          "en"
+      );
 
       const r = await fetch(`${API}/api/voice-chat`, {
         method: "POST",
@@ -244,9 +254,7 @@ export default function Page() {
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
 
       if (data?.audioMp3Base64) {
-        const audio = new Audio(
-          `data:audio/mpeg;base64,${data.audioMp3Base64}`
-        );
+        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
         try {
           await audio.play();
         } catch {
