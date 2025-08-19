@@ -13,17 +13,16 @@ type LangOption = { code: LangCode; name: string };
 
 type GetLanguageResponse = { language?: LangCode | null };
 type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string };
-type ChatResponse = { reply?: string; language?: LangCode };
+type ChatResponse = { reply?: string; language?: LangCode; voiceMode?: string };
 type VoiceResponse = {
   text?: string;
   reply?: string;
   language?: LangCode;
   audioMp3Base64?: string | null;
+  voiceMode?: string;
 };
-type GetPresetResponse = { preset?: string | null };
-type ApplyPresetResponse = { ok?: boolean; preset?: string };
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";   // e.g. https://ellie-api-1.onrender.com
+const API = process.env.NEXT_PUBLIC_API_URL || "";   // your backend url
 const USER_ID = "default-user";
 
 // Keep in sync with server SUPPORTED_LANGUAGES
@@ -67,18 +66,16 @@ export default function Page() {
   const [langReady, setLangReady] = useState(false);
   const [chosenLang, setChosenLang] = useState<LangCode>("en");
 
-  // Voice preset (no FX sliders)
-  const [preset, setPreset] = useState("natural");
-  const [presetStatus, setPresetStatus] = useState("");
+  // New: Track voice mode Ellie chooses
+  const [voiceMode, setVoiceMode] = useState<string>("default");
 
-  // ────────────────────────────────────────────────────────────
-  // First-run language picker logic
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
+  // First-run language picker
+  // ─────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       if (!API) return;
 
-      // Local setting wins
       const stored = typeof window !== "undefined"
         ? (localStorage.getItem("ellie_language") as LangCode | null)
         : null;
@@ -91,30 +88,21 @@ export default function Page() {
         }).catch(() => {});
         setChosenLang(stored);
         setLangReady(true);
-      } else {
-        try {
-          const r = await fetch(`${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`);
-          const data = (await r.json()) as GetLanguageResponse;
-          if (data?.language) {
-            localStorage.setItem("ellie_language", data.language);
-            setChosenLang(data.language);
-            setLangReady(true);
-          } else {
-            setLangReady(false);
-          }
-        } catch {
-          setLangReady(false);
-        }
+        return;
       }
 
-      // Load current preset from backend so the dropdown matches server state
       try {
-        const r = await fetch(`${API}/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`);
-        const data = (await r.json()) as GetPresetResponse;
-        if (data?.preset) setPreset(data.preset);
-      } catch {
-        /* ignore */
-      }
+        const r = await fetch(`${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`);
+        const data = (await r.json()) as GetLanguageResponse;
+        if (data?.language) {
+          localStorage.setItem("ellie_language", data.language);
+          setChosenLang(data.language);
+          setLangReady(true);
+          return;
+        }
+      } catch {}
+
+      setLangReady(false);
     })();
   }, []);
 
@@ -135,9 +123,9 @@ export default function Page() {
     }
   }
 
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   // Chat helpers
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   function append(from: "you" | "ellie", text: string): void {
     setMessages((prev) => [...prev, { from, text }]);
   }
@@ -157,6 +145,9 @@ export default function Page() {
       });
       const data = (await r.json()) as ChatResponse;
       append("ellie", data?.reply ?? "(no reply)");
+
+      // save voiceMode if backend sent it
+      if (data?.voiceMode) setVoiceMode(data.voiceMode);
     } catch (e) {
       append("ellie", `Error: ${errorMessage(e)}`);
     } finally {
@@ -174,9 +165,9 @@ export default function Page() {
     }).catch(() => {});
   }
 
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   // Voice recording → /api/voice-chat
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   async function sendVoiceBlob(blob: Blob): Promise<void> {
     if (!API || !langReady) return;
     setLoading(true);
@@ -190,6 +181,8 @@ export default function Page() {
 
       if (data?.text) append("you", data.text);
       if (data?.reply) append("ellie", data.reply);
+
+      if (data?.voiceMode) setVoiceMode(data.voiceMode);
 
       if (data?.audioMp3Base64) {
         const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
@@ -208,12 +201,12 @@ export default function Page() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
       chunksRef.current = [];
-      mr.ondataavailable = (ev: BlobEvent) => {
+      mr.ondataavailable = (ev: { data: Blob }) => {
         if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
       mr.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: mr.mimeType || "audio/webm" });
-        void sendVoiceBlob(blob);
+        sendVoiceBlob(blob);
         stream.getTracks().forEach((t) => t.stop());
       };
       mediaRecorderRef.current = mr;
@@ -230,34 +223,9 @@ export default function Page() {
     setRecording(false);
   }
 
-  // ────────────────────────────────────────────────────────────
-  // Voice preset API (no FX params)
-  // ────────────────────────────────────────────────────────────
-  async function applyPreset(p: string) {
-    if (!API) return;
-    setPreset(p);
-    setPresetStatus("Working...");
-    try {
-      const r = await fetch(`${API}/api/apply-voice-preset`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: USER_ID, preset: p }),
-      });
-      const data = (await r.json()) as ApplyPresetResponse;
-      if (data?.ok) {
-        setPresetStatus(`Applied: ${data.preset}`);
-      } else {
-        setPresetStatus("Error applying preset");
-      }
-    } catch (e) {
-      setPresetStatus(`Error: ${errorMessage(e)}`);
-    }
-  }
-
-  // ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   // UI
-  // ────────────────────────────────────────────────────────────
-
+  // ─────────────────────────────────────────────
   if (!langReady) {
     return (
       <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0b0b0f", color: "#fff" }}>
@@ -291,24 +259,10 @@ export default function Page() {
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <h1 style={{ fontSize: 28, margin: 0 }}>Ellie</h1>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          {/* Voice Preset Selector (top-right) */}
-          <div style={{ textAlign: "right" }}>
-            <select
-              value={preset}
-              onChange={(e) => void applyPreset(e.target.value)}
-              style={{ padding: 8, borderRadius: 8, border: "1px solid #444", background: "#16161c", color: "#fff" }}
-            >
-              <option value="natural">Natural</option>
-              <option value="warm">Warm</option>
-              <option value="soft">Soft</option>
-              <option value="bright">Bright</option>
-            </select>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>{presetStatus}</div>
-          </div>
-
           <small style={{ opacity: 0.7 }}>
             Language: {typeof window !== "undefined" ? localStorage.getItem("ellie_language") : ""}
           </small>
+          <small style={{ opacity: 0.7 }}>Voice mode: {voiceMode}</small>
           <button onClick={resetConversation} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #444", background: "#16161c", color: "#fff" }}>
             Reset
           </button>
@@ -337,10 +291,10 @@ export default function Page() {
       <section style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           value={input}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
+          onChange={(e) => setInput(e.target.value)}
           placeholder="Type a message…"
           style={{ flex: 1, padding: 12, borderRadius: 8, border: "1px solid #333", background: "#101015", color: "#fff" }}
-          onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+          onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void sendText();
           }}
         />
