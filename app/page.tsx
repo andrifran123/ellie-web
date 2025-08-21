@@ -21,8 +21,29 @@ type VoiceResponse = {
   audioMp3Base64?: string | null;
 };
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";
+// ───────────────────────────────────────────────
+// ENV + simple API helper
+// ───────────────────────────────────────────────
+const API = process.env.NEXT_PUBLIC_API_URL || ""; // e.g. https://ellie-api-1.onrender.com
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN || ""; // optional; set if backend ELLIE_API_KEY is enabled
 const USER_ID = "default-user";
+const SESSION_ID = "default"; // optional multi-chat support
+
+function withAuthHeaders(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers || {});
+  if (API_TOKEN) headers.set("Authorization", `Bearer ${API_TOKEN}`);
+  return { ...init, headers };
+}
+
+async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, withAuthHeaders(init));
+  // Render may return 401 if auth is enabled and header missing
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ""}`);
+  }
+  return res.json() as Promise<T>;
+}
 
 const LANGS: LangOption[] = [
   { code: "en", name: "English" },
@@ -77,12 +98,13 @@ export default function Page() {
     (async () => {
       if (!API) return;
 
-      const stored = typeof window !== "undefined"
-        ? (localStorage.getItem("ellie_language") as LangCode | null)
-        : null;
+      const stored =
+        typeof window !== "undefined"
+          ? (localStorage.getItem("ellie_language") as LangCode | null)
+          : null;
 
       if (stored) {
-        await fetch(`${API}/api/set-language`, {
+        await apiFetch<SetLanguageResponse>(`${API}/api/set-language`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId: USER_ID, language: stored }),
@@ -93,10 +115,9 @@ export default function Page() {
       }
 
       try {
-        const r = await fetch(
+        const data = await apiFetch<GetLanguageResponse>(
           `${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`
         );
-        const data = (await r.json()) as GetLanguageResponse;
         if (data?.language) {
           localStorage.setItem("ellie_language", data.language);
           setChosenLang(data.language);
@@ -104,7 +125,7 @@ export default function Page() {
           return;
         }
       } catch {
-        /* fall through */
+        /* fall through to manual selection */
       }
 
       setLangReady(false);
@@ -114,12 +135,11 @@ export default function Page() {
   async function confirmLanguage(): Promise<void> {
     if (!API) return;
     try {
-      const r = await fetch(`${API}/api/set-language`, {
+      const data = await apiFetch<SetLanguageResponse>(`${API}/api/set-language`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
       });
-      const data = (await r.json()) as SetLanguageResponse;
       const saved = data?.language ?? chosenLang;
       localStorage.setItem("ellie_language", saved);
       setLangReady(true);
@@ -143,12 +163,11 @@ export default function Page() {
     append("you", msg);
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/chat`, {
+      const data = await apiFetch<ChatResponse>(`${API}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: USER_ID, message: msg }),
+        body: JSON.stringify({ userId: USER_ID, sessionId: SESSION_ID, message: msg }),
       });
-      const data = (await r.json()) as ChatResponse;
       if (data?.reply) append("ellie", data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
     } catch (e) {
@@ -162,10 +181,10 @@ export default function Page() {
     if (!API) return;
     setMessages([]);
     setVoiceMode(null);
-    await fetch(`${API}/api/reset`, {
+    await apiFetch(`${API}/api/reset`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: USER_ID }),
+      body: JSON.stringify({ userId: USER_ID, sessionId: SESSION_ID }),
     }).catch(() => {});
   }
 
@@ -236,6 +255,7 @@ export default function Page() {
       const fd = new FormData();
       fd.append("audio", blob, `clip.${ext}`);
       fd.append("userId", USER_ID);
+      fd.append("sessionId", SESSION_ID);
       fd.append(
         "language",
         (typeof window !== "undefined" && (localStorage.getItem("ellie_language") as LangCode | null)) ||
@@ -243,10 +263,12 @@ export default function Page() {
           "en"
       );
 
-      const r = await fetch(`${API}/api/voice-chat`, {
+      // Note: fetch with auth headers for FormData (can’t set Content-Type manually)
+      const r = await fetch(`${API}/api/voice-chat`, withAuthHeaders({
         method: "POST",
         body: fd,
-      });
+      }));
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
       const data = (await r.json()) as VoiceResponse;
 
       if (data?.text) append("you", data.text);
@@ -271,6 +293,17 @@ export default function Page() {
   // ───────────────────────────────────────────────
   // UI
   // ───────────────────────────────────────────────
+  if (!API) {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#0b0b0f", color: "#fff" }}>
+        <div style={{ background: "#111", padding: 24, borderRadius: 12, width: 420, border: "1px solid #222" }}>
+          <h2>Missing API URL</h2>
+          <p>Please set <code>NEXT_PUBLIC_API_URL</code> in your Vercel project settings.</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!langReady) {
     return (
       <div
