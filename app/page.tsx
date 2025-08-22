@@ -511,7 +511,7 @@ registerProcessor('pcm-player', PCMPlayer);
               width: "100%",
               padding: 10,
               borderRadius: 8,
-              border: "1px solid "#333",
+              border: "1px solid #333",
               background: "#1a1a1f",
               color: "#fff",
             }}
