@@ -14,7 +14,7 @@ type GetLanguageResponse = { language?: LangCode | null };
 type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string };
 type ChatResponse = { reply?: string; language?: LangCode; voiceMode?: string };
 type VoiceResponse = {
-  // text?: string;   // removed on purpose: we no longer show user's transcript from voice
+  text?: string;
   reply?: string;
   language?: LangCode;
   voiceMode?: string;
@@ -58,7 +58,7 @@ export default function Page() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // Voice recording (record/send)
+  // Voice recording
   const [recording, setRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
@@ -170,7 +170,7 @@ export default function Page() {
   }
 
   // ───────────────────────────────────────────────
-  // Voice chat (record → send)
+  // Voice chat
   // ───────────────────────────────────────────────
 
   // Helper to check support for MediaRecorder MIME types without using `any`
@@ -249,8 +249,9 @@ export default function Page() {
       });
       const data = (await r.json()) as VoiceResponse;
 
-      // IMPORTANT: do not append "you" transcript for voice
-      // if (data?.text) append("you", data.text); // ← removed on purpose
+      // CHANGE 1: Do NOT echo the user's transcript into chat anymore
+      // (we only show Ellie's reply)
+      // if (data?.text) append("you", data.text);
 
       if (data?.reply) append("ellie", data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
@@ -268,216 +269,6 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }
-
-  // ───────────────────────────────────────────────
-  // PHONE CALL (Realtime WS to /ws/phone)
-  // ───────────────────────────────────────────────
-
-  const phoneWsRef = useRef<WebSocket | null>(null);
-  const acRef = useRef<AudioContext | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const micNodeRef = useRef<AudioWorkletNode | null>(null);
-  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const playerNodeRef = useRef<AudioWorkletNode | null>(null);
-  const [onCall, setOnCall] = useState(false);
-  const [talking, setTalking] = useState(false);
-
-  function wsUrlFor(path: string) {
-    if (!API) return "";
-    return API.replace(/^http/, "ws") + path;
-  }
-
-  const encoderWorkletJs = `
-class PCMEncoder extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.inputRate = sampleRate;
-    this.targetRate = 24000;
-    this.ratio = this.inputRate / this.targetRate;
-    this.chunkMs = 50;
-    this.targetSamplesPerPacket = Math.floor(this.targetRate * this.chunkMs / 1000);
-    this.acc = 0;
-    this.resampled = [];
-  }
-  process(inputs) {
-    const input = inputs[0];
-    if (!input || !input[0] || input[0].length === 0) return true;
-    const chCount = input.length;
-    const ch0 = input[0];
-    let mono = ch0;
-    if (chCount > 1) {
-      const L = ch0.length;
-      mono = new Float32Array(L);
-      for (let i=0;i<L;i++) {
-        let s = 0;
-        for (let c=0;c<chCount;c++) s += input[c][i];
-        mono[i] = s / chCount;
-      }
-    }
-    const step = this.ratio;
-    for (let i = 0; i < mono.length; i++) {
-      this.acc += 1;
-      while (this.acc >= step) {
-        const idx = (this.acc - step);
-        const srcPos = i - (idx);
-        const s0i = Math.max(0, Math.floor(srcPos));
-        const s1i = Math.min(s0i + 1, mono.length - 1);
-        const frac = srcPos - s0i;
-        const s = mono[s0i] * (1 - frac) + mono[s1i] * frac;
-        this.resampled.push(s);
-        this.acc -= step;
-      }
-    }
-    while (this.resampled.length >= this.targetSamplesPerPacket) {
-      const pkt = this.resampled.splice(0, this.targetSamplesPerPacket);
-      const i16 = new Int16Array(pkt.length);
-      for (let i=0;i<pkt.length;i++) {
-        let v = Math.max(-1, Math.min(1, pkt[i]));
-        i16[i] = v < 0 ? v * 0x8000 : v * 0x7FFF;
-      }
-      const b = new Uint8Array(i16.buffer);
-      let bin = "";
-      for (let i=0;i<b.length;i++) bin += String.fromCharCode(b[i]);
-      const base64 = btoa(bin);
-      this.port.postMessage({ type: 'pcm16', b64: base64 });
-    }
-    return true;
-  }
-}
-registerProcessor('pcm-encoder', PCMEncoder);
-`;
-
-  const playerWorkletJs = `
-class PCMPlayer extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.queue = [];
-    this.readIdx = 0;
-    this.port.onmessage = (e) => {
-      if (e.data?.type === 'push') {
-        this.queue.push(e.data.f32);
-      }
-    };
-  }
-  process(inputs, outputs) {
-    const out = outputs[0];
-    if (!out || !out[0]) return true;
-    const L = out[0];
-    const R = out[1] || L;
-    L.fill(0); if (R) R.fill(0);
-    if (this.queue.length === 0) return true;
-    const buf = this.queue[0];
-    const frames = Math.min(L.length, buf.length - this.readIdx);
-    for (let i=0;i<frames;i++) {
-      const s = buf[this.readIdx + i];
-      L[i] = s;
-      if (R) R[i] = s;
-    }
-    this.readIdx += frames;
-    if (this.readIdx >= buf.length) {
-      this.queue.shift();
-      this.readIdx = 0;
-    }
-    return true;
-  }
-}
-registerProcessor('pcm-player', PCMPlayer);
-`;
-
-  async function ensureAudioGraph(): Promise<void> {
-    if (acRef.current) return;
-    const ac = new AudioContext({ sampleRate: 48000 });
-    acRef.current = ac;
-
-    const encUrl = URL.createObjectURL(new Blob([encoderWorkletJs], { type: "application/javascript" }));
-    await ac.audioWorklet.addModule(encUrl);
-
-    const playUrl = URL.createObjectURL(new Blob([playerWorkletJs], { type: "application/javascript" }));
-    await ac.audioWorklet.addModule(playUrl);
-
-    const player = new AudioWorkletNode(ac, "pcm-player", { numberOfOutputs: 1, outputChannelCount: [2] });
-    player.connect(ac.destination);
-    playerNodeRef.current = player;
-  }
-
-  function b64pcm16ToF32(b64: string): Float32Array {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i=0;i<bytes.length;i++) bytes[i] = bin.charCodeAt(i);
-    const i16 = new Int16Array(bytes.buffer);
-    const out = new Float32Array(i16.length);
-    for (let i=0;i<i16.length;i++) out[i] = Math.max(-1, Math.min(1, i16[i] / 0x8000));
-    return out;
-  }
-
-  async function startPhoneCall(): Promise<void> {
-    if (!API || onCall) return;
-    await ensureAudioGraph();
-
-    const ws = new WebSocket(wsUrlFor("/ws/phone"));
-    phoneWsRef.current = ws;
-
-    ws.onopen = () => {
-      const lang =
-        (typeof window !== "undefined" &&
-          (localStorage.getItem("ellie_language") as LangCode | null)) ||
-        "en";
-      ws.send(JSON.stringify({ type: "hello", userId: USER_ID, language: lang, sampleRate: 24000 }));
-      setOnCall(true);
-    };
-
-    ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === "audio.delta" && msg.audio) {
-        const f32 = b64pcm16ToF32(msg.audio);
-        playerNodeRef.current?.port.postMessage({ type: "push", f32 });
-      }
-      // If you want captions, you can watch for msg.type === "text.delta"/"text.final"
-    };
-
-    ws.onclose = () => {
-      setOnCall(false);
-      setTalking(false);
-      try { micSourceRef.current?.disconnect(); } catch {}
-      try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
-    };
-
-    // Prepare mic + encoder (connect on press-to-talk)
-    micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const encoder = new AudioWorkletNode(acRef.current!, "pcm-encoder", { numberOfInputs: 1, numberOfOutputs: 0 });
-    encoder.port.onmessage = (e) => {
-      if (e.data?.type === "pcm16" && phoneWsRef.current?.readyState === 1) {
-        phoneWsRef.current.send(JSON.stringify({ type: "audio.append", audio: e.data.b64 }));
-      }
-    };
-    micNodeRef.current = encoder;
-  }
-
-  function endPhoneCall(): void {
-    try { phoneWsRef.current?.close(); } catch {}
-    try { micSourceRef.current?.disconnect(); } catch {}
-    try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
-    setOnCall(false);
-    setTalking(false);
-  }
-
-  function startTalking(): void {
-    if (!onCall || !micNodeRef.current || !acRef.current || !micStreamRef.current) return;
-    if (!micSourceRef.current) {
-      micSourceRef.current = acRef.current.createMediaStreamSource(micStreamRef.current);
-    }
-    try {
-      micSourceRef.current.connect(micNodeRef.current);
-    } catch {}
-    setTalking(true);
-  }
-
-  function stopTalking(): void {
-    if (!onCall || !phoneWsRef.current) return;
-    try { micSourceRef.current?.disconnect(); } catch {}
-    setTalking(false);
-    phoneWsRef.current.send(JSON.stringify({ type: "audio.commit" }));
   }
 
   // ───────────────────────────────────────────────
@@ -546,7 +337,8 @@ registerProcessor('pcm-player', PCMPlayer);
         maxWidth: 820,
         margin: "32px auto",
         padding: 16,
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+        fontFamily:
+          "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
         color: "#fff",
         background: "#0b0b0f",
         minHeight: "100vh",
@@ -562,9 +354,14 @@ registerProcessor('pcm-player', PCMPlayer);
         <h1 style={{ fontSize: 28, margin: 0 }}>Ellie</h1>
         <div style={{ textAlign: "right" }}>
           <div style={{ opacity: 0.7 }}>
-            Lang: {typeof window !== "undefined" ? localStorage.getItem("ellie_language") : ""}
+            Lang:{" "}
+            {typeof window !== "undefined"
+              ? localStorage.getItem("ellie_language")
+              : ""}
           </div>
-          {voiceMode && <div style={{ opacity: 0.7 }}>Mode: {voiceMode}</div>}
+          {voiceMode && (
+            <div style={{ opacity: 0.7 }}>Mode: {voiceMode}</div>
+          )}
           <button
             onClick={resetConversation}
             style={{
@@ -592,7 +389,9 @@ registerProcessor('pcm-player', PCMPlayer);
           overflowY: "auto",
         }}
       >
-        {messages.length === 0 && <div style={{ opacity: 0.6 }}>Say hi to Ellie…</div>}
+        {messages.length === 0 && (
+          <div style={{ opacity: 0.6 }}>Say hi to Ellie…</div>
+        )}
         {messages.map((m, i) => (
           <div key={i} style={{ margin: "8px 0" }}>
             <b>{m.from === "you" ? "You" : "Ellie"}</b>: {m.text}
@@ -600,7 +399,6 @@ registerProcessor('pcm-player', PCMPlayer);
         ))}
       </section>
 
-      {/* Text input */}
       <section style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <input
           value={input}
@@ -615,7 +413,8 @@ registerProcessor('pcm-player', PCMPlayer);
             color: "#fff",
           }}
           onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void sendText();
+            if ((e.ctrlKey || e.metaKey) && e.key === "Enter")
+              void sendText();
           }}
         />
         <button
@@ -632,7 +431,6 @@ registerProcessor('pcm-player', PCMPlayer);
         </button>
       </section>
 
-      {/* Record → send voice */}
       <section style={{ display: "flex", gap: 8 }}>
         {!recording ? (
           <button
@@ -662,47 +460,25 @@ registerProcessor('pcm-player', PCMPlayer);
             ⏹ Stop & send
           </button>
         )}
-        {loading && <span style={{ alignSelf: "center", opacity: 0.8 }}>Processing…</span>}
-      </section>
 
-      {/* Phone call realtime */}
-      <section style={{ display: "flex", gap: 8, marginTop: 16 }}>
-        {!onCall ? (
-         <button
-  onClick={() => window.open("/call", "_blank", "noopener,noreferrer")}
-  style={{ padding: "12px 16px", borderRadius: 8, background: "#0a7", color: "#fff" }}
->
-  📞 Start call
-</button>
-        ) : (
-          <>
-            <button
-              onMouseDown={startTalking}
-              onMouseUp={stopTalking}
-              onTouchStart={startTalking}
-              onTouchEnd={stopTalking}
-              disabled={!onCall}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 8,
-                background: talking ? "#e67e22" : "#f39c12",
-                color: "#000",
-              }}
-            >
-              {talking ? "🗣️ Release to send" : "🎙️ Hold to talk"}
-            </button>
-            <button
-              onClick={endPhoneCall}
-              style={{
-                padding: "12px 16px",
-                borderRadius: 8,
-                background: "#a00",
-                color: "#fff",
-              }}
-            >
-              ⛔ Hang up
-            </button>
-          </>
+        {/* CHANGE 2: Add Start call button (opens /call in new tab) */}
+        <button
+          onClick={() => window.open("/call", "_blank", "noopener,noreferrer")}
+          style={{
+            padding: "12px 16px",
+            borderRadius: 8,
+            border: "1px solid #0a7",
+            background: "#0a7",
+            color: "#fff",
+          }}
+        >
+          📞 Start call
+        </button>
+
+        {loading && (
+          <span style={{ alignSelf: "center", opacity: 0.8 }}>
+            Processing…
+          </span>
         )}
       </section>
     </div>
