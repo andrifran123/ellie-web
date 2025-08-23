@@ -668,17 +668,12 @@ registerProcessor('pcm-player', PCMPlayer);
       {/* Phone call realtime */}
       <section style={{ display: "flex", gap: 8, marginTop: 16 }}>
         {!onCall ? (
-          <button
-            onClick={() => void startPhoneCall()}
-            style={{
-              padding: "12px 16px",
-              borderRadius: 8,
-              background: "#0a7",
-              color: "#fff",
-            }}
-          >
-            📞 Start call
-          </button>
+         <button
+  onClick={() => window.open("/call", "_blank", "noopener,noreferrer")}
+  style={{ padding: "12px 16px", borderRadius: 8, background: "#0a7", color: "#fff" }}
+>
+  📞 Start call
+</button>
         ) : (
           <>
             <button
