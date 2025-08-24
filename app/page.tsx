@@ -1,11 +1,11 @@
-// app/home/page.tsx
+// app/page.tsx
 "use client";
 
 import Link from "next/link";
 
 export default function HomePage() {
   return (
-    <main className="px-6 md:px-10 py-10 futuristic-bg">
+    <main className="futuristic-bg px-6 md:px-10 py-10">
       {/* Top bar */}
       <header className="max-w-6xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -16,7 +16,7 @@ export default function HomePage() {
         <nav className="hidden md:flex items-center gap-6 text-sm text-white/80">
           <a href="#features" className="hover:text-white">Features</a>
           <a href="#privacy" className="hover:text-white">Privacy</a>
-          <Link href="/" className="hover:text-white">Chat</Link>
+          <Link href="/chat" className="hover:text-white">Chat</Link>
           <Link href="/call" className="hover:text-white">Call</Link>
         </nav>
       </header>
@@ -34,7 +34,7 @@ export default function HomePage() {
 
           <div className="mt-8 flex gap-4">
             <Link
-              href="/"
+              href="/chat"
               className="glass card-hover rounded-xl px-5 py-3 font-semibold"
             >
               💬 Open Chat
