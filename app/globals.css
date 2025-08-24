@@ -1,3 +1,6 @@
+@import "tailwindcss";
+
+
 /* ===== Futuristic / neon background for the HOME page only ===== */
 .futuristic-bg {
   position: relative;
