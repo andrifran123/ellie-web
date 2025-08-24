@@ -128,15 +128,13 @@ export default function ChatPage() {
     }
   }, [chosenLang]);
 
-  // ───────────────────────────────────────────────
-  // Chat helpers
-  // ───────────────────────────────────────────────
-  function append(from: "you" | "ellie", text: string): void {
+  // smooth scroll to latest message
+  const append = useCallback((from: "you" | "ellie", text: string) => {
     setMessages((prev) => [...prev, { from, text }]);
     queueMicrotask(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
     });
-  }
+  }, []);
 
   const sendText = useCallback(async () => {
     if (!API || !langReady) return;
@@ -159,7 +157,7 @@ export default function ChatPage() {
     } finally {
       setLoading(false);
     }
-  }, [API, input, langReady]);
+  }, [append, input, langReady]);
 
   const resetConversation = useCallback(async () => {
     if (!API) return;
@@ -170,7 +168,7 @@ export default function ChatPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: USER_ID }),
     }).catch(() => {});
-  }, [API]);
+  }, []);
 
   // ───────────────────────────────────────────────
   // Voice chat (record → send) — DO NOT append transcript
@@ -180,44 +178,7 @@ export default function ChatPage() {
     typeof MediaRecorder.isTypeSupported === "function" &&
     MediaRecorder.isTypeSupported(mime);
 
-  const startRecording = useCallback(async () => {
-    if (!langReady) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferred = "audio/webm;codecs=opus";
-      const fallback = "audio/webm";
-      const picked = isTypeSupported(preferred)
-        ? preferred
-        : isTypeSupported(fallback)
-          ? fallback
-          : "";
-
-      const mr = new MediaRecorder(stream, picked ? { mimeType: picked } : undefined);
-      chunksRef.current = [];
-      mr.ondataavailable = (ev: BlobEvent) => {
-        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
-      };
-      mr.onstop = () => {
-        const uploadType = picked || mr.mimeType || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type: uploadType });
-        void sendVoiceBlob(blob, uploadType);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      mediaRecorderRef.current = mr;
-      mr.start();
-      setRecording(true);
-    } catch {
-      alert("Microphone permission required.");
-    }
-  }, [langReady]);
-
-  const stopRecording = useCallback(() => {
-    const mr = mediaRecorderRef.current;
-    if (mr && mr.state !== "inactive") mr.stop();
-    setRecording(false);
-  }, []);
-
-  async function sendVoiceBlob(blob: Blob, mimeType?: string): Promise<void> {
+  const sendVoiceBlob = useCallback(async (blob: Blob, mimeType?: string) => {
     if (!API || !langReady) return;
     setLoading(true);
     try {
@@ -255,7 +216,44 @@ export default function ChatPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [append, chosenLang, langReady]);
+
+  const startRecording = useCallback(async () => {
+    if (!langReady) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferred = "audio/webm;codecs=opus";
+      const fallback = "audio/webm";
+      const picked = isTypeSupported(preferred)
+        ? preferred
+        : isTypeSupported(fallback)
+          ? fallback
+          : "";
+
+      const mr = new MediaRecorder(stream, picked ? { mimeType: picked } : undefined);
+      chunksRef.current = [];
+      mr.ondataavailable = (ev: BlobEvent) => {
+        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
+      };
+      mr.onstop = () => {
+        const uploadType = picked || mr.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: uploadType });
+        void sendVoiceBlob(blob, uploadType);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setRecording(true);
+    } catch {
+      alert("Microphone permission required.");
+    }
+  }, [langReady, sendVoiceBlob]);
+
+  const stopRecording = useCallback(() => {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== "inactive") mr.stop();
+    setRecording(false);
+  }, []);
 
   // ───────────────────────────────────────────────
   // UI

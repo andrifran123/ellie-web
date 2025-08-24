@@ -22,7 +22,7 @@ export default function CallPage() {
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
-      let s = Math.max(-1, Math.min(1, float32[i]));
+      const s = Math.max(-1, Math.min(1, float32[i]));
       out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     return out;
@@ -30,7 +30,15 @@ export default function CallPage() {
 
   const ensureAudioGraph = useCallback(async () => {
     if (acRef.current) return acRef.current;
-    const ac = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+
+    // Type-safe fallback for webkitAudioContext without using `any`
+    type WinWithWebkit = typeof window & {
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const w = window as WinWithWebkit;
+    const AC: typeof AudioContext = (w.AudioContext || w.webkitAudioContext)!;
+
+    const ac = new AC({ sampleRate: 16000 });
     acRef.current = ac;
     return ac;
   }, []);
@@ -80,7 +88,6 @@ export default function CallPage() {
           src.connect(ac.destination);
           src.start();
         }
-        // If server sends text JSON, you could show a toast/status here.
       };
 
       ws.onerror = () => setStatus("error");
@@ -95,7 +102,8 @@ export default function CallPage() {
     } catch {
       setStatus("error");
     }
-  }, [API, ensureAudioGraph]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ensureAudioGraph]); // `API` is a build-time constant; not a reactive dep
 
   useEffect(() => {
     void connect();
