@@ -3,26 +3,18 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useToasts } from "../(providers)/toast";
+import { httpToWs, joinUrl } from "@/lib/url";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
-type ToastItem = { id: number; text: string };
-function useToasts() {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const idRef = useRef(1);
-  const show = useCallback((text: string) => {
-    const id = idRef.current++;
-    setToasts((t) => [...t, { id, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3800);
-  }, []);
-  return { toasts, show };
-}
+type Status = "connecting" | "connected" | "closed" | "error";
 
 export default function CallPage() {
   const router = useRouter();
   const { toasts, show } = useToasts();
 
-  const [status, setStatus] = useState<"connecting" | "connected" | "closed" | "error">("connecting");
+  const [status, setStatus] = useState<Status>("connecting");
   const [muted, setMuted] = useState(false);
   const [gain, setGain] = useState<number>(() => {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
@@ -35,8 +27,8 @@ export default function CallPage() {
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const workletRef = useRef<AudioWorkletNode | null>(null);
 
-  // Encode float32 -> PCM16
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -48,13 +40,9 @@ export default function CallPage() {
 
   const ensureAudioGraph = useCallback(async () => {
     if (acRef.current) return acRef.current;
-
-    type WinWithWebkit = typeof window & {
-      webkitAudioContext?: typeof AudioContext;
-    };
+    type WinWithWebkit = typeof window & { webkitAudioContext?: typeof AudioContext };
     const w = window as WinWithWebkit;
     const AC: typeof AudioContext = (w.AudioContext || w.webkitAudioContext)!;
-
     const ac = new AC({ sampleRate: 16000 });
     acRef.current = ac;
     return ac;
@@ -67,7 +55,7 @@ export default function CallPage() {
       return;
     }
     try {
-      const wsUrl = API.replace(/^http/, "ws") + "/ws/phone";
+      const wsUrl = httpToWs(joinUrl(API, "/ws/phone"));
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -75,7 +63,7 @@ export default function CallPage() {
       ws.onopen = async () => {
         setStatus("connected");
         show("Call connected");
-        // Start mic stream
+
         const ac = await ensureAudioGraph();
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         micStreamRef.current = stream;
@@ -86,25 +74,38 @@ export default function CallPage() {
         const gn = ac.createGain();
         gn.gain.value = gain;
         gainRef.current = gn;
-
-        const proc = ac.createScriptProcessor(4096, 1, 1);
-        processorRef.current = proc;
-
-        // chain: mic -> gain -> processor
         src.connect(gn);
-        gn.connect(proc);
-        proc.connect(ac.destination); // keep node alive (silent)
 
-        proc.onaudioprocess = (ev) => {
-          if (!ws || ws.readyState !== WebSocket.OPEN) return;
-          const input = ev.inputBuffer.getChannelData(0);
-          const pcm16 = floatTo16BitPCM(input);
-          ws.send(pcm16.buffer);
-        };
+        // Preferred: AudioWorklet (low-latency)
+        try {
+          if (ac.audioWorklet) {
+            await ac.audioWorklet.addModule("/worklets/mic-processor.js");
+            const worklet = new AudioWorkletNode(ac, "mic-processor");
+            workletRef.current = worklet;
+            gn.connect(worklet);
+            worklet.connect(ac.destination); // keep alive
+            worklet.port.onmessage = (ev) => {
+              if (ws.readyState === WebSocket.OPEN) ws.send(ev.data);
+            };
+          } else {
+            throw new Error("No audioWorklet support");
+          }
+        } catch {
+          // Fallback: ScriptProcessorNode (deprecated but widely supported)
+          const proc = ac.createScriptProcessor(4096, 1, 1);
+          processorRef.current = proc;
+          gn.connect(proc);
+          proc.connect(ac.destination);
+          proc.onaudioprocess = (ev) => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            const input = ev.inputBuffer.getChannelData(0);
+            const pcm16 = floatTo16BitPCM(input);
+            ws.send(pcm16.buffer);
+          };
+        }
       };
 
       ws.onmessage = async (ev) => {
-        // If server ever sends audio down (optional), play it
         if (ev.data instanceof ArrayBuffer) {
           const ac = await ensureAudioGraph();
           const buf = await ac.decodeAudioData(ev.data.slice(0));
@@ -126,6 +127,7 @@ export default function CallPage() {
         processorRef.current?.disconnect();
         gainRef.current?.disconnect();
         micNodeRef.current?.disconnect();
+        workletRef.current?.disconnect();
         micStreamRef.current?.getTracks().forEach((t) => t.stop());
         wsRef.current = null;
       };
@@ -133,8 +135,7 @@ export default function CallPage() {
       setStatus("error");
       show("Failed to connect call");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ensureAudioGraph, show]); // API is build-time constant
+  }, [ensureAudioGraph, show, gain]);
 
   useEffect(() => {
     void connect();
@@ -143,6 +144,7 @@ export default function CallPage() {
       processorRef.current?.disconnect();
       gainRef.current?.disconnect();
       micNodeRef.current?.disconnect();
+      workletRef.current?.disconnect();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
     };
   }, [connect]);
@@ -206,7 +208,9 @@ export default function CallPage() {
             </div>
 
             <div>
-              <div className="text-sm mb-1">Mic gain: <span className="text-white/80">{gain.toFixed(2)}×</span></div>
+              <div className="text-sm mb-1">
+                Mic gain: <span className="text-white/80">{gain.toFixed(2)}×</span>
+              </div>
               <input
                 type="range"
                 min={0.2}
@@ -225,12 +229,18 @@ export default function CallPage() {
               {status === "closed" && "Call ended"}
               {status === "error" && "Connection error. Check the API URL and WebSocket path."}
             </div>
+
+            {!API && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                Set <code>NEXT_PUBLIC_API_URL</code> to enable calling.
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2">
+      {/* toasts from provider */}
+      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
           <div
             key={t.id}

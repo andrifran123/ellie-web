@@ -3,6 +3,8 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useToasts } from "../(providers)/toast";
+import { joinUrl } from "@/lib/url";
 
 type ChatMsg = { from: "you" | "ellie"; text: string; ts: number };
 
@@ -16,7 +18,7 @@ type GetLanguageResponse = { language?: LangCode | null };
 type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string };
 type ChatResponse = { reply?: string; language?: LangCode; voiceMode?: string };
 type VoiceResponse = {
-  text?: string; // we do NOT render this in the chat bubbles
+  text?: string;
   reply?: string;
   language?: LangCode;
   voiceMode?: string;
@@ -61,18 +63,7 @@ function fmtTime(ts: number): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-// Tiny toast helper (no libs)
-type ToastItem = { id: number; text: string };
-function useToasts() {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const idRef = useRef(1);
-  const show = useCallback((text: string) => {
-    const id = idRef.current++;
-    setToasts((t) => [...t, { id, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3800);
-  }, []);
-  return { toasts, show };
-}
+const SUGGESTIONS = ["be playful", "be direct", "short reply", "ask a question"];
 
 export default function ChatPage() {
   const router = useRouter();
@@ -104,31 +95,25 @@ export default function ChatPage() {
   const loadingPresets = useRef(false);
 
   // ───────────────────────────────────────────────
-  // Language picker logic
+  // Language picker logic (lazy confirm: don't auto set to API)
   // ───────────────────────────────────────────────
   useEffect(() => {
     (async () => {
       if (!API) return;
 
-      const stored = typeof window !== "undefined"
-        ? (localStorage.getItem("ellie_language") as LangCode | null)
-        : null;
+      const stored =
+        typeof window !== "undefined"
+          ? (localStorage.getItem("ellie_language") as LangCode | null)
+          : null;
 
       if (stored) {
-        await fetch(`${API}/api/set-language`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: USER_ID, language: stored }),
-        }).catch(() => {});
         setChosenLang(stored);
-        setLangReady(true);
+        setLangReady(true); // let user continue; no server call until they confirm
         return;
       }
 
       try {
-        const r = await fetch(
-          `${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`
-        );
+        const r = await fetch(joinUrl(API, "/api/get-language") + `?userId=${encodeURIComponent(USER_ID)}`);
         const data = (await r.json()) as GetLanguageResponse;
         if (data?.language) {
           localStorage.setItem("ellie_language", data.language);
@@ -145,7 +130,7 @@ export default function ChatPage() {
   const confirmLanguage = useCallback(async () => {
     if (!API) return;
     try {
-      const r = await fetch(`${API}/api/set-language`, {
+      const r = await fetch(joinUrl(API, "/api/set-language"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
@@ -168,6 +153,27 @@ export default function ChatPage() {
     });
   }, []);
 
+  // Type-out illusion for Ellie replies
+  const typeOut = useCallback((full: string) => {
+    let i = 0;
+    const step = Math.max(1, Math.round(full.length / 120)); // ~2s for ~240 chars
+    const id = setInterval(() => {
+      i += step;
+      setMessages((prev) => {
+        const copy = [...prev];
+        const last = copy[copy.length - 1];
+        if (!last || last.from !== "ellie") {
+          copy.push({ from: "ellie", text: full.slice(0, i), ts: Date.now() });
+        } else {
+          last.text = full.slice(0, i);
+        }
+        return copy;
+      });
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+      if (i >= full.length) clearInterval(id);
+    }, 16);
+  }, []);
+
   const sendText = useCallback(async () => {
     if (!API || !langReady) return;
     const msg = input.trim();
@@ -177,13 +183,13 @@ export default function ChatPage() {
     setTyping(true);
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/chat`, {
+      const r = await fetch(joinUrl(API, "/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, message: msg }),
       });
       const data = (await r.json()) as ChatResponse;
-      if (data?.reply) append("ellie", data.reply);
+      if (data?.reply) typeOut(data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
     } catch (e) {
       append("ellie", `Error: ${errorMessage(e)}`);
@@ -192,13 +198,13 @@ export default function ChatPage() {
       setTyping(false);
       setLoading(false);
     }
-  }, [append, input, langReady, show]);
+  }, [append, input, langReady, show, typeOut]);
 
   const resetConversation = useCallback(async () => {
     if (!API) return;
     setMessages([]);
     setVoiceMode(null);
-    await fetch(`${API}/api/reset`, {
+    await fetch(joinUrl(API, "/api/reset"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: USER_ID }),
@@ -207,7 +213,7 @@ export default function ChatPage() {
   }, [show]);
 
   // ───────────────────────────────────────────────
-  // Voice chat (record → send) — DO NOT append transcript
+  // Voice chat (record → send) — do NOT append transcript
   // ───────────────────────────────────────────────
   const isTypeSupported = (mime: string): boolean =>
     typeof MediaRecorder !== "undefined" &&
@@ -237,11 +243,10 @@ export default function ChatPage() {
           "en"
       );
 
-      const r = await fetch(`${API}/api/voice-chat`, { method: "POST", body: fd });
+      const r = await fetch(joinUrl(API, "/api/voice-chat"), { method: "POST", body: fd });
       const data = (await r.json()) as VoiceResponse;
 
-      // IMPORTANT: do NOT append user's transcribed text into the chat.
-      if (data?.reply) append("ellie", data.reply);
+      if (data?.reply) typeOut(data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
 
       if (data?.audioMp3Base64) {
@@ -255,7 +260,7 @@ export default function ChatPage() {
       setTyping(false);
       setLoading(false);
     }
-  }, [append, chosenLang, langReady, show]);
+  }, [append, chosenLang, langReady, show, typeOut]);
 
   const startRecording = useCallback(async () => {
     if (!langReady) return;
@@ -295,16 +300,30 @@ export default function ChatPage() {
   }, []);
 
   // ───────────────────────────────────────────────
-  // Settings drawer (fetch presets when opened)
+  // Settings drawer (fetch presets when opened) + UX extras
   // ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!settingsOpen) return;
+    // ESC to close
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setSettingsOpen(false); };
+    window.addEventListener("keydown", onKey);
+    // lock background scroll
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [settingsOpen]);
+
   const openSettings = useCallback(async () => {
     setSettingsOpen(true);
     if (loadingPresets.current || !API) return;
     loadingPresets.current = true;
     try {
       const [pr, cr] = await Promise.all([
-        fetch(`${API}/api/get-voice-presets`).then((r) => r.json() as Promise<PresetsResponse>),
-        fetch(`${API}/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`).then((r) =>
+        fetch(joinUrl(API, "/api/get-voice-presets")).then((r) => r.json() as Promise<PresetsResponse>),
+        fetch(joinUrl(API, "/api/get-voice-preset") + `?userId=${encodeURIComponent(USER_ID)}`).then((r) =>
           r.json() as Promise<CurrentPresetResponse>
         ),
       ]);
@@ -319,7 +338,7 @@ export default function ChatPage() {
 
   const applyPreset = useCallback(async (key: string) => {
     try {
-      const r = await fetch(`${API}/api/apply-voice-preset`, {
+      const r = await fetch(joinUrl(API, "/api/apply-voice-preset"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, preset: key }),
@@ -347,7 +366,7 @@ export default function ChatPage() {
           <select
             value={chosenLang}
             onChange={(e) => setChosenLang(e.target.value as LangCode)}
-            className="mt-3 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+            className="mt-3 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2"
           >
             {LANGS.map((o) => (
               <option key={o.code} value={o.code}>
@@ -372,10 +391,15 @@ export default function ChatPage() {
         {/* Header */}
         <header className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="size-9 grid place-items-center rounded-xl bg-white/10">✨</div>
+            <div className="size-9 grid place-items-center rounded-xl bg-white/10" aria-hidden>✨</div>
             <h1 className="text-2xl font-semibold">Ellie</h1>
           </div>
           <div className="flex items-center gap-2">
+            {!API && (
+              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-200">
+                Set <code>NEXT_PUBLIC_API_URL</code>
+              </div>
+            )}
             <button
               onClick={openSettings}
               className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-sm"
@@ -397,6 +421,9 @@ export default function ChatPage() {
           <div
             ref={scrollRef}
             className="h-[56vh] md:h-[420px] overflow-y-auto px-2 space-y-3"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions"
           >
             {messages.length === 0 && (
               <div className="text-white/50 text-sm px-1">Say hi to Ellie…</div>
@@ -410,7 +437,7 @@ export default function ChatPage() {
                 <div className="flex items-end gap-2 max-w-[85%]">
                   {/* Avatar */}
                   {m.from === "ellie" && (
-                    <div className="size-8 rounded-full bg-gradient-to-br from-pink-400/80 to-rose-500/80 grid place-items-center text-xs font-bold">
+                    <div className="size-8 rounded-full bg-gradient-to-br from-pink-400/80 to-rose-500/80 grid place-items-center text-xs font-bold avatar-idle" aria-hidden>
                       E
                     </div>
                   )}
@@ -418,7 +445,7 @@ export default function ChatPage() {
                     className={`rounded-2xl px-3 py-2 text-sm leading-6 ${
                       m.from === "you"
                         ? "bg-white text-black"
-                        : "bg-white/8 border border-white/10"
+                        : "bg-gradient-to-br from-pink-400/20 to-fuchsia-500/10 border border-white/10"
                     }`}
                   >
                     <div>{m.text}</div>
@@ -431,7 +458,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                   {m.from === "you" && (
-                    <div className="size-8 rounded-full bg-white text-black grid place-items-center text-xs font-bold">
+                    <div className="size-8 rounded-full bg-white text-black grid place-items-center text-xs font-bold" aria-hidden>
                       Y
                     </div>
                   )}
@@ -443,11 +470,11 @@ export default function ChatPage() {
             {typing && (
               <div className="flex justify-start">
                 <div className="flex items-end gap-2 max-w-[85%]">
-                  <div className="size-8 rounded-full bg-gradient-to-br from-pink-400/80 to-rose-500/80 grid place-items-center text-xs font-bold">
+                  <div className="size-8 rounded-full bg-gradient-to-br from-pink-400/80 to-rose-500/80 grid place-items-center text-xs font-bold avatar-idle" aria-hidden>
                     E
                   </div>
                   <div className="rounded-2xl px-3 py-2 text-sm leading-6 bg-white/8 border border-white/10">
-                    <span className="inline-flex gap-1">
+                    <span className="inline-flex gap-1" aria-label="Ellie is typing">
                       <span className="typing-dot">•</span>
                       <span className="typing-dot">•</span>
                       <span className="typing-dot">•</span>
@@ -461,14 +488,18 @@ export default function ChatPage() {
           {/* Composer (sticky) */}
           <div className="mt-3 sticky bottom-3 left-0 right-0">
             <div className="flex items-center gap-2">
-              <input
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Type a message…"
                 onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void sendText();
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendText();
+                  }
                 }}
-                className="flex-1 rounded-xl bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                rows={1}
+                className="flex-1 rounded-xl bg-white/5 border border-white/10 px-3 py-2 resize-none"
               />
               <button
                 onClick={() => void sendText()}
@@ -482,6 +513,7 @@ export default function ChatPage() {
                   onClick={() => void startRecording()}
                   disabled={loading}
                   className="rounded-xl border border-emerald-500/40 bg-emerald-500/25 px-4 py-2"
+                  title="Hold a quick voice message"
                 >
                   🎤
                 </button>
@@ -502,16 +534,30 @@ export default function ChatPage() {
               <button
                 onClick={() => router.push("/call")}
                 className="rounded-xl bg-white text-black px-4 py-2 font-semibold"
+                title="Open always-on call"
               >
                 📞
               </button>
+            </div>
+
+            {/* Suggestion chips */}
+            <div className="flex gap-2 mt-2">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setInput((t) => (t ? t + ` (${s})` : s))}
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2">
+      {/* Toasts (from provider) */}
+      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -532,6 +578,9 @@ export default function ChatPage() {
           <div
             className="absolute right-0 top-0 h-full w-[92%] max-w-sm glass p-4 pt-6 border-l border-white/15"
             onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Settings"
           >
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold">Settings</h3>
@@ -551,7 +600,7 @@ export default function ChatPage() {
                   <select
                     value={chosenLang}
                     onChange={(e) => setChosenLang(e.target.value as LangCode)}
-                    className="flex-1 rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                    className="flex-1 rounded-lg bg-white/5 border border-white/10 px-3 py-2"
                   >
                     {LANGS.map((o) => (
                       <option key={o.code} value={o.code}>

@@ -1,6 +1,11 @@
 // app/layout.tsx
 import type { ReactNode } from "react";
 import "./globals.css";
+import { ToastProvider } from "./(providers)/toast";
+
+export const viewport = {
+  themeColor: "#0b0b10",
+};
 
 export const metadata = {
   metadataBase: new URL("https://ellie-web-ochre.vercel.app"),
@@ -33,16 +38,15 @@ export const metadata = {
       "Ellie remembers what you share, adapts to your mood, and talks like a real person.",
     images: ["/og.png"],
   },
-  themeColor: "#0b0b10",
+  alternates: { canonical: "/" },
+  robots: { index: true, follow: true, googleBot: { index: true, follow: true } },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen bg-[radial-gradient(1200px_800px_at_10%_-10%,#1b1b28_0%,#0b0b10_40%,#07070b_100%)] text-white antialiased selection:bg-white/20">
-        {children}
-        {/* Toast area for global toasts */}
-        <div id="toast-root" className="fixed top-4 right-4 z-50 space-y-2" />
+        <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
   );
