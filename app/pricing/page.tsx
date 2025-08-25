@@ -1,41 +1,78 @@
+// app/pricing/page.tsx
 "use client";
 export const dynamic = "force-dynamic";
 
-import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
+// FE cookie helper (middleware reads these)
+function setFeCookie(name: string, value: string, maxAgeDays: number) {
+  const max = maxAgeDays * 24 * 60 * 60;
+  document.cookie = `${name}=${value}; Path=/; Max-Age=${max}; SameSite=Lax; Secure`;
+}
+
 export default function PricingPage() {
   const qp = useSearchParams();
+  const router = useRouter();
+
   const preEmail = qp.get("email") || "";
   const redirect = qp.get("redirect") || "/chat";
+  const success = qp.get("success") || "";
+  const canceled = qp.get("canceled") || "";
 
   const [email, setEmail] = useState(preEmail);
   const [msg, setMsg] = useState<string | null>(null);
 
+  // If returning from successful checkout, confirm paid status via backend and set FE cookies
+  useEffect(() => {
+    const syncPaid = async () => {
+      try {
+        const r = await fetch(`${API}/api/auth/me`, { credentials: "include" });
+        const j = await r.json();
+        if (j?.paid) {
+          setFeCookie("fe_session", "1", 90);
+          setFeCookie("fe_paid", "1", 90);
+          router.push(redirect);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    if (success === "1") syncPaid();
+  }, [success, router, redirect]);
+
   const checkout = async () => {
     setMsg(null);
-    const r = await fetch(`${API}/api/billing/checkout`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ email, redirect }),
-    });
-    const j = await r.json();
-    if (j?.url) window.location.href = j.url;
-    else setMsg(j?.message || "Could not start checkout");
+    try {
+      const r = await fetch(`${API}/api/billing/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email, redirect }),
+      });
+      const j = await r.json();
+      if (j?.url) window.location.href = j.url;
+      else setMsg(j?.message || "Could not start checkout");
+    } catch (e: any) {
+      setMsg(e.message || "Checkout failed");
+    }
   };
 
   const portal = async () => {
-    const r = await fetch(`${API}/api/billing/portal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    });
-    const j = await r.json();
-    if (j?.url) window.location.href = j.url;
-    else setMsg(j?.message || "Could not open portal");
+    try {
+      const r = await fetch(`${API}/api/billing/portal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      const j = await r.json();
+      if (j?.url) window.location.href = j.url;
+      else setMsg(j?.message || "Could not open portal");
+    } catch (e: any) {
+      setMsg(e.message || "Portal failed");
+    }
   };
 
   return (
@@ -43,6 +80,12 @@ export default function PricingPage() {
       <div className="glass rounded-2xl p-6 w-full max-w-2xl border border-white/10">
         <h1 className="text-3xl font-bold">Ellie Plus</h1>
         <p className="text-white/70 mt-2">Unlimited chat & lifelike calls.</p>
+
+        {(success || canceled) && (
+          <div className="mt-4 text-sm text-white/80">
+            {success ? "Payment successful. Finalizing…" : "Payment canceled."}
+          </div>
+        )}
 
         <div className="mt-6 grid md:grid-cols-2 gap-4">
           <div className="rounded-xl border border-white/10 bg-white/5 p-5">
@@ -56,22 +99,27 @@ export default function PricingPage() {
             </ul>
 
             <input
-              placeholder="you@example.com" value={email}
-              onChange={(e)=>setEmail(e.target.value)}
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               className="mt-4 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
             />
+
             <button
-              onClick={checkout} disabled={!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)}
+              onClick={checkout}
+              disabled={!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)}
               className="mt-3 w-full rounded-lg bg-white text-black font-semibold px-4 py-2 disabled:opacity-60"
             >
               Continue to payment
             </button>
+
             <button
               onClick={portal}
               className="mt-2 w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm"
             >
               Manage subscription
             </button>
+
             {msg && <div className="mt-3 text-sm text-white/80">{msg}</div>}
           </div>
 
