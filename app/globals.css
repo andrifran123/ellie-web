@@ -45,6 +45,18 @@ body {
   opacity: .35;
 }
 
+/* Premium call: ripple animation */
+@keyframes wavePulse {
+  0%   { transform: scale(1); opacity: .55; }
+  60%  { transform: scale(1.45); opacity: .25; }
+  100% { transform: scale(1.75); opacity: 0; }
+}
+.wave-pulse {
+  animation: wavePulse 1.6s ease-out infinite;
+  filter: drop-shadow(0 0 18px rgba(80,150,255,.35));
+}
+
+
 /* tiny “glass” helpers */
 .glass { backdrop-filter: blur(10px); background: color-mix(in oklab, #ffffff 6%, transparent); border: 1px solid color-mix(in oklab, #ffffff 12%, transparent); }
 .card-hover { transition: transform .2s, box-shadow .2s, border-color .2s; }
