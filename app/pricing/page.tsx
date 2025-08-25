@@ -30,14 +30,14 @@ export default function PricingPage() {
     const syncPaid = async () => {
       try {
         const r = await fetch(`${API}/api/auth/me`, { credentials: "include" });
-        const j = await r.json();
+        const j: { email?: string | null; paid?: boolean } = await r.json();
         if (j?.paid) {
           setFeCookie("fe_session", "1", 90);
           setFeCookie("fe_paid", "1", 90);
           router.push(redirect);
         }
       } catch {
-        /* ignore */
+        // ignore
       }
     };
     if (success === "1") syncPaid();
@@ -52,11 +52,14 @@ export default function PricingPage() {
         credentials: "include",
         body: JSON.stringify({ email, redirect }),
       });
-      const j = await r.json();
-      if (j?.url) window.location.href = j.url;
-      else setMsg(j?.message || "Could not start checkout");
-    } catch (e: any) {
-      setMsg(e.message || "Checkout failed");
+      const j: { url?: string; message?: string } = await r.json();
+      if (j?.url) {
+        window.location.href = j.url;
+      } else {
+        setMsg(j?.message || "Could not start checkout");
+      }
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : "Checkout failed");
     }
   };
 
@@ -67,11 +70,14 @@ export default function PricingPage() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
       });
-      const j = await r.json();
-      if (j?.url) window.location.href = j.url;
-      else setMsg(j?.message || "Could not open portal");
-    } catch (e: any) {
-      setMsg(e.message || "Portal failed");
+      const j: { url?: string; message?: string } = await r.json();
+      if (j?.url) {
+        window.location.href = j.url;
+      } else {
+        setMsg(j?.message || "Could not open portal");
+      }
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : "Portal failed");
     }
   };
 
