@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { API, refreshSession, apiPost, apiPostForm } from "@/lib/api";
 
 type ChatMsg = { from: "you" | "ellie"; text: string; ts: number };
 
@@ -28,7 +29,6 @@ type PresetsResponse = { presets: PresetItem[] };
 type CurrentPresetResponse = { preset: string | null };
 type ApplyPresetResponse = { ok?: boolean; preset?: string; voice?: string };
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";
 const USER_ID = "default-user";
 
 const LANGS: LangOption[] = [
@@ -110,6 +110,9 @@ export default function ChatPage() {
     (async () => {
       if (!API) return;
 
+      // Ensure session + CSRF token is loaded
+      await refreshSession().catch(() => {});
+
       const stored = typeof window !== "undefined"
         ? (localStorage.getItem("ellie_language") as LangCode | null)
         : null;
@@ -177,22 +180,25 @@ export default function ChatPage() {
     setTyping(true);
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: USER_ID, message: msg }),
-      });
-      const data = (await r.json()) as ChatResponse;
+      const data = await apiPost<ChatResponse>("/api/chat", { userId: USER_ID, message: msg });
       if (data?.reply) append("ellie", data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
     } catch (e) {
-      append("ellie", `Error: ${errorMessage(e)}`);
-      show("Failed to send. Check your API URL.");
+      const msgText =
+        e instanceof Error && e.message === "401_NOT_LOGGED_IN"
+          ? "You’re not logged in. Please sign in."
+          : e instanceof Error && e.message === "402_PAYMENT_REQUIRED"
+          ? "Subscription required. Please subscribe."
+          : `Error: ${errorMessage(e)}`;
+      append("ellie", msgText);
+      if (msgText.includes("logged")) router.push("/login");
+      if (msgText.includes("Subscription")) router.push("/pricing");
+      else show("Failed to send. Check your API URL.");
     } finally {
       setTyping(false);
       setLoading(false);
     }
-  }, [append, input, langReady, show]);
+  }, [append, input, langReady, show, router]);
 
   const resetConversation = useCallback(async () => {
     if (!API) return;
@@ -235,8 +241,7 @@ export default function ChatPage() {
           "en"
       );
 
-      const r = await fetch(`${API}/api/voice-chat`, { method: "POST", body: fd });
-      const data = (await r.json()) as VoiceResponse;
+      const data = await apiPostForm<VoiceResponse>("/api/voice-chat", fd);
 
       if (data?.reply) append("ellie", data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
@@ -246,13 +251,21 @@ export default function ChatPage() {
         try { await audio.play(); } catch { /* autoplay block */ }
       }
     } catch (e) {
-      append("ellie", `Voice error: ${errorMessage(e)}`);
-      show("Voice send failed.");
+      const msgText =
+        e instanceof Error && e.message === "401_NOT_LOGGED_IN"
+          ? "You’re not logged in. Please sign in."
+          : e instanceof Error && e.message === "402_PAYMENT_REQUIRED"
+          ? "Subscription required. Please subscribe."
+          : `Voice error: ${errorMessage(e)}`;
+      append("ellie", msgText);
+      if (msgText.includes("logged")) router.push("/login");
+      if (msgText.includes("Subscription")) router.push("/pricing");
+      else show("Voice send failed.");
     } finally {
       setTyping(false);
       setLoading(false);
     }
-  }, [append, chosenLang, langReady, show]);
+  }, [append, chosenLang, langReady, show, router]);
 
   const startRecording = useCallback(async () => {
     if (!langReady) return;
