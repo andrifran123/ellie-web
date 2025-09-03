@@ -9,8 +9,12 @@ import { refreshSession } from "@/lib/api";
  * - If logged out: never redirect.
  * - If logged in but unpaid: redirect ONLY when trying to use protected pages (/chat, /call).
  */
+"use client";
+
 export default function AuthBoot() {
-  const router = useRouter();
+  // TEMP: disable gating so you can open /chat and /call while testing
+  return null;
+}  const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
