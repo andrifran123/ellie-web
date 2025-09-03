@@ -1,55 +1,49 @@
-// /lib/api.ts
-
-// A minimal JSON type for typed request bodies (no `any`)
+// lib/api.ts
 type Json =
-  | string
-  | number
-  | boolean
   | null
-  | { [key: string]: Json }
-  | Json[];
+  | boolean
+  | number
+  | string
+  | Json[]
+  | { [key: string]: Json };
 
-// CSRF token cached in-memory
 let csrfToken: string | null = null;
 
 export const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function refreshSession(): Promise<{ email: string | null; paid: boolean }> {
   const r = await fetch(`${API}/api/auth/me`, { credentials: "include" });
-  const data = await r.json().catch(() => ({} as Record<string, unknown>));
-  csrfToken = (data as { csrfToken?: string }).csrfToken ?? null;
-  return {
-    email: (data as { email?: string | null }).email ?? null,
-    paid: Boolean((data as { paid?: boolean }).paid),
-  };
+  const data = await r.json();
+  csrfToken = data?.csrfToken || null;
+  return { email: data?.email ?? null, paid: !!data?.paid };
 }
 
-export async function apiPost<T, B extends Json | undefined = undefined>(
-  path: string,
-  body?: B
-): Promise<T> {
-  if (!csrfToken) await refreshSession(); // get token if missing
-
-  const payload: Json = (body === undefined ? {} : body) as Json;
+// --- POST (JSON) ------------------------------------------------------------
+// Overloads so TS accepts 1-arg and 2-arg usages.
+export async function apiPost<T>(path: string, body: Json): Promise<T>;
+export async function apiPost<T>(path: string): Promise<T>;
+export async function apiPost<T>(path: string, body?: Json): Promise<T> {
+  if (!csrfToken) await refreshSession(); // get CSRF if missing
 
   const res = await fetch(`${API}${path}`, {
     method: "POST",
-    credentials: "include", // send httpOnly cookie
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
       "X-CSRF-Token": csrfToken || "",
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body ?? {}),
   });
 
   if (res.status === 401) throw new Error("401_NOT_LOGGED_IN");
   if (res.status === 402) throw new Error("402_PAYMENT_REQUIRED");
-  if (!res.ok) throw new Error(`HTTP_${res.status}`);
 
-  return (await res.json()) as T;
+  if (!res.ok) throw new Error(`HTTP_${res.status}`);
+  return res.json();
 }
 
+// --- POST (FormData) --------------------------------------------------------
 export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   if (!csrfToken) await refreshSession();
 
@@ -65,7 +59,7 @@ export async function apiPostForm<T>(path: string, formData: FormData): Promise<
 
   if (res.status === 401) throw new Error("401_NOT_LOGGED_IN");
   if (res.status === 402) throw new Error("402_PAYMENT_REQUIRED");
-  if (!res.ok) throw new Error(`HTTP_${res.status}`);
 
-  return (await res.json()) as T;
+  if (!res.ok) throw new Error(`HTTP_${res.status}`);
+  return res.json();
 }
