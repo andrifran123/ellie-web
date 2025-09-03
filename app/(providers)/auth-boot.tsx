@@ -1,3 +1,4 @@
+// app/(providers)/auth-boot.tsx
 "use client";
 
 import { useEffect } from "react";
@@ -5,19 +6,18 @@ import { usePathname, useRouter } from "next/navigation";
 import { refreshSession } from "@/lib/api";
 
 /**
- * Runs once on mount and whenever the path changes.
- * - If logged out: never redirect.
- * - If logged in but unpaid: redirect ONLY when trying to use protected pages (/chat, /call).
+ * AuthBoot
+ * - Dev/testing: set NEXT_PUBLIC_DISABLE_PAYWALL="1" to make this a no-op.
+ * - Otherwise: if logged in but unpaid, and trying /chat or /call, redirect to /pricing.
  */
-"use client";
-
 export default function AuthBoot() {
-  // TEMP: disable gating so you can open /chat and /call while testing
-  return null;
-}  const router = useRouter();
+  const router = useRouter();
   const pathname = usePathname();
 
   useEffect(() => {
+    // Dev: disable gating entirely
+    if (process.env.NEXT_PUBLIC_DISABLE_PAYWALL === "1") return;
+
     let cancelled = false;
 
     (async () => {
@@ -25,16 +25,19 @@ export default function AuthBoot() {
         const { email, paid } = await refreshSession();
         if (cancelled) return;
 
-        if (!email) return; // not logged in -> allow all public pages
+        // Not logged in → allow public pages
+        if (!email) return;
 
         const protectedRoutes = ["/chat", "/call"];
         const onProtected = protectedRoutes.some((p) => pathname.startsWith(p));
 
         if (onProtected && !paid) {
-          router.replace("/pricing?reason=subscribe");
+          router.replace(
+            `/pricing?reason=subscribe&redirect=${encodeURIComponent(pathname)}`
+          );
         }
       } catch {
-        // ignore boot errors; never hard-fail the page
+        // never hard-fail the page
       }
     })();
 
