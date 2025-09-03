@@ -1,13 +1,15 @@
 // app/layout.tsx
 import type { ReactNode } from "react";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ToastProvider } from "./(providers)/toast";
+import AuthBoot from "./(providers)/auth-boot";
 
-export const viewport = {
+export const viewport: Viewport = {
   themeColor: "#0b0b10",
 };
 
-export const metadata = {
+export const metadata: Metadata = {
   metadataBase: new URL("https://ellie-web-ochre.vercel.app"),
   title: "Ellie — Your warm, playful AI companion",
   description:
@@ -15,28 +17,6 @@ export const metadata = {
   icons: {
     icon: "/favicon.svg",
   },
-
-import "./globals.css";
-import AuthBoot from "./(providers)/auth-boot";
-
-export const metadata = {
-  title: "Ellie",
-  description: "Ellie — warm, playful, mood-aware companion",
-};
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <body>
-        {/* Runs once, redirects unpaid logged-in users to /pricing */}
-        <AuthBoot />
-        {children}
-      </body>
-    </html>
-  );
-}
-
-
   openGraph: {
     title: "Ellie — Your warm, playful AI companion",
     description:
@@ -68,6 +48,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen bg-[radial-gradient(1200px_800px_at_10%_-10%,#1b1b28_0%,#0b0b10_40%,#07070b_100%)] text-white antialiased selection:bg-white/20">
+        {/* Runs once, redirects unpaid logged-in users to /pricing */}
+        <AuthBoot />
         <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
