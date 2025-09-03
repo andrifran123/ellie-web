@@ -1,21 +1,43 @@
 "use client";
-import { useEffect } from "react";
 
+import { useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { refreshSession } from "@/lib/api";
+
+/**
+ * Runs once on mount and whenever the path changes.
+ * - If logged out: never redirect.
+ * - If logged in but unpaid: redirect ONLY when trying to use protected pages (/chat, /call).
+ */
 export default function AuthBoot() {
+  const router = useRouter();
+  const pathname = usePathname();
+
   useEffect(() => {
-    const API = process.env.NEXT_PUBLIC_API_URL || "";
-    if (!API) return;
-    fetch(`${API}/api/auth/me`, {
-      credentials: "include",
-      headers: { "X-CSRF": "1" },
-    })
-      .then((r) => r.json())
-      .then(({ email, paid }) => {
-        if (email && !paid && location.pathname !== "/pricing") {
-          location.replace("/pricing");
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { email, paid } = await refreshSession();
+        if (cancelled) return;
+
+        if (!email) return; // not logged in -> allow all public pages
+
+        const protectedRoutes = ["/chat", "/call"];
+        const onProtected = protectedRoutes.some((p) => pathname.startsWith(p));
+
+        if (onProtected && !paid) {
+          router.replace("/pricing?reason=subscribe");
         }
-      })
-      .catch(() => {});
-  }, []);
+      } catch {
+        // ignore boot errors; never hard-fail the page
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, router]);
+
   return null;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -16,7 +17,7 @@ export default function PricingInner() {
   const [err, setErr] = useState<string | null>(null);
   const [me, setMe] = useState<MeResponse>({ email: null, paid: false });
 
-  // If already logged in, we’ll show the "Manage/Go to chat" state.
+  // If already logged in, we’ll show the "Go to Chat / Start Call" state.
   useEffect(() => {
     if (!API) return;
     fetch(`${API}/api/auth/me`, {
@@ -69,9 +70,9 @@ export default function PricingInner() {
     try {
       const r = await fetch(`${API}/api/auth/verify`, {
         method: "POST",
-        credentials: "include", // <-- IMPORTANT for session cookie
+        credentials: "include",
         headers: { "Content-Type": "application/json", "X-CSRF": "1" },
-        body: JSON.stringify({ email: e, code: c }), // MUST include same email
+        body: JSON.stringify({ email: e, code: c }),
       });
       const data: VerifyResp = await r.json();
       if (!r.ok || !data.ok) {
@@ -98,9 +99,9 @@ export default function PricingInner() {
   }
 
   return (
-    <div className="grid md:grid-cols-2 gap-6">
-      {/* Left: plan + auth */}
-      <div className="rounded-2xl bg-white/5 border border-white/10 p-4">
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Plan + auth (top) */}
+      <section className="rounded-2xl bg-white/5 border border-white/10 p-4">
         <div className="text-sm text-white/80">Monthly</div>
         <div className="text-3xl font-bold mt-1">$9.99</div>
         <ul className="mt-3 space-y-1 text-sm text-white/70">
@@ -164,18 +165,18 @@ export default function PricingInner() {
               <div className="text-sm text-white/80">
                 Signed in as <span className="font-medium">{me.email ?? email}</span>
               </div>
-              <a
+              <Link
                 href="/chat"
                 className="w-full inline-block text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
               >
                 Go to Chat
-              </a>
-              <a
+              </Link>
+              <Link
                 href="/call"
                 className="w-full inline-block text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
               >
                 Start Call
-              </a>
+              </Link>
             </>
           )}
 
@@ -185,10 +186,10 @@ export default function PricingInner() {
             </div>
           )}
         </div>
-      </div>
+      </section>
 
-      {/* Right: features */}
-      <div className="rounded-2xl bg-white/5 border border-white/10 p-4">
+      {/* What you get (bottom) */}
+      <section className="rounded-2xl bg-white/5 border border-white/10 p-4">
         <div className="text-sm font-semibold mb-2">What you get</div>
         <ul className="space-y-2 text-sm text-white/80">
           <li>• Ellie remembers you naturally</li>
@@ -196,7 +197,7 @@ export default function PricingInner() {
           <li>• High-quality voice</li>
           <li>• Priority compute</li>
         </ul>
-      </div>
+      </section>
     </div>
   );
 }
