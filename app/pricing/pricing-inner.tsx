@@ -162,27 +162,48 @@ export default function PricingInner() {
           )}
 
           {(me.email || step === "done") && (
-            <>
-              <div className="text-sm text-white/80">
-                Signed in as <span className="font-medium">{me.email ?? email}</span>
-              </div>
+  <>
+    <div className="text-sm text-white/80">
+      Signed in as <span className="font-medium">{me.email ?? email}</span>
+    </div>
 
-              {/* CHANGED: use Next.js Link for real navigation */}
-              <Link
-                href="/chat"
-                className="w-full inline-block text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
-              >
-                Go to Chat
-              </Link>
+    {me.paid ? (
+      <>
+        <Link
+          href="/chat"
+          className="w-full inline-block text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
+        >
+          Go to Chat
+        </Link>
+        <Link
+          href="/call"
+          className="w-full inline-block text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
+        >
+          Start Call
+        </Link>
+      </>
+    ) : (
+      <>
+        <button
+          disabled
+          className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 opacity-60 cursor-not-allowed"
+        >
+          Go to Chat
+        </button>
+        <button
+          disabled
+          className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 opacity-60 cursor-not-allowed"
+        >
+          Start Call
+        </button>
+        <div className="text-xs text-white/60 mt-2">
+          You need Ellie Plus to enter chat or call.
+        </div>
+      </>
+    )}
+  </>
+)}
 
-              <Link
-                href="/call"
-                className="w-full inline-block text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
-              >
-                Start Call
-              </Link>
-            </>
-          )}
 
           {err && (
             <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
