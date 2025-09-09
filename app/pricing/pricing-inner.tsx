@@ -161,7 +161,7 @@ export default function PricingInner() {
             </>
           )}
 
-          {(me.email || step === "done") && (
+         {(me.email || step === "done") && (
   <>
     <div className="text-sm text-white/80">
       Signed in as <span className="font-medium">{me.email ?? email}</span>
@@ -203,6 +203,7 @@ export default function PricingInner() {
     )}
   </>
 )}
+
 
 
           {err && (
