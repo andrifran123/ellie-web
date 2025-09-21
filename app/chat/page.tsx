@@ -122,6 +122,7 @@ export default function ChatPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId: USER_ID, language: stored }),
+          credentials: "include", // <-- keep cookie
         }).catch(() => {});
         setChosenLang(stored);
         setLangReady(true);
@@ -130,7 +131,8 @@ export default function ChatPage() {
 
       try {
         const r = await fetch(
-          `${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`
+          `${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`,
+          { credentials: "include" } // <-- keep cookie
         );
         const data = (await r.json()) as GetLanguageResponse;
         if (data?.language) {
@@ -152,6 +154,7 @@ export default function ChatPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
+        credentials: "include", // <-- keep cookie
       });
       const data = (await r.json()) as SetLanguageResponse;
       const saved = data?.language ?? chosenLang;
@@ -208,6 +211,7 @@ export default function ChatPage() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: USER_ID }),
+      credentials: "include", // <-- keep cookie
     }).catch(() => {});
     show("Conversation reset");
   }, [show]);
@@ -310,10 +314,12 @@ export default function ChatPage() {
     loadingPresets.current = true;
     try {
       const [pr, cr] = await Promise.all([
-        fetch(`${API}/api/get-voice-presets`).then((r) => r.json() as Promise<PresetsResponse>),
-        fetch(`${API}/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`).then((r) =>
-          r.json() as Promise<CurrentPresetResponse>
+        fetch(`${API}/api/get-voice-presets`, { credentials: "include" }).then((r) =>
+          r.json() as Promise<PresetsResponse>
         ),
+        fetch(`${API}/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`, {
+          credentials: "include",
+        }).then((r) => r.json() as Promise<CurrentPresetResponse>),
       ]);
       setPresets(pr.presets || []);
       setCurrentPreset(cr.preset ?? null);
@@ -330,6 +336,7 @@ export default function ChatPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, preset: key }),
+        credentials: "include", // <-- keep cookie
       });
       const data = (await r.json()) as ApplyPresetResponse;
       if (data?.ok) {
