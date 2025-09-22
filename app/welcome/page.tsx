@@ -4,158 +4,180 @@
 import React, { useEffect, useRef } from "react";
 import Link from "next/link";
 
-/**
- * Ultra HD, GPU-accelerated nebula + starfield using a fragment shader.
- * - Runs at 4K with WebGL2 (falls back to a soft gradient if WebGL2 missing).
- * - DPR-aware, resizes smoothly.
- * - UI: "welcome" + two pricing cards w/ Subscribe buttons.
- */
-
-const VERT = `#version 300 es
-precision highp float;
-layout (location = 0) in vec2 pos;
-out vec2 vUv;
-void main() {
-  vUv = (pos + 1.0) * 0.5;      // map to 0..1
-  gl_Position = vec4(pos, 0.0, 1.0);
-}
-`;
-
-// Fragment shader: layered FBM nebula + starfield + twinkle
-const FRAG = `#version 300 es
-precision highp float;
-
-out vec4 fragColor;
-in vec2 vUv;
-
-uniform vec2 u_res;       // canvas size in px
-uniform float u_time;     // seconds
-uniform float u_ratio;    // aspect ratio
-uniform float u_dpr;      // devicePixelRatio
-
-// --- hash / noise utils ---
-float hash(vec2 p) {
-  p = fract(p*vec2(123.34, 456.21));
-  p += dot(p, p + 45.32);
-  return fract(p.x * p.y);
-}
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  float a = hash(i);
-  float b = hash(i + vec2(1.0, 0.0));
-  float c = hash(i + vec2(0.0, 1.0));
-  float d = hash(i + vec2(1.0, 1.0));
-  vec2 u = f*f*(3.0-2.0*f);
-  return mix(a, b, u.x) + (c - a)*u.y*(1.0-u.x) + (d - b)*u.x*u.y;
-}
-float fbm(vec2 p) {
-  float f = 0.0;
-  float amp = 0.5;
-  for (int i = 0; i < 6; i++) {
-    f += amp * noise(p);
-    p *= 2.02;
-    amp *= 0.5;
-  }
-  return f;
-}
-
-// starfield (seeded hash w/ twinkle)
-float stars(vec2 uv, float density, float speed) {
-  // tile space for consistent density
-  vec2 g = floor(uv * density);
-  vec2 f = fract(uv * density);
-  float rnd = hash(g);
-  // star at cell center
-  vec2 starPos = fract(sin(rnd*6.2831)*vec2(0.123,0.789));
-  vec2 d = f - starPos;
-  float dist = length(d);
-  float base = smoothstep(0.02, 0.0, dist);
-  // twinkle
-  float tw = sin(u_time*speed + rnd*20.0)*0.5 + 0.5;
-  return base * (0.5 + 0.5 * tw);
-}
-
-void main() {
-  // normalized coords centered, with aspect
-  vec2 uv = vUv;
-  vec2 p = (uv - 0.5);
-  p.x *= u_ratio;
-
-  // slow camera drift
-  vec2 drift = vec2(sin(u_time*0.03), cos(u_time*0.025)) * 0.15;
-
-  // layered nebula using fbm at multiple scales
-  float n1 = fbm((p*1.6 + drift*0.2) * 2.0 + u_time*0.03);
-  float n2 = fbm((p*0.9 + drift*0.1) * 3.0 - u_time*0.02);
-  float neb = smoothstep(0.2, 1.0, (n1*0.6 + n2*0.8));
-
-  // color palette (deep blue -> violet -> pink/cyan)
-  vec3 colA = vec3(0.06, 0.08, 0.18);     // base space blue
-  vec3 colB = vec3(0.10, 0.06, 0.28);     // deep violet
-  vec3 colC = vec3(0.45, 0.18, 0.65);     // magenta
-  vec3 colD = vec3(0.25, 0.65, 0.85);     // cyan highlight
-
-  // combine nebula layers
-  vec3 nebula = mix(colA, colB, neb);
-  nebula = mix(nebula, colC, pow(neb, 1.4));
-  nebula = mix(nebula, colD, pow(neb, 6.0) * 0.35);
-
-  // vignette to focus
-  float r = length((uv - 0.5) * vec2(u_ratio, 1.0));
-  float vig = smoothstep(0.95, 0.15, r);
-
-  // star layers with different densities / twinkle speeds
-  float s1 = stars(uv + drift*0.05, 180.0, 1.3);
-  float s2 = stars(uv * 1.8 - drift*0.03, 320.0, 1.8) * 0.7;
-  float s3 = stars(uv * 3.2 + drift*0.01, 640.0, 2.5) * 0.5;
-
-  // add subtle “dust” sparkle via noise
-  float dust = noise(uv * u_res.xy * 0.35) * 0.06;
-
-  // composite
-  vec3 color = nebula * (0.55 + 0.45*vig);
-  color += vec3(1.0) * (s1*0.9 + s2*0.6 + s3*0.35);
-  color += vec3(dust);
-
-  // gentle HDR-ish punch
-  color = pow(color, vec3(0.94)); // gamma tweak
-  fragColor = vec4(color, 1.0);
-}
-`;
-
 export default function WelcomePage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const glRef = useRef<WebGL2RenderingContext | null>(null);
-  const progRef = useRef<WebGLProgram | null>(null);
-  const vaoRef = useRef<WebGLVertexArrayObject | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const t0Ref = useRef<number>(0);
-  const uTimeRef = useRef<WebGLUniformLocation | null>(null);
-  const uResRef = useRef<WebGLUniformLocation | null>(null);
-  const uRatioRef = useRef<WebGLUniformLocation | null>(null);
-  const uDprRef = useRef<WebGLUniformLocation | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const gl = canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: false });
+    const gl = canvas.getContext("webgl2", {
+      antialias: true,
+      preserveDrawingBuffer: false,
+      powerPreference: "high-performance",
+    });
     if (!gl) {
-      // Fallback: static gradient background if no WebGL2
+      // graceful fallback if WebGL2 is unavailable
       canvas.style.background =
-        "radial-gradient(1200px circle at 60% 70%, #124, #081026 40%, #040818 70%, #02040c)";
+        "radial-gradient(1200px circle at 60% 70%, #120824, #060214 55%, #03010b 85%)";
       return;
     }
-    glRef.current = gl;
 
-    // Compile helpers
+    // ───────────────────────────────────────────────────────────
+    // Shaders
+    // ───────────────────────────────────────────────────────────
+    const VERT = `#version 300 es
+    precision highp float;
+    layout (location = 0) in vec2 pos;
+    out vec2 vUv;
+    void main() {
+      vUv = pos * 0.5 + 0.5; // map -1..1 → 0..1
+      gl_Position = vec4(pos, 0.0, 1.0);
+    }`;
+
+    // Parallax stars + animated nebula (FBM). Stars are layered with different
+    // densities & scroll speeds to create depth.
+    const FRAG = `#version 300 es
+    precision highp float;
+
+    out vec4 fragColor;
+    in vec2 vUv;
+
+    uniform float u_time;     // seconds
+    uniform vec2  u_res;      // canvas px size
+    uniform float u_ratio;    // width/height
+    uniform float u_dpr;
+
+    // -------- noise utils --------
+    float hash(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      float a = hash(i);
+      float b = hash(i + vec2(1.0, 0.0));
+      float c = hash(i + vec2(0.0, 1.0));
+      float d = hash(i + vec2(1.0, 1.0));
+      vec2 u = f*f*(3.0-2.0*f);
+      return mix(a, b, u.x) + (c - a)*u.y*(1.0-u.x) + (d - b)*u.x*u.y;
+    }
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 6; i++) {
+        v += a * noise(p);
+        p *= 2.02;
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    // Soft star kernel
+    float starKernel(vec2 d, float sz) {
+      // Circular falloff with small core
+      float r = length(d);
+      float core = smoothstep(sz, 0.0, r);
+      float glow = smoothstep(0.6, 0.0, r / (sz*4.0));
+      return core * 0.85 + glow * 0.35;
+    }
+
+    // One star layer (parallax)
+    float starLayer(vec2 uv, float density, float size, float speed, float twinkle, vec2 dir) {
+      // Scroll the layer (parallax drift)
+      vec2 sUv = uv + dir * speed * u_time;
+
+      // Tile space
+      vec2 grid = sUv * density;
+      vec2 cell = floor(grid);
+      vec2 f = fract(grid);
+
+      // Pseudo-random star position inside cell
+      float rnd = hash(cell);
+      vec2 starPos = fract(vec2(
+        sin(rnd * 37.0) * 43758.5,
+        sin(rnd * 91.0) * 12345.6
+      ));
+
+      // Distance to star in the current cell
+      vec2 d = f - starPos;
+      float base = starKernel(d, size);
+
+      // Twinkle per-cell
+      float tw = sin(u_time * (0.5 + twinkle * 2.0) + rnd * 12.0) * 0.5 + 0.5;
+
+      // Occasionally brighten a star (rare flashes)
+      float flash = step(0.9975, hash(cell + 7.0)) * (sin(u_time * 8.0 + rnd * 50.0) * 0.5 + 0.5);
+
+      return base * (0.55 + 0.45 * tw) + flash * 0.35 * base;
+    }
+
+    void main() {
+      // Normalize coordinates with aspect to keep circles round
+      vec2 uv = (vUv - 0.5);
+      uv.x *= u_ratio;
+
+      // Camera drift vector
+      vec2 cam = vec2(sin(u_time*0.03), cos(u_time*0.025));
+
+      // ---------- Nebula (animated FBM) ----------
+      float n1 = fbm((uv * 1.6 + cam * 0.10) * 2.0 + u_time * 0.03);
+      float n2 = fbm((uv * 0.9 + cam * 0.05) * 3.0 - u_time * 0.02);
+      float n3 = fbm((uv * 2.8 - cam * 0.02) * 1.7 + u_time * 0.015);
+      float neb = clamp(n1*0.6 + n2*0.8 + n3*0.4, 0.0, 1.2);
+
+      vec3 colA = vec3(0.06, 0.04, 0.14); // deep space
+      vec3 colB = vec3(0.45, 0.14, 0.62); // magenta
+      vec3 colC = vec3(0.22, 0.60, 0.86); // cyan
+      vec3 nebula = mix(colA, colB, smoothstep(0.15, 0.85, neb));
+      nebula = mix(nebula, colC, pow(smoothstep(0.35, 1.0, neb), 2.2) * 0.6);
+
+      // Vignette to focus the center
+      float r = length(uv);
+      float vig = smoothstep(1.0, 0.25, r);
+
+      // ---------- Parallax stars ----------
+      // Reconstruct 0..1 UV for star functions
+      vec2 suv = uv;
+      suv.x = suv.x / max(1e-4, u_ratio);
+      suv = suv + 0.5;
+
+      // Directions: slight diagonal drift
+      vec2 dir = normalize(vec2(0.6, -0.4));
+
+      // Far layer (slow, tiny, dense)
+      float sf = starLayer(suv * 0.85, 420.0, 0.010, 0.004, 0.8, dir);
+      // Mid layer (medium speed/size)
+      float sm = starLayer(suv * 1.20, 260.0, 0.016, 0.010, 1.0, dir);
+      // Near layer (fast, bigger, sparser)
+      float sn = starLayer(suv * 1.65, 160.0, 0.024, 0.022, 1.3, dir);
+
+      // Star color (slightly bluish-white)
+      vec3 starCol = vec3(1.0, 1.0, 1.0) * 0.85 + vec3(0.05, 0.10, 0.20);
+
+      vec3 color = nebula * (0.5 + 0.5 * vig);
+      color += starCol * (sf * 0.9 + sm * 0.8 + sn * 0.75);
+
+      // Subtle dust sparkle
+      float dust = noise(suv * u_res.xy * 0.35) * 0.06;
+      color += vec3(dust);
+
+      // Final tone
+      color = pow(color, vec3(0.94)); // mild HDR-ish punch
+      fragColor = vec4(color, 1.0);
+    }`;
+
+    // ───────────────────────────────────────────────────────────
+    // GL setup
+    // ───────────────────────────────────────────────────────────
     const compile = (src: string, type: number) => {
       const sh = gl.createShader(type)!;
       gl.shaderSource(sh, src);
       gl.compileShader(sh);
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        const info = gl.getShaderInfoLog(sh);
+        const info = gl.getShaderInfoLog(sh) || "unknown";
         gl.deleteShader(sh);
-        throw new Error(`Shader compile failed: ${info}`);
+        throw new Error("Shader compile failed: " + info);
       }
       return sh;
     };
@@ -166,30 +188,24 @@ export default function WelcomePage() {
       gl.bindAttribLocation(p, 0, "pos");
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-        const info = gl.getProgramInfoLog(p);
+        const info = gl.getProgramInfoLog(p) || "unknown";
         gl.deleteProgram(p);
-        throw new Error(`Program link failed: ${info}`);
+        throw new Error("Program link failed: " + info);
       }
       return p;
     };
 
-    // Fullscreen triangle
     const vs = compile(VERT, gl.VERTEX_SHADER);
     const fs = compile(FRAG, gl.FRAGMENT_SHADER);
     const prog = link(vs, fs);
-    progRef.current = prog;
     gl.deleteShader(vs);
     gl.deleteShader(fs);
 
     const vao = gl.createVertexArray()!;
-    vaoRef.current = vao;
     gl.bindVertexArray(vao);
 
-    const quad = new Float32Array([
-      -1, -1,
-       3, -1,
-      -1,  3,
-    ]);
+    // Fullscreen tri (fast)
+    const quad = new Float32Array([-1, -1, 3, -1, -1, 3]);
     const vbo = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
@@ -197,60 +213,59 @@ export default function WelcomePage() {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
     gl.useProgram(prog);
-    uTimeRef.current = gl.getUniformLocation(prog, "u_time");
-    uResRef.current = gl.getUniformLocation(prog, "u_res");
-    uRatioRef.current = gl.getUniformLocation(prog, "u_ratio");
-    uDprRef.current = gl.getUniformLocation(prog, "u_dpr");
+    const uTime = gl.getUniformLocation(prog, "u_time");
+    const uRes = gl.getUniformLocation(prog, "u_res");
+    const uRatio = gl.getUniformLocation(prog, "u_ratio");
+    const uDpr = gl.getUniformLocation(prog, "u_dpr");
 
     const resize = () => {
-      const dpr = Math.min(2, window.devicePixelRatio || 1); // cap DPR for perf
+      const dpr = Math.min(2, window.devicePixelRatio || 1); // cap for perf
       const w = Math.floor(window.innerWidth);
       const h = Math.floor(window.innerHeight);
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
+      canvas.width = Math.max(1, Math.floor(w * dpr));
+      canvas.height = Math.max(1, Math.floor(h * dpr));
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
       gl.viewport(0, 0, canvas.width, canvas.height);
 
       gl.useProgram(prog);
-      gl.uniform2f(uResRef.current, canvas.width, canvas.height);
-      gl.uniform1f(uRatioRef.current, w / Math.max(1, h));
-      gl.uniform1f(uDprRef.current, dpr);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.uniform1f(uRatio, w / Math.max(1, h));
+      gl.uniform1f(uDpr, dpr);
     };
     resize();
     window.addEventListener("resize", resize, { passive: true });
 
-    const loop = (t: number) => {
-      if (!t0Ref.current) t0Ref.current = t;
-      const sec = (t - t0Ref.current) / 1000;
-      gl.useProgram(prog);
-      gl.uniform1f(uTimeRef.current, sec);
+    let start = 0;
+    const frame = (t: number) => {
+      if (!start) start = t;
+      const sec = (t - start) / 1000;
 
-      gl.bindVertexArray(vao);
+      gl.useProgram(prog);
+      gl.uniform1f(uTime, sec);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-      rafRef.current = requestAnimationFrame(loop);
+      requestAnimationFrame(frame);
     };
-    rafRef.current = requestAnimationFrame(loop);
+    requestAnimationFrame(frame);
 
-    // Cleanup
     return () => {
       window.removeEventListener("resize", resize);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (vaoRef.current) gl.deleteVertexArray(vaoRef.current);
-      if (progRef.current) gl.deleteProgram(progRef.current);
+      gl.deleteBuffer(vbo);
+      gl.deleteVertexArray(vao);
+      gl.deleteProgram(prog);
     };
   }, []);
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      {/* 4K Shader Canvas */}
+      {/* 4K shader canvas */}
       <canvas ref={canvasRef} className="absolute inset-0 block" />
 
-      {/* Subtle grid overlay */}
+      {/* Optional faint grid for extra futurism */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.06]"
+        className="pointer-events-none absolute inset-0 opacity-[0.05]"
         style={{
           background:
             "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
@@ -261,7 +276,6 @@ export default function WelcomePage() {
       {/* Content */}
       <main className="relative z-10 flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-6xl">
-          {/* Title */}
           <div className="text-center mb-10">
             <h1
               className="text-5xl md:text-7xl font-extrabold tracking-tight"
@@ -278,7 +292,7 @@ export default function WelcomePage() {
               <div className="text-sm uppercase tracking-widest text-white/75">Monthly</div>
               <div className="mt-2 text-4xl font-bold">$9.99</div>
               <div className="mt-4 text-sm text-white/80">
-                Unlimited chat and voice. Memory & mood. Cancel anytime.
+                Unlimited chat and voice. Memory &amp; mood. Cancel anytime.
               </div>
               <Link
                 href="/pricing"
@@ -293,7 +307,7 @@ export default function WelcomePage() {
               <div className="text-sm uppercase tracking-widest text-white/75">Yearly</div>
               <div className="mt-2 text-4xl font-bold">$89.99</div>
               <div className="mt-4 text-sm text-white/80">
-                2 months free. Priority compute & early features.
+                2 months free. Priority compute &amp; early features.
               </div>
               <Link
                 href="/pricing"
