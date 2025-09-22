@@ -3,6 +3,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -11,12 +12,15 @@ type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
 
 export default function PricingInner() {
+  const router = useRouter();
+
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email" | "code" | "done">("email");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [me, setMe] = useState<MeResponse>({ email: null, paid: false });
+  const [signingOut, setSigningOut] = useState(false);
 
   // If already logged in, we’ll show the "Manage/Go to chat" state.
   useEffect(() => {
@@ -99,6 +103,28 @@ export default function PricingInner() {
     setStep("email");
   }
 
+  async function signOut() {
+    try {
+      setSigningOut(true);
+      await fetch(`${API}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include", // clears httpOnly cookie on the server
+      });
+      try {
+        localStorage.removeItem("ellie_language");
+      } catch {}
+      // reset local UI
+      setMe({ email: null, paid: false });
+      setStep("email");
+      setEmail("");
+      setCode("");
+      // force re-auth on next visit
+      router.replace("/login");
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
   return (
     <div className="grid md:grid-cols-2 gap-6">
       {/* Left: plan + auth */}
@@ -161,50 +187,64 @@ export default function PricingInner() {
             </>
           )}
 
-         {(me.email || step === "done") && (
-  <>
-    <div className="text-sm text-white/80">
-      Signed in as <span className="font-medium">{me.email ?? email}</span>
-    </div>
+          {(me.email || step === "done") && (
+            <>
+              <div className="text-sm text-white/80">
+                Signed in as <span className="font-medium">{me.email ?? email}</span>
+              </div>
 
-    {me.paid ? (
-      <>
-        <Link
-          href="/chat"
-          className="w-full inline-block text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
-        >
-          Go to Chat
-        </Link>
-        <Link
-          href="/call"
-          className="w-full inline-block text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
-        >
-          Start Call
-        </Link>
-      </>
-    ) : (
-      <>
-        <button
-          disabled
-          className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 opacity-60 cursor-not-allowed"
-        >
-          Go to Chat
-        </button>
-        <button
-          disabled
-          className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 opacity-60 cursor-not-allowed"
-        >
-          Start Call
-        </button>
-        <div className="text-xs text-white/60 mt-2">
-          You need Ellie Plus to enter chat or call.
-        </div>
-      </>
-    )}
-  </>
-)}
-
-
+              {me.paid ? (
+                <>
+                  <Link
+                    href="/chat"
+                    className="w-full inline-block text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
+                  >
+                    Go to Chat
+                  </Link>
+                  <Link
+                    href="/call"
+                    className="w-full inline-block text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
+                  >
+                    Start Call
+                  </Link>
+                  {/* NEW: Sign out button */}
+                  <button
+                    onClick={() => void signOut()}
+                    disabled={signingOut}
+                    className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm disabled:opacity-60"
+                  >
+                    {signingOut ? "Signing out…" : "Sign out"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    disabled
+                    className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 opacity-60 cursor-not-allowed"
+                  >
+                    Go to Chat
+                  </button>
+                  <button
+                    disabled
+                    className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 opacity-60 cursor-not-allowed"
+                  >
+                    Start Call
+                  </button>
+                  {/* NEW: Sign out button (still visible even if not paid) */}
+                  <button
+                    onClick={() => void signOut()}
+                    disabled={signingOut}
+                    className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm disabled:opacity-60"
+                  >
+                    {signingOut ? "Signing out…" : "Sign out"}
+                  </button>
+                  <div className="text-xs text-white/60 mt-2">
+                    You need Ellie Plus to enter chat or call.
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
           {err && (
             <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
