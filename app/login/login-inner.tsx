@@ -1,159 +1,169 @@
-// app/login/login-inner.tsx
+// app/login/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
-// FE cookie helper (middleware reads these hints; real session is httpOnly from backend)
-function setFeCookie(name: string, value: string, maxAgeDays: number) {
-  const max = maxAgeDays * 24 * 60 * 60;
-  document.cookie = `${name}=${value}; Path=/; Max-Age=${max}; SameSite=Lax; Secure`;
-}
+type StartResp = { ok?: boolean; message?: string };
+type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
+type MeResponse = { email: string | null; paid: boolean };
 
-export default function LoginInner() {
-  const router = useRouter();
-  const qp = useSearchParams();
-
-  const redirect = qp.get("redirect") || "/chat";
-  const [stage, setStage] = useState<"email" | "code">("email");
+export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
+  const [step, setStep] = useState<"email" | "code">("email");
   const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [me, setMe] = useState<MeResponse>({ email: null, paid: false });
 
-  // If already logged in, bounce to redirect
+  // figure out where we should go after login
+  const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+  const dest = params?.get("redirect") || "/chat";
+
+  // If already logged in, decide where to send them.
   useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch(`${API}/api/auth/me`, { credentials: "include" });
-        const j: { email?: string | null; paid?: boolean } = await r.json();
-        if (j?.email) {
-          setFeCookie("fe_session", "1", 90);
-          if (j.paid) setFeCookie("fe_paid", "1", 90);
-          router.replace(redirect);
+    if (!API) return;
+    fetch(`${API}/api/auth/me`, {
+      credentials: "include",
+      headers: { "X-CSRF": "1" },
+    })
+      .then((r) => r.json())
+      .then((m: MeResponse) => {
+        setMe(m);
+        if (m.email) {
+          // already signed in
+          if (m.paid) {
+            location.href = dest;
+          } else {
+            location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
+          }
         }
-      } catch {
-        /* ignore */
-      }
-    })();
-  }, [router, redirect]);
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const start = async () => {
-    setMsg(null);
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      setMsg("Enter a valid email.");
-      return;
-    }
+  async function sendCode() {
+    setErr(null);
+    const e = email.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) return setErr("Enter a valid email.");
+    if (!API) return setErr("Missing NEXT_PUBLIC_API_URL");
+
     setLoading(true);
     try {
       const r = await fetch(`${API}/api/auth/start`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email }),
+        headers: { "Content-Type": "application/json", "X-CSRF": "1" },
+        body: JSON.stringify({ email: e }),
       });
-      const j: { ok?: boolean; message?: string } = await r.json();
-      if (j?.ok) {
-        setStage("code");
-        setMsg("We emailed you a 6-digit code.");
-      } else {
-        setMsg(j?.message || "Could not send code.");
+      const data: StartResp = await r.json();
+      if (!r.ok || !data.ok) {
+        setErr(data.message || "Could not send code.");
+        return;
       }
+      setStep("code");
     } catch {
-      setMsg("Network error.");
+      setErr("Network error.");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const verify = async () => {
-    setMsg(null);
-    if (!/^\d{6}$/.test(code)) {
-      setMsg("Enter the 6-digit code.");
-      return;
-    }
+  async function verifyCode() {
+    setErr(null);
+    const e = email.trim().toLowerCase();
+    const c = code.trim();
+    if (!c) return setErr("Enter the 6-digit code.");
+    if (!API) return setErr("Missing NEXT_PUBLIC_API_URL");
+
     setLoading(true);
     try {
       const r = await fetch(`${API}/api/auth/verify`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ email, code }),
+        headers: { "Content-Type": "application/json", "X-CSRF": "1" },
+        body: JSON.stringify({ email: e, code: c }),
       });
-      const j: { ok?: boolean; paid?: boolean; message?: string } = await r.json();
-      if (j?.ok) {
-        setFeCookie("fe_session", "1", 90);
-        if (j.paid) setFeCookie("fe_paid", "1", 90);
-        router.replace(redirect);
+      const data: VerifyResp = await r.json();
+      if (!r.ok || !data.ok) {
+        setErr(data.message || "Invalid or expired code.");
+        return;
+      }
+
+      // ✅ route by paid
+      if (data.paid) {
+        location.href = dest;
       } else {
-        setMsg(j?.message || "Invalid code.");
+        location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
       }
     } catch {
-      setMsg("Network error.");
+      setErr("Network error.");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <main className="min-h-screen grid place-items-center text-white px-4">
-      <div className="glass rounded-2xl p-6 w-full max-w-md border border-white/10">
-        <h1 className="text-2xl font-bold">Sign in</h1>
-        <p className="text-white/70 mt-2 text-sm">
-          Use your email to get a one-time 6-digit code.
-        </p>
+    <main className="futuristic-bg px-6 md:px-10 py-10">
+      <div className="max-w-md mx-auto glass rounded-2xl p-6 md:p-8">
+        <div className="text-lg font-semibold">Log in</div>
+        <div className="text-sm text-white/70">Use your email and a 6-digit code.</div>
 
-        {stage === "email" && (
-          <div className="mt-5 space-y-3">
-            <input
-              autoFocus
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
-            />
-            <button
-              onClick={start}
-              disabled={loading}
-              className="w-full rounded-lg bg-white text-black font-semibold px-4 py-2 disabled:opacity-60"
-            >
-              {loading ? "Sending…" : "Send code"}
-            </button>
-          </div>
-        )}
+        <div className="mt-5 space-y-3">
+          {step === "email" && (
+            <>
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                type="email"
+                autoComplete="email"
+              />
+              <button
+                disabled={loading}
+                onClick={sendCode}
+                className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+              >
+                {loading ? "Sending…" : "Send code"}
+              </button>
+            </>
+          )}
 
-        {stage === "code" && (
-          <div className="mt-5 space-y-3">
-            <input
-              autoFocus
-              inputMode="numeric"
-              pattern="\d*"
-              maxLength={6}
-              placeholder="6-digit code"
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center text-lg outline-none"
-            />
-            <button
-              onClick={verify}
-              disabled={loading || code.length !== 6}
-              className="w-full rounded-lg bg-white text-black font-semibold px-4 py-2 disabled:opacity-60"
-            >
-              {loading ? "Verifying…" : "Verify & continue"}
-            </button>
-            <button
-              onClick={() => setStage("email")}
-              className="w-full rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm"
-            >
-              ← Use a different email
-            </button>
-          </div>
-        )}
+          {step === "code" && (
+            <>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="6-digit code"
+                className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+              />
+              <button
+                disabled={loading}
+                onClick={verifyCode}
+                className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+              >
+                {loading ? "Verifying…" : "Verify & continue"}
+              </button>
+              <div className="text-xs text-white/50">We emailed you a 6-digit code.</div>
+            </>
+          )}
 
-        {msg && <div className="mt-4 text-sm text-white/80">{msg}</div>}
+          {err && (
+            <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
+              {err}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 text-xs text-white/60">
+          <Link href="/" className="underline">← Back home</Link>
+        </div>
       </div>
     </main>
   );

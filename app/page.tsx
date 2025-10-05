@@ -1,58 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 export default function HomePage() {
-  const router = useRouter();
-  const [checking, setChecking] = useState<"/chat" | "/call" | null>(null);
-
-  // Ask backend if user is logged in & paid, then route accordingly.
-  const smartGo = useCallback(
-    async (target: "/chat" | "/call") => {
-      setChecking(target);
-
-      // If we don't have an API URL configured, just send to login.
-      if (!API) {
-        router.push(`/login?redirect=${encodeURIComponent(target)}`);
-        setChecking(null);
-        return;
-      }
-
-      try {
-        const r = await fetch(`${API}/api/auth/me`, {
-          credentials: "include",
-          headers: { "X-CSRF": "1" },
-        });
-        const data = await r.json(); // expected: { email: string | null, paid: boolean }
-
-        // 1) Not logged in
-        if (!data?.email) {
-          router.push(`/login?redirect=${encodeURIComponent(target)}`);
-          return;
-        }
-
-        // 2) Logged in but not paid
-        if (data?.email && !data?.paid) {
-          router.push(`/pricing?from=${encodeURIComponent(target)}`);
-          return;
-        }
-
-        // 3) Logged in and paid
-        router.push(target);
-      } catch {
-        // On any error, fall back to login
-        router.push(`/login?redirect=${encodeURIComponent(target)}`);
-      } finally {
-        setChecking(null);
-      }
-    },
-    [router]
-  );
-
   return (
     <>
       {/* Skip link for keyboard users */}
@@ -79,22 +29,9 @@ export default function HomePage() {
           >
             <a href="#features" className="hover:text-white">Features</a>
             <a href="#privacy" className="hover:text-white">Privacy</a>
-
-            {/* Chat/Call links use smartGo to respect auth + paid state */}
-            <Link
-              href="/chat"
-              onClick={(e) => { e.preventDefault(); void smartGo("/chat"); }}
-              className="hover:text-white"
-            >
-              Chat
-            </Link>
-            <Link
-              href="/call"
-              onClick={(e) => { e.preventDefault(); void smartGo("/call"); }}
-              className="hover:text-white"
-            >
-              Call
-            </Link>
+            {/* Always funnel through login, keep where we want to go after */}
+            <Link href="/login?redirect=%2Fchat" className="hover:text-white">Chat</Link>
+            <Link href="/login?redirect=%2Fcall" className="hover:text-white">Call</Link>
           </nav>
         </header>
 
@@ -110,22 +47,19 @@ export default function HomePage() {
             </p>
 
             <div className="mt-8 flex gap-4">
-              <button
-                onClick={() => void smartGo("/chat")}
-                disabled={checking !== null}
-                className="glass card-hover rounded-xl px-5 py-3 font-semibold disabled:opacity-60"
+              <Link
+                href="/login?redirect=%2Fchat"
+                className="glass card-hover rounded-xl px-5 py-3 font-semibold"
               >
-                {checking === "/chat" ? "Checking…" : "💬 Open Chat"}
-              </button>
-
-              <button
-                onClick={() => void smartGo("/call")}
-                disabled={checking !== null}
-                className="rounded-xl px-5 py-3 font-semibold bg-white text-black card-hover disabled:opacity-60"
+                💬 Open Chat
+              </Link>
+              <Link
+                href="/login?redirect=%2Fcall"
+                className="rounded-xl px-5 py-3 font-semibold bg-white text-black card-hover"
                 title="Works best in Chrome or Edge with a microphone"
               >
-                {checking === "/call" ? "Checking…" : "📞 Start Call"}
-              </button>
+                📞 Start Call
+              </Link>
             </div>
 
             <div className="mt-6 text-xs text-white/50">
@@ -175,31 +109,12 @@ export default function HomePage() {
         {/* Features */}
         <section id="features" className="max-w-6xl mx-auto mt-16 grid md:grid-cols-3 gap-6">
           {[
-            {
-              title: "Memory",
-              text: "Ellie remembers facts you share and uses them naturally later.",
-              icon: "🧠",
-            },
-            {
-              title: "Mood-aware",
-              text: "She adapts to your tone—gentle when you’re stressed, playful when you’re upbeat.",
-              icon: "💞",
-            },
-            {
-              title: "Voice that feels real",
-              text: "Start a call any time for lifelike back-and-forth conversation.",
-              icon: "🎙️",
-            },
+            { title: "Memory", text: "Ellie remembers facts you share and uses them naturally later.", icon: "🧠" },
+            { title: "Mood-aware", text: "She adapts to your tone—gentle when you’re stressed, playful when you’re upbeat.", icon: "💞" },
+            { title: "Voice that feels real", text: "Start a call any time for lifelike back-and-forth conversation.", icon: "🎙️" },
           ].map((f) => (
-            <div
-              key={f.title}
-              className="glass rounded-2xl p-6 card-hover"
-              role="article"
-              aria-label={f.title}
-            >
-              <div className="text-2xl" aria-hidden>
-                {f.icon}
-              </div>
+            <div key={f.title} className="glass rounded-2xl p-6 card-hover" role="article" aria-label={f.title}>
+              <div className="text-2xl" aria-hidden>{f.icon}</div>
               <div className="mt-3 font-semibold">{f.title}</div>
               <div className="mt-1 text-sm text-white/70">{f.text}</div>
             </div>
@@ -216,10 +131,7 @@ export default function HomePage() {
         </section>
 
         {/* Footer */}
-        <footer
-          className="max-w-6xl mx-auto py-10 text-center text-xs text-white/50"
-          role="contentinfo"
-        >
+        <footer className="max-w-6xl mx-auto py-10 text-center text-xs text-white/50" role="contentinfo">
           © {new Date().getFullYear()} Ellie
         </footer>
       </main>

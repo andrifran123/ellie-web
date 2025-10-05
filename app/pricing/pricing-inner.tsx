@@ -289,14 +289,14 @@ export default function WelcomePage() {
           <div className="grid gap-5 md:grid-cols-2">
             {/* Monthly */}
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
-              <div className="text-sm uppercase tracking-widest text-white/75">Monthly</div>
+              <div className="text-xs font-semibold tracking-wide text-white/80">MONTHLY</div>
               <div className="mt-2 text-4xl font-bold">$9.99</div>
               <div className="mt-4 text-sm text-white/80">
                 Unlimited chat and voice. Memory &amp; mood. Cancel anytime.
               </div>
               <Link
-                href="/pricing"
-                className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-white text-black font-semibold px-4 py-2.5 hover:scale-[1.01] active:scale-[0.99] transition"
+                href="/login?signup=1&plan=monthly&redirect=%2Fchat"
+                className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-white text-black font-semibold px-4 py-2.5 hover:scale-[1.01] active:scale-[0.99] transition card-hover"
               >
                 Subscribe
               </Link>
@@ -304,18 +304,23 @@ export default function WelcomePage() {
 
             {/* Yearly */}
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(60,180,255,0.15)]">
-              <div className="text-sm uppercase tracking-widest text-white/75">Yearly</div>
+              <div className="text-xs font-semibold tracking-wide text-white/80">YEARLY</div>
               <div className="mt-2 text-4xl font-bold">$89.99</div>
               <div className="mt-4 text-sm text-white/80">
                 2 months free. Priority compute &amp; early features.
               </div>
               <Link
-                href="/pricing"
-                className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 font-semibold hover:bg-white/10 transition"
+                href="/login?signup=1&plan=yearly&redirect=%2Fchat"
+                className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 font-semibold hover:bg-white/10 transition card-hover"
               >
                 Subscribe
               </Link>
             </div>
+          </div>
+
+          {/* Extra note from pricing page */}
+          <div className="mt-8 text-center text-xs text-white/60">
+            After logging in and activating your plan, you’ll be taken to Chat automatically.
           </div>
         </div>
       </main>
