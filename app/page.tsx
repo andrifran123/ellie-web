@@ -30,8 +30,8 @@ export default function HomePage() {
             <a href="#features" className="hover:text-white">Features</a>
             <a href="#privacy" className="hover:text-white">Privacy</a>
             {/* Route Chat/Call through login */}
-            <Link href="/login-inner" className="hover:text-white">Chat</Link>
-            <Link href="/login-inner" className="hover:text-white">Call</Link>
+            <Link href="/login" className="hover:text-white">Chat</Link>
+            <Link href="/login" className="hover:text-white">Call</Link>
           </nav>
         </header>
 
@@ -48,13 +48,13 @@ export default function HomePage() {
 
             <div className="mt-8 flex gap-4">
               <Link
-                href="/login-inner"
+                href="/login"
                 className="glass card-hover rounded-xl px-5 py-3 font-semibold"
               >
                 💬 Open Chat
               </Link>
               <Link
-                href="/login-inner"
+                href="/login"
                 className="rounded-xl px-5 py-3 font-semibold bg-white text-black card-hover"
                 title="Works best in Chrome or Edge with a microphone"
               >
@@ -111,7 +111,7 @@ export default function HomePage() {
           {[
             {
               title: "Memory",
-              text: "Ellie Remembers facts you share and uses them naturally later.",
+              text: "Ellie remembers facts you share and uses them naturally later.",
               icon: "🧠",
             },
             {
