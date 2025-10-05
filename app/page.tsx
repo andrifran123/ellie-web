@@ -45,13 +45,13 @@ export default function HomePage() {
 
             <div className="mt-8 flex gap-4">
               <Link
-                href="/chat"
+                href="/login-inner"
                 className="glass card-hover rounded-xl px-5 py-3 font-semibold"
               >
                 💬 Open Chat
               </Link>
               <Link
-                href="/call"
+                href="/login-inner"
                 className="rounded-xl px-5 py-3 font-semibold bg-white text-black card-hover"
                 title="Works best in Chrome or Edge with a microphone"
               >
