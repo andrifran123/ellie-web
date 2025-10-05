@@ -1,8 +1,58 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useState } from "react";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 export default function HomePage() {
+  const router = useRouter();
+  const [checking, setChecking] = useState<"/chat" | "/call" | null>(null);
+
+  // Ask backend if user is logged in & paid, then route accordingly.
+  const smartGo = useCallback(
+    async (target: "/chat" | "/call") => {
+      setChecking(target);
+
+      // If we don't have an API URL configured, just send to login.
+      if (!API) {
+        router.push(`/login?redirect=${encodeURIComponent(target)}`);
+        setChecking(null);
+        return;
+      }
+
+      try {
+        const r = await fetch(`${API}/api/auth/me`, {
+          credentials: "include",
+          headers: { "X-CSRF": "1" },
+        });
+        const data = await r.json(); // expected: { email: string | null, paid: boolean }
+
+        // 1) Not logged in
+        if (!data?.email) {
+          router.push(`/login?redirect=${encodeURIComponent(target)}`);
+          return;
+        }
+
+        // 2) Logged in but not paid
+        if (data?.email && !data?.paid) {
+          router.push(`/pricing?from=${encodeURIComponent(target)}`);
+          return;
+        }
+
+        // 3) Logged in and paid
+        router.push(target);
+      } catch {
+        // On any error, fall back to login
+        router.push(`/login?redirect=${encodeURIComponent(target)}`);
+      } finally {
+        setChecking(null);
+      }
+    },
+    [router]
+  );
+
   return (
     <>
       {/* Skip link for keyboard users */}
@@ -29,9 +79,22 @@ export default function HomePage() {
           >
             <a href="#features" className="hover:text-white">Features</a>
             <a href="#privacy" className="hover:text-white">Privacy</a>
-            {/* Route Chat/Call through login */}
-            <Link href="/login" className="hover:text-white">Chat</Link>
-            <Link href="/login" className="hover:text-white">Call</Link>
+
+            {/* Chat/Call links use smartGo to respect auth + paid state */}
+            <Link
+              href="/chat"
+              onClick={(e) => { e.preventDefault(); void smartGo("/chat"); }}
+              className="hover:text-white"
+            >
+              Chat
+            </Link>
+            <Link
+              href="/call"
+              onClick={(e) => { e.preventDefault(); void smartGo("/call"); }}
+              className="hover:text-white"
+            >
+              Call
+            </Link>
           </nav>
         </header>
 
@@ -47,19 +110,22 @@ export default function HomePage() {
             </p>
 
             <div className="mt-8 flex gap-4">
-              <Link
-                href="/login"
-                className="glass card-hover rounded-xl px-5 py-3 font-semibold"
+              <button
+                onClick={() => void smartGo("/chat")}
+                disabled={checking !== null}
+                className="glass card-hover rounded-xl px-5 py-3 font-semibold disabled:opacity-60"
               >
-                💬 Open Chat
-              </Link>
-              <Link
-                href="/login"
-                className="rounded-xl px-5 py-3 font-semibold bg-white text-black card-hover"
+                {checking === "/chat" ? "Checking…" : "💬 Open Chat"}
+              </button>
+
+              <button
+                onClick={() => void smartGo("/call")}
+                disabled={checking !== null}
+                className="rounded-xl px-5 py-3 font-semibold bg-white text-black card-hover disabled:opacity-60"
                 title="Works best in Chrome or Edge with a microphone"
               >
-                📞 Start Call
-              </Link>
+                {checking === "/call" ? "Checking…" : "📞 Start Call"}
+              </button>
             </div>
 
             <div className="mt-6 text-xs text-white/50">
