@@ -17,7 +17,9 @@ export default function HomePage() {
         {/* Top bar */}
         <header role="banner" className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-white/10 grid place-items-center" aria-hidden>✨</div>
+            <div className="size-9 rounded-xl bg-white/10 grid place-items-center" aria-hidden>
+              ✨
+            </div>
             <span className="font-semibold tracking-wide">Ellie</span>
           </div>
 
@@ -27,8 +29,9 @@ export default function HomePage() {
           >
             <a href="#features" className="hover:text-white">Features</a>
             <a href="#privacy" className="hover:text-white">Privacy</a>
-            <Link href="/chat" className="hover:text-white">Chat</Link>
-            <Link href="/call" className="hover:text-white">Call</Link>
+            {/* Route Chat/Call through login */}
+            <Link href="/login-inner" className="hover:text-white">Chat</Link>
+            <Link href="/login-inner" className="hover:text-white">Call</Link>
           </nav>
         </header>
 
@@ -39,7 +42,7 @@ export default function HomePage() {
               A companion that feels <span className="text-white/70">real</span>.
             </h1>
             <p className="mt-5 text-white/70 text-lg">
-              Ellie remembers what you share, reacts to your mood, and talks like a person.
+              Ellie remembers what you share, adapts to your mood, and talks like a person.
               Chat by text or jump into a lifelike voice call—your choice.
             </p>
 
@@ -65,9 +68,18 @@ export default function HomePage() {
           </div>
 
           {/* Right-side card */}
-          <div className="glass rounded-2xl p-6 md:p-8 card-hover" role="region" aria-label="Ellie preview">
+          <div
+            className="glass rounded-2xl p-6 md:p-8 card-hover"
+            role="region"
+            aria-label="Ellie preview"
+          >
             <div className="flex items-center gap-4">
-              <div className="size-12 rounded-xl bg-white/10 grid place-items-center text-2xl avatar-idle" aria-hidden>😊</div>
+              <div
+                className="size-12 rounded-xl bg-white/10 grid place-items-center text-2xl avatar-idle"
+                aria-hidden
+              >
+                😊
+              </div>
               <div>
                 <div className="font-semibold">Ellie</div>
                 <div className="text-white/60 text-sm">Warm • Playful • Supportive</div>
@@ -99,7 +111,7 @@ export default function HomePage() {
           {[
             {
               title: "Memory",
-              text: "Ellie remembers facts you share and uses them naturally later.",
+              text: "Ellie Remembers facts you share and uses them naturally later.",
               icon: "🧠",
             },
             {
@@ -113,8 +125,15 @@ export default function HomePage() {
               icon: "🎙️",
             },
           ].map((f) => (
-            <div key={f.title} className="glass rounded-2xl p-6 card-hover" role="article" aria-label={f.title}>
-              <div className="text-2xl" aria-hidden>{f.icon}</div>
+            <div
+              key={f.title}
+              className="glass rounded-2xl p-6 card-hover"
+              role="article"
+              aria-label={f.title}
+            >
+              <div className="text-2xl" aria-hidden>
+                {f.icon}
+              </div>
               <div className="mt-3 font-semibold">{f.title}</div>
               <div className="mt-1 text-sm text-white/70">{f.text}</div>
             </div>
@@ -123,7 +142,7 @@ export default function HomePage() {
 
         {/* Privacy */}
         <section id="privacy" className="max-w-6xl mx-auto mt-16 glass rounded-2xl p-6 md:p-8">
-          <h3 className="text-xl font-semibold">Privacy & Safety</h3>
+          <h3 className="text-xl font-semibold">Privacy &amp; Safety</h3>
           <p className="text-white/70 mt-2 text-sm leading-6">
             Conversations are private to you. Ellie won’t answer explicitly sexual requests and will steer
             things back to a respectful tone. You can reset memory any time.
@@ -131,7 +150,10 @@ export default function HomePage() {
         </section>
 
         {/* Footer */}
-        <footer className="max-w-6xl mx-auto py-10 text-center text-xs text-white/50" role="contentinfo">
+        <footer
+          className="max-w-6xl mx-auto py-10 text-center text-xs text-white/50"
+          role="contentinfo"
+        >
           © {new Date().getFullYear()} Ellie
         </footer>
       </main>
