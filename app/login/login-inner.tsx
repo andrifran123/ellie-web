@@ -36,23 +36,36 @@ export default function LoginPage() {
   const [loadingMe, setLoadingMe] = useState(true);
 
   useEffect(() => {
-    if (!API) return;
-    setLoadingMe(true);
-    fetch(`${API}/api/auth/me`, {
-      credentials: "include",
-      headers: { "X-CSRF": "1" },
+  if (!API) return;
+  setLoadingMe(true);
+  fetch(`${API}/api/auth/me`, {
+    credentials: "include",
+    headers: { "X-CSRF": "1" },
+  })
+    .then((r) => r.json())
+    .then((m: MeResponse) => {
+      setMe(m);
+      if (m?.email) {
+        // ensure middleware lets user through
+        setAuthedCookie(true);
+      }
     })
-      .then((r) => r.json())
-      .then((m: MeResponse) => setMe(m))
-      .catch(() => setMe({ email: null, paid: false }))
-      .finally(() => setLoadingMe(false));
-  }, []);
+    .catch(() => setMe({ email: null, paid: false }))
+    .finally(() => setLoadingMe(false));
+}, []);
+
+  // --- tiny UX cookie helpers (for middleware) ---
+  function setAuthedCookie(on: boolean) {
+    // Lax so it works for normal navigation; 90 days like the API cookie
+    document.cookie = `ellie_authed=${on ? "1" : ""}; Path=/; SameSite=Lax; Max-Age=${on ? 60 * 60 * 24 * 90 : 0}`;
+  }
 
   async function signOut() {
     try {
       setLoading(true);
       await fetch(`${API}/api/auth/logout`, { method: "POST", credentials: "include" });
       setMe({ email: null, paid: false });
+      setAuthedCookie(false); // clear UX flag so middleware will redirect next time
     } finally {
       setLoading(false);
     }
@@ -123,7 +136,10 @@ export default function LoginPage() {
       setCode("");
       setSiEmail("");
 
-      // Optional: still navigate after verify if you want immediate flow:
+      // set UX flag so middleware won't bounce /chat or /call
+      setAuthedCookie(true);
+
+      // If you want immediate navigation, uncomment:
       // if (data.paid) location.href = dest;
       // else location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
     } catch {
@@ -156,12 +172,16 @@ export default function LoginPage() {
         setErr(data.message || "Could not create account.");
         return;
       }
-      // set UI session (not paid yet)
+      // set UI session (likely not paid yet)
       setMe({ email: e, paid: false });
       setName("");
       setSuEmail("");
       setPassword("");
-      // Optional: go buy now
+
+      // set UX flag so middleware won't bounce
+      setAuthedCookie(true);
+
+      // Optional: go to pricing immediately
       // location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
     } catch {
       setErr("Network error.");
@@ -196,6 +216,7 @@ export default function LoginPage() {
                   {!me.paid ? (
                     <Link
                       href={`/pricing?redirect=${encodeURIComponent(dest || "/chat")}`}
+                      onClick={() => setAuthedCookie(true)}
                       className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
                     >
                       Go to Pricing
@@ -203,6 +224,7 @@ export default function LoginPage() {
                   ) : (
                     <Link
                       href="/call"
+			 onClick={() => setAuthedCookie(true)}
                       className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
                     >
                       Start Call
