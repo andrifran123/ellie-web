@@ -1,7 +1,7 @@
 // app/login/page.tsx
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
@@ -31,6 +31,33 @@ export default function LoginPage() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // current session (NO AUTO-REDIRECT)
+  const [me, setMe] = useState<MeResponse>({ email: null, paid: false });
+  const [loadingMe, setLoadingMe] = useState(true);
+
+  useEffect(() => {
+    if (!API) return;
+    setLoadingMe(true);
+    fetch(`${API}/api/auth/me`, {
+      credentials: "include",
+      headers: { "X-CSRF": "1" },
+    })
+      .then((r) => r.json())
+      .then((m: MeResponse) => setMe(m))
+      .catch(() => setMe({ email: null, paid: false }))
+      .finally(() => setLoadingMe(false));
+  }, []);
+
+  async function signOut() {
+    try {
+      setLoading(true);
+      await fetch(`${API}/api/auth/logout`, { method: "POST", credentials: "include" });
+      setMe({ email: null, paid: false });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // sign in (magic code)
   const [siEmail, setSiEmail] = useState("");
   const [code, setCode] = useState("");
@@ -41,23 +68,6 @@ export default function LoginPage() {
   const [suEmail, setSuEmail] = useState("");
   const [password, setPassword] = useState("");
   const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-  // If already logged in, bounce according to paid
-  useEffect(() => {
-    if (!API) return;
-    fetch(`${API}/api/auth/me`, {
-      credentials: "include",
-      headers: { "X-CSRF": "1" },
-    })
-      .then((r) => r.json())
-      .then((m: MeResponse) => {
-        if (m?.email) {
-          if (m.paid) location.href = dest;
-          else location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
-        }
-      })
-      .catch(() => {});
-  }, [dest]);
 
   async function sendCode() {
     setErr(null);
@@ -107,11 +117,15 @@ export default function LoginPage() {
         setErr(data.message || "Invalid or expired code.");
         return;
       }
-      if (data.paid) {
-        location.href = dest;
-      } else {
-        location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
-      }
+      // update UI session (no auto-redirect)
+      setMe({ email: e, paid: !!data.paid });
+      setStep("email");
+      setCode("");
+      setSiEmail("");
+
+      // Optional: still navigate after verify if you want immediate flow:
+      // if (data.paid) location.href = dest;
+      // else location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
     } catch {
       setErr("Network error.");
     } finally {
@@ -142,8 +156,13 @@ export default function LoginPage() {
         setErr(data.message || "Could not create account.");
         return;
       }
-      // Account created (likely not paid yet) → go buy plan, then to dest
-      location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
+      // set UI session (not paid yet)
+      setMe({ email: e, paid: false });
+      setName("");
+      setSuEmail("");
+      setPassword("");
+      // Optional: go buy now
+      // location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
     } catch {
       setErr("Network error.");
     } finally {
@@ -158,139 +177,189 @@ export default function LoginPage() {
         <h1 className="text-center text-4xl md:text-6xl font-extrabold mb-10">welcome</h1>
 
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Left: Sign in / Sign up switcher (glass card vibe) */}
+          {/* Left: Auth card */}
           <div className="glass rounded-2xl p-6 md:p-8 border border-white/10">
-            {/* Toggle */}
-            <div className="flex items-center gap-2 bg-white/10 rounded-xl p-1 w-fit mx-auto">
-              <button
-                onClick={() => setMode("signin")}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold ${
-                  mode === "signin" ? "bg-white text-black" : "text-white/80"
-                }`}
-              >
-                Sign in
-              </button>
-              <button
-                onClick={() => setMode("signup")}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold ${
-                  mode === "signup" ? "bg-white text-black" : "text-white/80"
-                }`}
-              >
-                Sign up
-              </button>
-            </div>
+            {/* If signed in: show status + actions (NO AUTO-REDIRECT) */}
+            {!loadingMe && me.email ? (
+              <div className="space-y-4">
+                <div className="text-sm text-white/80">
+                  You’re signed in as <span className="font-semibold">{me.email}</span>
+                  {me.paid ? " (active subscription)" : " (no active subscription)"}
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Link
+                    href={dest || "/chat"}
+                    className="w-full text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
+                  >
+                    Go to Chat
+                  </Link>
+                  {!me.paid ? (
+                    <Link
+                      href={`/pricing?redirect=${encodeURIComponent(dest || "/chat")}`}
+                      className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
+                    >
+                      Go to Pricing
+                    </Link>
+                  ) : (
+                    <Link
+                      href="/call"
+                      className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
+                    >
+                      Start Call
+                    </Link>
+                  )}
+                </div>
+                <button
+                  onClick={signOut}
+                  disabled={loading}
+                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm disabled:opacity-60"
+                >
+                  {loading ? "Signing out…" : "Sign out"}
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Toggle */}
+                <div className="flex items-center gap-2 bg-white/10 rounded-xl p-1 w-fit mx-auto">
+                  <button
+                    onClick={() => setMode("signin")}
+                    className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+                      mode === "signin" ? "bg-white text-black" : "text-white/80"
+                    }`}
+                  >
+                    Sign in
+                  </button>
+                  <button
+                    onClick={() => setMode("signup")}
+                    className={`px-4 py-2 rounded-lg text-sm font-semibold ${
+                      mode === "signup" ? "bg-white text-black" : "text-white/80"
+                    }`}
+                  >
+                    Sign up
+                  </button>
+                </div>
 
-            {/* Content */}
-            <div className="mt-6 space-y-3 max-w-md mx-auto w-full">
-              {mode === "signin" ? (
-                <>
-                  {step === "email" && (
+                {/* Content */}
+                <div className="mt-6 space-y-3 max-w-md mx-auto w-full">
+                  {mode === "signin" ? (
                     <>
+                      {step === "email" && (
+                        <>
+                          <label className="text-sm text-white/80">Email</label>
+                          <input
+                            value={siEmail}
+                            onChange={(e) => setSiEmail(e.target.value)}
+                            placeholder="you@example.com"
+                            className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                            type="email"
+                            autoComplete="email"
+                          />
+                          <button
+                            disabled={loading}
+                            onClick={sendCode}
+                            className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+                          >
+                            {loading ? "Sending…" : "Send code"}
+                          </button>
+                        </>
+                      )}
+
+                      {step === "code" && (
+                        <>
+                          <label className="text-sm text-white/80">Enter 6-digit code</label>
+                          <input
+                            value={code}
+                            onChange={(e) => setCode(e.target.value)}
+                            placeholder="123456"
+                            className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none"
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                          />
+                          <button
+                            disabled={loading}
+                            onClick={verifyCode}
+                            className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+                          >
+                            {loading ? "Verifying…" : "Verify & continue"}
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setStep("email");
+                              setCode("");
+                              setErr(null);
+                            }}
+                            className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm"
+                          >
+                            ← Use a different email
+                          </button>
+                          <div className="text-xs text-white/60 text-center">
+                            We emailed you a 6-digit code.
+                          </div>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <label className="text-sm text-white/80">Name</label>
+                      <input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="Your name"
+                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                        type="text"
+                        autoComplete="name"
+                      />
+
                       <label className="text-sm text-white/80">Email</label>
                       <input
-                        value={siEmail}
-                        onChange={(e) => setSiEmail(e.target.value)}
+                        value={suEmail}
+                        onChange={(e) => setSuEmail(e.target.value)}
                         placeholder="you@example.com"
                         className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
                         type="email"
                         autoComplete="email"
                       />
-                      <button
-                        disabled={loading}
-                        onClick={sendCode}
-                        className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
-                      >
-                        {loading ? "Sending…" : "Send code"}
-                      </button>
-                    </>
-                  )}
 
-                  {step === "code" && (
-                    <>
-                      <label className="text-sm text-white/80">Enter 6-digit code</label>
+                      <label className="text-sm text-white/80">Password</label>
                       <input
-                        value={code}
-                        onChange={(e) => setCode(e.target.value)}
-                        placeholder="123456"
-                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none"
-                        inputMode="numeric"
-                        autoComplete="one-time-code"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="At least 8 characters"
+                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                        type="password"
+                        autoComplete="new-password"
                       />
+
                       <button
                         disabled={loading}
-                        onClick={verifyCode}
+                        onClick={signUp}
                         className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
                       >
-                        {loading ? "Verifying…" : "Verify & continue"}
+                        {loading ? "Creating…" : "Create account"}
                       </button>
-
-                      <button
-                        onClick={() => { setStep("email"); setCode(""); setErr(null); }}
-                        className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm"
-                      >
-                        ← Use a different email
-                      </button>
-                      <div className="text-xs text-white/60 text-center">We emailed you a 6-digit code.</div>
                     </>
                   )}
-                </>
-              ) : (
-                <>
-                  <label className="text-sm text-white/80">Name</label>
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your name"
-                    className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
-                    type="text"
-                    autoComplete="name"
-                  />
 
-                  <label className="text-sm text-white/80">Email</label>
-                  <input
-                    value={suEmail}
-                    onChange={(e) => setSuEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
-                    type="email"
-                    autoComplete="email"
-                  />
+                  {err && (
+                    <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
+                      {err}
+                    </div>
+                  )}
 
-                  <label className="text-sm text-white/80">Password</label>
-                  <input
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="At least 8 characters"
-                    className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
-                    type="password"
-                    autoComplete="new-password"
-                  />
-
-                  <button
-                    disabled={loading}
-                    onClick={signUp}
-                    className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
-                  >
-                    {loading ? "Creating…" : "Create account"}
-                  </button>
-                </>
-              )}
-
-              {err && (
-                <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
-                  {err}
+                  <div className="text-xs text-white/60 text-center mt-2">
+                    <Link href="/" className="underline">
+                      ← Back home
+                    </Link>
+                  </div>
                 </div>
-              )}
-
-              <div className="text-xs text-white/60 text-center mt-2">
-                <Link href="/" className="underline">← Back home</Link>
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           {/* Right: “What you get” (mirrors pricing vibe) */}
           <div className="glass rounded-2xl p-6 md:p-8 border border-white/10">
-            <div className="text-sm font-semibold mb-2">You get</div>
+            <div className="text-sm font-semibold mb-2">What you get</div>
             <ul className="space-y-2 text-sm text-white/80">
               <li>• Ellie remembers you naturally</li>
               <li>• Mood-aware replies</li>
@@ -300,19 +369,11 @@ export default function LoginPage() {
 
             <div className="mt-6 text-xs text-white/60">
               Already have an account?{" "}
-              <button
-                type="button"
-                onClick={() => setMode("signin")}
-                className="underline"
-              >
+              <button type="button" onClick={() => setMode("signin")} className="underline">
                 Sign in
               </button>
               . New here?{" "}
-              <button
-                type="button"
-                onClick={() => setMode("signup")}
-                className="underline"
-              >
+              <button type="button" onClick={() => setMode("signup")} className="underline">
                 Create your account
               </button>
               .
