@@ -1,4 +1,4 @@
-// app/login/page.tsx
+// app/login/login-inner.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -10,10 +10,10 @@ type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
 type SignupResp = { ok?: boolean; message?: string };
 type MeResponse = { email: string | null; paid: boolean };
-
 type Mode = "signin" | "signup";
+type Flash = "none" | "signedin" | "signedup" | "signedout";
 
-export default function LoginPage() {
+export default function LoginInnerPage() {
   // query params
   const [dest, setDest] = useState<string>("/chat");
   const [mode, setMode] = useState<Mode>("signin");
@@ -27,56 +27,63 @@ export default function LoginPage() {
     if (signup === "1") setMode("signup");
   }, []);
 
+  // UX toast
+  const [flash, setFlash] = useState<Flash>("none");
+  useEffect(() => {
+    if (flash === "none") return;
+    const t = setTimeout(() => setFlash("none"), 1600);
+    return () => clearTimeout(t);
+  }, [flash]);
+
   // shared
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // current session (NO AUTO-REDIRECT)
+  // session (NO AUTO-REDIRECT)
   const [me, setMe] = useState<MeResponse>({ email: null, paid: false });
   const [loadingMe, setLoadingMe] = useState(true);
 
-  useEffect(() => {
-  if (!API) return;
-  setLoadingMe(true);
-  fetch(`${API}/api/auth/me`, {
-    credentials: "include",
-    headers: { "X-CSRF": "1" },
-  })
-    .then((r) => r.json())
-    .then((m: MeResponse) => {
-      setMe(m);
-      if (m?.email) {
-        // ensure middleware lets user through
-        setAuthedCookie(true);
-      }
-    })
-    .catch(() => setMe({ email: null, paid: false }))
-    .finally(() => setLoadingMe(false));
-}, []);
-
-  // --- tiny UX cookie helpers (for middleware) ---
+  // tiny UX cookie used only by middleware (not security)
   function setAuthedCookie(on: boolean) {
-    // Lax so it works for normal navigation; 90 days like the API cookie
-    document.cookie = `ellie_authed=${on ? "1" : ""}; Path=/; SameSite=Lax; Max-Age=${on ? 60 * 60 * 24 * 90 : 0}`;
+    document.cookie = `ellie_authed=${on ? "1" : ""}; Path=/; SameSite=Lax; Max-Age=${
+      on ? 60 * 60 * 24 * 90 : 0
+    }`;
   }
+
+  useEffect(() => {
+    if (!API) return;
+    setLoadingMe(true);
+    fetch(`${API}/api/auth/me`, {
+      credentials: "include",
+      headers: { "X-CSRF": "1" },
+    })
+      .then((r) => r.json())
+      .then((m: MeResponse) => {
+        setMe(m);
+        if (m?.email) setAuthedCookie(true); // ensure middleware lets you through
+      })
+      .catch(() => setMe({ email: null, paid: false }))
+      .finally(() => setLoadingMe(false));
+  }, []);
 
   async function signOut() {
     try {
       setLoading(true);
       await fetch(`${API}/api/auth/logout`, { method: "POST", credentials: "include" });
       setMe({ email: null, paid: false });
-      setAuthedCookie(false); // clear UX flag so middleware will redirect next time
+      setAuthedCookie(false); // clear UX flag
+      setFlash("signedout");
     } finally {
       setLoading(false);
     }
   }
 
-  // sign in (magic code)
+  // sign in (email code)
   const [siEmail, setSiEmail] = useState("");
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email" | "code">("email");
 
-  // sign up (name / email / password)
+  // sign up (name/email/password)
   const [name, setName] = useState("");
   const [suEmail, setSuEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -130,16 +137,14 @@ export default function LoginPage() {
         setErr(data.message || "Invalid or expired code.");
         return;
       }
-      // update UI session (no auto-redirect)
+      // set session UI & UX cookie
       setMe({ email: e, paid: !!data.paid });
+      setAuthedCookie(true);
       setStep("email");
       setCode("");
       setSiEmail("");
-
-      // set UX flag so middleware won't bounce /chat or /call
-      setAuthedCookie(true);
-
-      // If you want immediate navigation, uncomment:
+      setFlash("signedin");
+      // Optional navigate:
       // if (data.paid) location.href = dest;
       // else location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
     } catch {
@@ -172,16 +177,13 @@ export default function LoginPage() {
         setErr(data.message || "Could not create account.");
         return;
       }
-      // set UI session (likely not paid yet)
       setMe({ email: e, paid: false });
+      setAuthedCookie(true);
       setName("");
       setSuEmail("");
       setPassword("");
-
-      // set UX flag so middleware won't bounce
-      setAuthedCookie(true);
-
-      // Optional: go to pricing immediately
+      setFlash("signedup");
+      // Optional: go to pricing
       // location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
     } catch {
       setErr("Network error.");
@@ -190,53 +192,98 @@ export default function LoginPage() {
     }
   }
 
+  // inline spinner
+  const Spinner = () => (
+    <svg className="inline size-4 animate-spin" viewBox="0 0 24 24" aria-hidden="true">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 008 12H4z" />
+    </svg>
+  );
+
+  // toast text
+  const flashText =
+    flash === "signedin"
+      ? "Signed in!"
+      : flash === "signedup"
+      ? "Account created!"
+      : flash === "signedout"
+      ? "Signed out"
+      : "";
+
   return (
     <main className="futuristic-bg min-h-screen px-6 md:px-10 py-10">
+      {/* Toast */}
+      {flash !== "none" && (
+        <div
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 backdrop-blur-lg bg-white/10 text-white px-4 py-2 rounded-xl border border-white/15 shadow transition-all duration-300
+                     animate-[fadeIn_120ms_ease-out,fadeOut_300ms_ease-in_1.2s_forwards]"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="mr-2">✅</span> {flashText}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes fadeIn { from { opacity: 0; transform: translate(-50%, -6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+        @keyframes fadeOut { to { opacity: 0; transform: translate(-50%, -6px); } }
+      `}</style>
+
       <div className="max-w-5xl mx-auto">
-        {/* Header like pricing */}
         <h1 className="text-center text-4xl md:text-6xl font-extrabold mb-10">welcome</h1>
 
         <div className="grid md:grid-cols-2 gap-6">
           {/* Left: Auth card */}
-          <div className="glass rounded-2xl p-6 md:p-8 border border-white/10">
-            {/* If signed in: show status + actions (NO AUTO-REDIRECT) */}
+          <div className="glass rounded-2xl p-6 md:p-8 border border-white/10 transition-transform duration-200">
+            {/* Signed-in panel (NO AUTO-REDIRECT) */}
             {!loadingMe && me.email ? (
               <div className="space-y-4">
                 <div className="text-sm text-white/80">
                   You’re signed in as <span className="font-semibold">{me.email}</span>
                   {me.paid ? " (active subscription)" : " (no active subscription)"}
                 </div>
+
                 <div className="grid sm:grid-cols-2 gap-3">
                   <Link
                     href={dest || "/chat"}
-                    className="w-full text-center rounded-lg bg-white text-black font-semibold px-3 py-2"
+                    onClick={() => setAuthedCookie(true)}
+                    className="w-full text-center rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
                   >
                     Go to Chat
                   </Link>
+
                   {!me.paid ? (
                     <Link
                       href={`/pricing?redirect=${encodeURIComponent(dest || "/chat")}`}
+                      className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition"
                       onClick={() => setAuthedCookie(true)}
-                      className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
                     >
                       Go to Pricing
                     </Link>
                   ) : (
                     <Link
                       href="/call"
-			 onClick={() => setAuthedCookie(true)}
-                      className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2"
+                      onClick={() => setAuthedCookie(true)}
+                      className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition"
                     >
                       Start Call
                     </Link>
                   )}
                 </div>
+
                 <button
                   onClick={signOut}
                   disabled={loading}
-                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm disabled:opacity-60"
+                  className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition disabled:opacity-60"
+                  aria-busy={loading ? "true" : "false"}
                 >
-                  {loading ? "Signing out…" : "Sign out"}
+                  {loading ? (
+                    <span className="inline-flex items-center gap-2">
+                      <Spinner /> Signing out…
+                    </span>
+                  ) : (
+                    "Sign out"
+                  )}
                 </button>
               </div>
             ) : (
@@ -244,24 +291,29 @@ export default function LoginPage() {
                 {/* Toggle */}
                 <div className="flex items-center gap-2 bg-white/10 rounded-xl p-1 w-fit mx-auto">
                   <button
-                    onClick={() => setMode("signin")}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold ${
-                      mode === "signin" ? "bg-white text-black" : "text-white/80"
+                    onClick={() => {
+                      setMode("signin");
+                      setErr(null);
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                      mode === "signin" ? "bg-white text-black" : "text-white/80 hover:text-white"
                     }`}
                   >
                     Sign in
                   </button>
                   <button
-                    onClick={() => setMode("signup")}
-                    className={`px-4 py-2 rounded-lg text-sm font-semibold ${
-                      mode === "signup" ? "bg-white text-black" : "text-white/80"
+                    onClick={() => {
+                      setMode("signup");
+                      setErr(null);
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                      mode === "signup" ? "bg-white text-black" : "text-white/80 hover:text-white"
                     }`}
                   >
                     Sign up
                   </button>
                 </div>
 
-                {/* Content */}
                 <div className="mt-6 space-y-3 max-w-md mx-auto w-full">
                   {mode === "signin" ? (
                     <>
@@ -272,16 +324,23 @@ export default function LoginPage() {
                             value={siEmail}
                             onChange={(e) => setSiEmail(e.target.value)}
                             placeholder="you@example.com"
-                            className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                            className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
                             type="email"
                             autoComplete="email"
                           />
                           <button
                             disabled={loading}
                             onClick={sendCode}
-                            className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+                            className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                            aria-busy={loading ? "true" : "false"}
                           >
-                            {loading ? "Sending…" : "Send code"}
+                            {loading ? (
+                              <span className="inline-flex items-center gap-2">
+                                <Spinner /> Sending…
+                              </span>
+                            ) : (
+                              "Send code"
+                            )}
                           </button>
                         </>
                       )}
@@ -293,16 +352,23 @@ export default function LoginPage() {
                             value={code}
                             onChange={(e) => setCode(e.target.value)}
                             placeholder="123456"
-                            className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none"
+                            className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none focus:border-white/30 transition"
                             inputMode="numeric"
                             autoComplete="one-time-code"
                           />
                           <button
                             disabled={loading}
                             onClick={verifyCode}
-                            className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+                            className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                            aria-busy={loading ? "true" : "false"}
                           >
-                            {loading ? "Verifying…" : "Verify & continue"}
+                            {loading ? (
+                              <span className="inline-flex items-center gap-2">
+                                <Spinner /> Verifying…
+                              </span>
+                            ) : (
+                              "Verify & continue"
+                            )}
                           </button>
 
                           <button
@@ -311,7 +377,7 @@ export default function LoginPage() {
                               setCode("");
                               setErr(null);
                             }}
-                            className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm"
+                            className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition"
                           >
                             ← Use a different email
                           </button>
@@ -328,7 +394,7 @@ export default function LoginPage() {
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="Your name"
-                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
                         type="text"
                         autoComplete="name"
                       />
@@ -338,7 +404,7 @@ export default function LoginPage() {
                         value={suEmail}
                         onChange={(e) => setSuEmail(e.target.value)}
                         placeholder="you@example.com"
-                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
                         type="email"
                         autoComplete="email"
                       />
@@ -348,7 +414,7 @@ export default function LoginPage() {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="At least 8 characters"
-                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none"
+                        className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
                         type="password"
                         autoComplete="new-password"
                       />
@@ -356,9 +422,16 @@ export default function LoginPage() {
                       <button
                         disabled={loading}
                         onClick={signUp}
-                        className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 disabled:opacity-60"
+                        className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                        aria-busy={loading ? "true" : "false"}
                       >
-                        {loading ? "Creating…" : "Create account"}
+                        {loading ? (
+                          <span className="inline-flex items-center gap-2">
+                            <Spinner /> Creating…
+                          </span>
+                        ) : (
+                          "Create account"
+                        )}
                       </button>
                     </>
                   )}
