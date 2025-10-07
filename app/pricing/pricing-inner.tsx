@@ -312,7 +312,7 @@ export default function WelcomePage() {
                 2 months free. Priority compute &amp; early features.
               </div>
               <Link
-                href="https://ellie-elite.lemonsqueezy.com/buy/8bbcb0766-7f48-42cf-91ec-76f56c813c2a"
+                href="https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4"
  		 target="_blank"
 		  rel="noopener noreferrer"
                 className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 font-semibold hover:bg-white/10 transition card-hover"
