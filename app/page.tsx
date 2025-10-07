@@ -131,9 +131,24 @@ export default function HomePage() {
         </section>
 
         {/* Footer */}
-        <footer className="max-w-6xl mx-auto py-10 text-center text-xs text-white/50" role="contentinfo">
-          © {new Date().getFullYear()} Ellie
-        </footer>
+       <footer
+  className="max-w-6xl mx-auto py-10 text-center text-xs text-white/50 space-y-3"
+  role="contentinfo"
+>
+  <div>
+    © {new Date().getFullYear()} Ellie
+  </div>
+
+  <div className="space-x-4">
+    <a href="/legal/privacy" className="underline hover:text-white">
+      Privacy Policy
+    </a>
+    <a href="/legal/terms" className="underline hover:text-white">
+      Terms of Service
+    </a>
+  </div>
+</footer>
+
       </main>
     </>
   );
