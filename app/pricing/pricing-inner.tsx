@@ -1,8 +1,57 @@
 // app/welcome/page.tsx
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+
+/** Polls the backend for paid=true after checkout click. */
+function PaidWatcher() {
+  const router = useRouter();
+  const search = useSearchParams();
+  const [checking, setChecking] = useState(false);
+  const tried = useRef(false);
+
+  useEffect(() => {
+    const fromCheckout =
+      search.get("checkout") === "success" ||
+      typeof window !== "undefined" && localStorage.getItem("ellie-await-paid") === "1";
+
+    if (!fromCheckout || tried.current) return;
+    tried.current = true;
+    setChecking(true);
+
+    let tries = 0;
+    const maxTries = 60; // ~90s @ 1.5s
+    const iv = setInterval(async () => {
+      tries++;
+      try {
+        const r = await fetch("/api/auth/me", { credentials: "include" });
+        const json = await r.json();
+        if (json?.paid) {
+          localStorage.removeItem("ellie-await-paid");
+          clearInterval(iv);
+          router.push("/chat");
+        }
+      } catch {
+        // ignore transient errors
+      }
+      if (tries >= maxTries) {
+        clearInterval(iv);
+        setChecking(false);
+      }
+    }, 1500);
+
+    return () => clearInterval(iv);
+  }, [router, search]);
+
+  if (!checking) return null;
+  return (
+    <div className="my-3 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-sm text-white/80">
+      Activating your subscription… this usually takes a few seconds.
+    </div>
+  );
+}
 
 export default function WelcomePage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -219,7 +268,7 @@ export default function WelcomePage() {
     const uDpr = gl.getUniformLocation(prog, "u_dpr");
 
     const resize = () => {
-      const dpr = Math.min(2, window.devicePixelRatio || 1); // cap for perf
+      const dpr = Math.min(2, (window.devicePixelRatio as number) || 1); // cap for perf
       const w = Math.floor(window.innerWidth);
       const h = Math.floor(window.innerHeight);
       canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -283,6 +332,9 @@ export default function WelcomePage() {
             >
               welcome
             </h1>
+
+            {/* Start polling after user clicks Subscribe */}
+            <PaidWatcher />
           </div>
 
           {/* Two pricing columns */}
@@ -296,15 +348,19 @@ export default function WelcomePage() {
               </div>
               <Link
                 href="https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a"
-		 target="_blank"
-		 rel="noopener noreferrer"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  // flag so the watcher knows to poll when user returns
+                  try { localStorage.setItem("ellie-await-paid", "1"); } catch {}
+                }}
                 className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-white text-black font-semibold px-4 py-2.5 hover:scale-[1.01] active:scale-[0.99] transition card-hover"
               >
                 Subscribe Monthly - $9.99
               </Link>
             </div>
 
-            {/* Yearly */}
+            {/* Yearly / Bundle */}
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(60,180,255,0.15)]">
               <div className="text-xs font-semibold tracking-wide text-white/80">YEARLY</div>
               <div className="mt-2 text-4xl font-bold">$89.99</div>
@@ -313,8 +369,11 @@ export default function WelcomePage() {
               </div>
               <Link
                 href="https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4"
- 		 target="_blank"
-		  rel="noopener noreferrer"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => {
+                  try { localStorage.setItem("ellie-await-paid", "1"); } catch {}
+                }}
                 className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 font-semibold hover:bg-white/10 transition card-hover"
               >
                 Subscribe Bundle, 3 months 29.80
