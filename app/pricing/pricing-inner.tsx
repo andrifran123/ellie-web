@@ -2,7 +2,6 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 function PaidWatcher() {
@@ -30,8 +29,9 @@ function PaidWatcher() {
   }
 
   useEffect(() => {
-    // 1) initial check
-    checkPaidOnce();
+  checkPaidOnce();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
     // 2) steady polling (every 2s)
     pollRef.current = setInterval(checkPaidOnce, 2000);
@@ -137,7 +137,7 @@ export default function PricingInner() {
     const compile = (src: string, type: number) => {
       const sh = gl.createShader(type)!;
       gl.shaderSource(sh, src); gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILER_STATUS ?? gl.COMPILE_STATUS)) {
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
         const info = gl.getShaderInfoLog(sh) || "unknown";
         gl.deleteShader(sh); throw new Error("Shader compile failed: " + info);
       }
