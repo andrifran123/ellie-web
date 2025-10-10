@@ -7,30 +7,27 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ||
   "https://ellie-api-1.onrender.com";
 
-/**
- * Lemon plan URLs you pasted earlier.
- * Change these if you regenerate products/checkout links.
- */
+/** Your Lemon URLs */
 const LEMON_MONTHLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a";
 const LEMON_YEARLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4";
 
 export default function PricingInner() {
-  // UI + flow state
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [redirecting, setRedirecting] = useState(false);
 
-  // polling timer + starter
+  // store logged-in email so we can lock it in Lemon checkout
+  const emailRef = useRef<string | null>(null);
+
+  // polling book-keeping
   const pollRef = useRef<number | null>(null);
   const startPollingRef = useRef<(() => void) | null>(null);
 
-  // shader canvas
+  // nebula canvas
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // ───────────────────────────────────────────────────────────
-  // Helpers
-  // ───────────────────────────────────────────────────────────
+  // ───────────────────────── helpers ─────────────────────────
   const goChat = useCallback(() => {
     setRedirecting(true);
     window.location.href = "/chat";
@@ -43,13 +40,18 @@ export default function PricingInner() {
         headers: { "Cache-Control": "no-cache" },
       });
       const j = await r.json();
+      // capture email for later (to prefill/lock Lemon checkout)
+      if (j?.email) emailRef.current = j.email as string;
+
       if (j?.paid) {
         setStatusMsg("Payment confirmed. Taking you to Chat…");
         goChat();
         return true;
       }
-    } catch {
-      // ignore one-off failures
+    } catch (e) {
+      // network/cors issue → just try again on next tick
+      // eslint-disable-next-line no-console
+      console.debug("checkPaidOnce error:", e);
     }
     return false;
   }, [goChat]);
@@ -70,22 +72,24 @@ export default function PricingInner() {
       }
     };
 
-    // silent first check
+    // do an immediate check and then keep polling
     tick();
     pollRef.current = window.setInterval(tick, 1500);
   }, [checkPaidOnce]);
 
-  // expose starter for click handlers
   useEffect(() => {
     startPollingRef.current = beginPolling;
+    // prime emailRef (useful if they land here logged-in before clicking)
+    checkPaidOnce().catch(() => {});
     return () => {
       startPollingRef.current = null;
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
     };
-  }, [beginPolling]);
+  }, [beginPolling, checkPaidOnce]);
 
-  // listen for Lemon postMessage “checkout_success” before showing “Activating…”
+  // Listen for Lemon's success postMessage (works if checkout is embedded).
+  // We still start polling on click so new-tab checkout also works.
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
       try {
@@ -113,16 +117,39 @@ export default function PricingInner() {
     return () => window.removeEventListener("message", onMsg);
   }, [beginPolling]);
 
-  // click handler: open Lemon + start silent polling
+  /** Build a Lemon URL with the session email prefilled and locked */
+  const withLockedEmail = (baseUrl: string) => {
+    try {
+      const u = new URL(baseUrl);
+      const email = emailRef.current;
+      if (email) {
+        // Prefill & lock the email so the webhook’s email matches the session
+        u.searchParams.set("checkout[email]", email);
+        u.searchParams.set("checkout[lock_email]", "true");
+        // Also include custom payload for our webhook fallback
+        u.searchParams.set("checkout[custom][email]", email);
+      }
+      return u.toString();
+    } catch {
+      return baseUrl; // if URL parsing fails, fall back
+    }
+  };
+
+  // click → open Lemon in new tab + silent polling
   const openLemonAndPoll =
     (url: string) =>
-    (e: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
+    async (e: React.MouseEvent<HTMLAnchorElement | HTMLButtonElement>) => {
       e.preventDefault();
       setStatusMsg(null);
+
+      // refresh email (in case the page sat for a while)
+      await checkPaidOnce();
+
+      const finalUrl = withLockedEmail(url);
       try {
-        window.open(url, "_blank", "noopener,noreferrer");
+        window.open(finalUrl, "_blank", "noopener,noreferrer");
       } catch {
-        window.location.href = url;
+        window.location.href = finalUrl;
       }
       startPollingRef.current?.();
     };
@@ -134,9 +161,7 @@ export default function PricingInner() {
     if (!ok) setStatusMsg("No active subscription yet.");
   };
 
-  // ───────────────────────────────────────────────────────────
-  // Nebula background (WebGL2)
-  // ───────────────────────────────────────────────────────────
+  // ───────────────────────── nebula bg ────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current!;
     const gl =
@@ -147,7 +172,6 @@ export default function PricingInner() {
       }) || null;
 
     if (!gl) {
-      // graceful fallback if WebGL2 is unavailable
       canvas.style.background =
         "radial-gradient(1200px circle at 60% 70%, #120824, #060214 55%, #03010b 85%)";
       return;
@@ -164,108 +188,49 @@ export default function PricingInner() {
 
     const FRAG = `#version 300 es
     precision highp float;
-
     out vec4 fragColor;
     in vec2 vUv;
-
     uniform float u_time;
     uniform vec2  u_res;
     uniform float u_ratio;
     uniform float u_dpr;
-
-    float hash(vec2 p) {
-      p = fract(p * vec2(123.34, 456.21));
-      p += dot(p, p + 45.32);
-      return fract(p.x * p.y);
+    float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y);}
+    float noise(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); float a=hash(i); float b=hash(i+vec2(1.0,0.0));
+      float c=hash(i+vec2(0.0,1.0)); float d=hash(i+vec2(1.0,1.0)); vec2 u=f*f*(3.0-2.0*f);
+      return mix(a,b,u.x)+(c-a)*u.y*(1.0-u.x)+(d-b)*u.x*u.y; }
+    float fbm(vec2 p){ float v=0.0; float a=0.5; for(int i=0;i<6;i++){ v+=a*noise(p); p*=2.02; a*=0.5;} return v; }
+    float starKernel(vec2 d,float sz){ float r=length(d); float core=smoothstep(sz,0.0,r); float glow=smoothstep(0.6,0.0,r/(sz*4.0)); return core*0.85+glow*0.35; }
+    float starLayer(vec2 uv,float density,float size,float speed,float twinkle,vec2 dir){
+      vec2 sUv=uv+dir*speed*u_time; vec2 grid=sUv*density; vec2 cell=floor(grid); vec2 f=fract(grid);
+      float rnd=hash(cell);
+      vec2 starPos=fract(vec2(sin(rnd*37.0)*43758.5,sin(rnd*91.0)*12345.6));
+      vec2 d=f-starPos; float base=starKernel(d,size);
+      float tw=sin(u_time*(0.5+twinkle*2.0)+rnd*12.0)*0.5+0.5;
+      float flash=step(0.9975,hash(cell+7.0))*(sin(u_time*8.0+rnd*50.0)*0.5+0.5);
+      return base*(0.55+0.45*tw)+flash*0.35*base;
     }
-    float noise(vec2 p) {
-      vec2 i = floor(p);
-      vec2 f = fract(p);
-      float a = hash(i);
-      float b = hash(i + vec2(1.0, 0.0));
-      float c = hash(i + vec2(0.0, 1.0));
-      float d = hash(i + vec2(1.0, 1.0));
-      vec2 u = f*f*(3.0-2.0*f);
-      return mix(a, b, u.x) + (c - a)*u.y*(1.0-u.x) + (d - b)*u.x*u.y;
-    }
-    float fbm(vec2 p) {
-      float v = 0.0;
-      float a = 0.5;
-      for (int i = 0; i < 6; i++) {
-        v += a * noise(p);
-        p *= 2.02;
-        a *= 0.5;
-      }
-      return v;
-    }
-
-    float starKernel(vec2 d, float sz) {
-      float r = length(d);
-      float core = smoothstep(sz, 0.0, r);
-      float glow = smoothstep(0.6, 0.0, r / (sz*4.0));
-      return core * 0.85 + glow * 0.35;
-    }
-
-    float starLayer(vec2 uv, float density, float size, float speed, float twinkle, vec2 dir) {
-      vec2 sUv = uv + dir * speed * u_time;
-      vec2 grid = sUv * density;
-      vec2 cell = floor(grid);
-      vec2 f = fract(grid);
-      float rnd = hash(cell);
-      vec2 starPos = fract(vec2(
-        sin(rnd * 37.0) * 43758.5,
-        sin(rnd * 91.0) * 12345.6
-      ));
-      vec2 d = f - starPos;
-      float base = starKernel(d, size);
-      float tw = sin(u_time * (0.5 + twinkle * 2.0) + rnd * 12.0) * 0.5 + 0.5;
-      float flash = step(0.9975, hash(cell + 7.0)) * (sin(u_time * 8.0 + rnd * 50.0) * 0.5 + 0.5);
-      return base * (0.55 + 0.45 * tw) + flash * 0.35 * base;
-    }
-
-    void main() {
-      vec2 uv = (vUv - 0.5);
-      uv.x *= u_ratio;
-
-      vec2 cam = vec2(sin(u_time*0.03), cos(u_time*0.025));
-
-      float n1 = fbm((uv * 1.6 + cam * 0.10) * 2.0 + u_time * 0.03);
-      float n2 = fbm((uv * 0.9 + cam * 0.05) * 3.0 - u_time * 0.02);
-      float n3 = fbm((uv * 2.8 - cam * 0.02) * 1.7 + u_time * 0.015);
-      float neb = clamp(n1*0.6 + n2*0.8 + n3*0.4, 0.0, 1.2);
-
-      vec3 colA = vec3(0.06, 0.04, 0.14);
-      vec3 colB = vec3(0.45, 0.14, 0.62);
-      vec3 colC = vec3(0.22, 0.60, 0.86);
-      vec3 nebula = mix(colA, colB, smoothstep(0.15, 0.85, neb));
-      nebula = mix(nebula, colC, pow(smoothstep(0.35, 1.0, neb), 2.2) * 0.6);
-
-      float r = length(uv);
-      float vig = smoothstep(1.0, 0.25, r);
-
-      vec2 suv = uv;
-      suv.x = suv.x / max(1e-4, u_ratio);
-      suv = suv + 0.5;
-
-      vec2 dir = normalize(vec2(0.6, -0.4));
-
-      float sf = starLayer(suv * 0.85, 420.0, 0.010, 0.004, 0.8, dir);
-      float sm = starLayer(suv * 1.20, 260.0, 0.016, 0.010, 1.0, dir);
-      float sn = starLayer(suv * 1.65, 160.0, 0.024, 0.022, 1.3, dir);
-
-      vec3 starCol = vec3(1.0, 1.0, 1.0) * 0.85 + vec3(0.05, 0.10, 0.20);
-
-      vec3 color = nebula * (0.5 + 0.5 * vig);
-      color += starCol * (sf * 0.9 + sm * 0.8 + sn * 0.75);
-
-      float dust = noise(suv * u_res.xy * 0.35) * 0.06;
-      color += vec3(dust);
-
-      color = pow(color, vec3(0.94));
-      fragColor = vec4(color, 1.0);
+    void main(){
+      vec2 uv=(vUv-0.5); uv.x*=u_ratio;
+      vec2 cam=vec2(sin(u_time*0.03),cos(u_time*0.025));
+      float n1=fbm((uv*1.6+cam*0.10)*2.0+u_time*0.03);
+      float n2=fbm((uv*0.9+cam*0.05)*3.0-u_time*0.02);
+      float n3=fbm((uv*2.8-cam*0.02)*1.7+u_time*0.015);
+      float neb=clamp(n1*0.6+n2*0.8+n3*0.4,0.0,1.2);
+      vec3 colA=vec3(0.06,0.04,0.14), colB=vec3(0.45,0.14,0.62), colC=vec3(0.22,0.60,0.86);
+      vec3 nebula=mix(colA,colB,smoothstep(0.15,0.85,neb));
+      nebula=mix(nebula,colC,pow(smoothstep(0.35,1.0,neb),2.2)*0.6);
+      float r=length(uv); float vig=smoothstep(1.0,0.25,r);
+      vec2 suv=uv; suv.x=suv.x/max(1e-4,u_ratio); suv+=0.5;
+      vec2 dir=normalize(vec2(0.6,-0.4));
+      float sf=starLayer(suv*0.85,420.0,0.010,0.004,0.8,dir);
+      float sm=starLayer(suv*1.20,260.0,0.016,0.010,1.0,dir);
+      float sn=starLayer(suv*1.65,160.0,0.024,0.022,1.3,dir);
+      vec3 starCol=vec3(1.0,1.0,1.0)*0.85+vec3(0.05,0.10,0.20);
+      vec3 color=nebula*(0.5+0.5*vig); color+=starCol*(sf*0.9+sm*0.8+sn*0.75);
+      float dust=noise(suv*u_res.xy*0.35)*0.06; color+=vec3(dust);
+      color=pow(color,vec3(0.94)); fragColor=vec4(color,1.0);
     }`;
 
-    // compile/link helpers
     const compile = (src: string, type: number) => {
       const sh = gl.createShader(type)!;
       gl.shaderSource(sh, src);
@@ -300,7 +265,6 @@ export default function PricingInner() {
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
 
-    // fullscreen triangle
     const tri = new Float32Array([-1, -1, 3, -1, -1, 3]);
     const vbo = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -353,12 +317,9 @@ export default function PricingInner() {
     };
   }, []);
 
-  // ───────────────────────────────────────────────────────────
-  // UI
-  // ───────────────────────────────────────────────────────────
+  // ───────────────────────── UI ─────────────────────────
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      {/* background */}
       <canvas ref={canvasRef} className="absolute inset-0 block" />
       <div
         aria-hidden
@@ -370,7 +331,6 @@ export default function PricingInner() {
         }}
       />
 
-      {/* status / redirect toasts */}
       {statusMsg ? (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-xl bg-white/90 text-black px-4 py-2 text-sm shadow-lg z-50">
           {statusMsg}
@@ -382,7 +342,6 @@ export default function PricingInner() {
         </div>
       ) : null}
 
-      {/* content */}
       <main className="relative z-10 flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-6xl">
           <div className="text-center mb-10">
@@ -393,7 +352,8 @@ export default function PricingInner() {
               Pricing
             </h1>
             <p className="mt-3 text-white/70">
-              Pick a plan. You’ll be redirected to Chat once your payment is active.
+              Pick a plan. We’ll take you to Chat as soon as your payment is
+              active.
             </p>
           </div>
 
@@ -446,7 +406,10 @@ export default function PricingInner() {
                 Check my status
               </button>
             </div>
-            <div>After your plan is active, we’ll take you to Chat automatically.</div>
+            <div>
+              We’ll prefill &amp; lock your checkout email to match your account,
+              so activation is instant once the payment clears.
+            </div>
           </div>
         </div>
       </main>
