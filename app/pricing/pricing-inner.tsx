@@ -5,58 +5,75 @@ import React, { useEffect, useRef, useState } from "react";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ||
-  "https://ellie-api-1.onrender.com"; // Render API base
+  "https://ellie-api-1.onrender.com";
 
 export default function PricingInner() {
-  // UI state for the “redirecting…” toast
   const [redirecting, setRedirecting] = useState(false);
 
-  // Refs so we can clean them up
+  // Refs so we can share helpers with click handlers
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startPollingRef = useRef<(() => void) | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // ───────────────────────────────────────────────────────────
-  // 1) Lemon → postMessage listener + polling /api/auth/me
-  //    (no missing-deps warning: helpers live inside effect)
-  // ───────────────────────────────────────────────────────────
+  // Helper: go to chat
+  const goChat = () => {
+    setRedirecting(true);
+    window.location.href = "/chat";
+  };
+
+  // Helper: check /api/auth/me once
+  const checkPaidOnce = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/auth/me`, {
+        credentials: "include",
+        headers: { "Cache-Control": "no-cache" },
+      });
+      const j = await r.json();
+      if (j?.paid) {
+        goChat();
+        return true;
+      }
+    } catch {
+      /* ignore */
+    }
+    return false;
+  };
+
+  // 1) Lemon success via postMessage (works if embedded or they post to us)
   useEffect(() => {
     let mounted = true;
 
-    const goChat = () => {
-      if (!mounted) return;
-      setRedirecting(true);
-      window.location.href = "/chat";
-    };
-
-    const checkPaidOnce = async () => {
-      try {
-        const r = await fetch(`${API_BASE}/api/auth/me`, {
-          credentials: "include",
-          headers: { "Cache-Control": "no-cache" },
-        });
-        const j = await r.json();
-        if (j?.paid) goChat();
-      } catch {
-        /* ignore */
-      }
-    };
-
     const beginPolling = () => {
       if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(checkPaidOnce, 1500);
-      // also one immediate check so users don’t wait
-      checkPaidOnce();
+      // poll fast for the first 10s, then every 2s, stop after 3 minutes
+      const started = Date.now();
+      const tick = async () => {
+        const ok = await checkPaidOnce();
+        if (ok) return;
+        const elapsed = Date.now() - started;
+        if (elapsed > 3 * 60 * 1000) {
+          // stop after 3 minutes max
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setRedirecting(false);
+        }
+      };
+      // immediate try + interval
+      tick();
+      pollRef.current = setInterval(tick, 1500);
+      setRedirecting(true);
     };
+
+    // expose to click handlers
+    startPollingRef.current = beginPolling;
 
     const onMsg = (ev: MessageEvent) => {
       try {
-        // Accept from lemonsqueezy or same-origin only
         const okOrigin =
           typeof ev.origin === "string" &&
           (ev.origin.includes("lemonsqueezy.com") ||
             ev.origin === window.location.origin);
         if (!okOrigin) return;
-
         const data = ev.data;
         if (!data || typeof data !== "object") return;
 
@@ -72,21 +89,29 @@ export default function PricingInner() {
       }
     };
 
-    window.addEventListener("message", onMsg);
+    // When user returns to this tab, try once
+    const onVis = () => {
+      if (document.visibilityState === "visible") {
+        checkPaidOnce();
+      }
+    };
 
-    // If the user already had paid cookie/session, jump quickly
+    window.addEventListener("message", onMsg);
+    document.addEventListener("visibilitychange", onVis);
+
+    // If they were already paid (cookie), jump
     checkPaidOnce();
 
     return () => {
       mounted = false;
       window.removeEventListener("message", onMsg);
+      document.removeEventListener("visibilitychange", onVis);
       if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
     };
   }, []);
 
-  // ───────────────────────────────────────────────────────────
-  // 2) Nebula WebGL2 background (same as your welcome page)
-  // ───────────────────────────────────────────────────────────
+  // 2) Nebula WebGL2 background
   useEffect(() => {
     const canvas = canvasRef.current!;
     if (!canvas) return;
@@ -213,7 +238,6 @@ export default function PricingInner() {
       const sh = gl.createShader(type)!;
       gl.shaderSource(sh, src);
       gl.compileShader(sh);
-      // IMPORTANT: use COMPILE_STATUS (typo here breaks TS builds)
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
         const info = gl.getShaderInfoLog(sh) || "unknown";
         gl.deleteShader(sh);
@@ -296,9 +320,18 @@ export default function PricingInner() {
     };
   }, []);
 
-  // ───────────────────────────────────────────────────────────
-  // UI
-  // ───────────────────────────────────────────────────────────
+  // Click → open Lemon (new tab) AND start polling here
+  const openLemonAndPoll = (url: string) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {
+      // fallback: navigate current tab if popup blocked
+      window.location.href = url;
+    }
+    startPollingRef.current?.();
+  };
+
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
       {/* Nebula canvas */}
@@ -322,7 +355,6 @@ export default function PricingInner() {
         </div>
       ) : null}
 
-      {/* Content */}
       <main className="relative z-10 flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-6xl">
           <div className="text-center mb-10">
@@ -334,7 +366,6 @@ export default function PricingInner() {
             </h1>
           </div>
 
-          {/* Two pricing columns */}
           <div className="grid gap-5 md:grid-cols-2">
             {/* Monthly */}
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
@@ -344,18 +375,20 @@ export default function PricingInner() {
                 Unlimited chat and voice. Memory &amp; mood. Cancel anytime.
               </div>
 
-              {/* Lemon hosted checkout – opens in new tab */}
               <a
                 href="https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a"
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={openLemonAndPoll(
+                  "https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a"
+                )}
                 className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-white text-black font-semibold px-4 py-2.5 hover:scale-[1.01] active:scale-[0.99] transition"
               >
                 Subscribe Monthly — $9.99
               </a>
             </div>
 
-            {/* Yearly (or your bundle) */}
+            {/* Yearly / bundle */}
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(60,180,255,0.15)]">
               <div className="text-xs font-semibold tracking-wide text-white/80">YEARLY</div>
               <div className="mt-2 text-4xl font-bold">$89.99</div>
@@ -367,6 +400,9 @@ export default function PricingInner() {
                 href="https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4"
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={openLemonAndPoll(
+                  "https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4"
+                )}
                 className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 font-semibold hover:bg-white/10 transition"
               >
                 Subscribe Bundle — 3 months $29.80
@@ -374,8 +410,19 @@ export default function PricingInner() {
             </div>
           </div>
 
-          <div className="mt-8 text-center text-xs text-white/60">
-            After payment completes, we’ll detect your active plan and take you straight to Chat.
+          {/* Manual fallback action */}
+          <div className="mt-8 text-center text-xs text-white/70">
+            Paid already but still here?{" "}
+            <button
+              onClick={() => {
+                setRedirecting(true);
+                checkPaidOnce().finally(() => setRedirecting(false));
+              }}
+              className="underline underline-offset-2 hover:opacity-80"
+            >
+              Check my status
+            </button>
+            .
           </div>
         </div>
       </main>
