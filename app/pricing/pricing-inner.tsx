@@ -3,6 +3,13 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+/**
+ * We call our backend through Next.js rewrites on the SAME ORIGIN.
+ * This makes the browser include the httpOnly session cookie.
+ * (So do NOT put an absolute https://… host in front of /api here.)
+ */
+// const API_BASE = ""; // (intentionally unused)
+
 /** Your Lemon URLs */
 const LEMON_MONTHLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a";
@@ -394,7 +401,7 @@ export default function PricingInner() {
           {/* helper row */}
           <div className="mt-8 text-center text-xs text-white/70 space-y-3">
             <div>
-              Paid already but still here?{" "}
+              Pai already but still here?{" "}
               <button
                 onClick={onCheckStatus}
                 className="underline underline-offset-4 hover:opacity-80"
