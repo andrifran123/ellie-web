@@ -9,18 +9,20 @@ type Json =
 
 let csrfToken: string | null = null;
 
-/**
- * Normalizes a path to always begin with /api
+/** 🔄 Back-compat for older code importing { API }.
+ *  We now use relative /api paths, so this is just an empty base.
+ *  You can safely remove usages later.
  */
+export const API = "";
+
+/** Normalize a path to always begin with /api */
 function toApiPath(path: string): string {
   return path.startsWith("/api")
     ? path
     : `/api${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
-/**
- * Refresh the current session and grab csrfToken + subscription state
- */
+/** Refresh session & fetch csrfToken + paid flag */
 export async function refreshSession(): Promise<{ email: string | null; paid: boolean }> {
   const r = await fetch(toApiPath("/auth/me"), { credentials: "include" });
   const data = await r.json();
@@ -28,11 +30,9 @@ export async function refreshSession(): Promise<{ email: string | null; paid: bo
   return { email: data?.email ?? null, paid: !!data?.paid };
 }
 
-/**
- * POST JSON
- */
+/** POST JSON */
 export async function apiPost<T>(path: string, body?: Json): Promise<T> {
-  if (!csrfToken) await refreshSession(); // ensure csrf token
+  if (!csrfToken) await refreshSession();
 
   const res = await fetch(toApiPath(path), {
     method: "POST",
@@ -52,9 +52,7 @@ export async function apiPost<T>(path: string, body?: Json): Promise<T> {
   return res.json();
 }
 
-/**
- * POST FormData
- */
+/** POST FormData */
 export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   if (!csrfToken) await refreshSession();
 
