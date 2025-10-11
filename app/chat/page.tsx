@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { API, refreshSession, apiPost, apiPostForm } from "@/lib/api";
+import { refreshSession, apiPost, apiPostForm } from "@/lib/api";
 
 type ChatMsg = { from: "you" | "ellie"; text: string; ts: number };
 
@@ -108,9 +108,7 @@ export default function ChatPage() {
   // ───────────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      if (!API) return;
-
-      // Ensure session + CSRF token is loaded
+      // Ensure session + CSRF token is loaded (sets cookie if present)
       await refreshSession().catch(() => {});
 
       const stored = typeof window !== "undefined"
@@ -118,11 +116,9 @@ export default function ChatPage() {
         : null;
 
       if (stored) {
-        await fetch(`${API}/api/set-language`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: USER_ID, language: stored }),
-          credentials: "include", // <-- keep cookie
+        await apiPost<SetLanguageResponse>("/api/set-language", {
+          userId: USER_ID,
+          language: stored,
         }).catch(() => {});
         setChosenLang(stored);
         setLangReady(true);
@@ -130,10 +126,9 @@ export default function ChatPage() {
       }
 
       try {
-        const r = await fetch(
-          `${API}/api/get-language?userId=${encodeURIComponent(USER_ID)}`,
-          { credentials: "include" } // <-- keep cookie
-        );
+        const r = await fetch(`/api/get-language?userId=${encodeURIComponent(USER_ID)}`, {
+          credentials: "include",
+        });
         const data = (await r.json()) as GetLanguageResponse;
         if (data?.language) {
           localStorage.setItem("ellie_language", data.language);
@@ -148,15 +143,11 @@ export default function ChatPage() {
   }, []);
 
   const confirmLanguage = useCallback(async () => {
-    if (!API) return;
     try {
-      const r = await fetch(`${API}/api/set-language`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: USER_ID, language: chosenLang }),
-        credentials: "include", // <-- keep cookie
+      const data = await apiPost<SetLanguageResponse>("/api/set-language", {
+        userId: USER_ID,
+        language: chosenLang,
       });
-      const data = (await r.json()) as SetLanguageResponse;
       const saved = data?.language ?? chosenLang;
       localStorage.setItem("ellie_language", saved);
       setLangReady(true);
@@ -175,7 +166,7 @@ export default function ChatPage() {
   }, []);
 
   const sendText = useCallback(async () => {
-    if (!API || !langReady) return;
+    if (!langReady) return;
     const msg = input.trim();
     if (!msg) return;
     setInput("");
@@ -204,15 +195,9 @@ export default function ChatPage() {
   }, [append, input, langReady, show, router]);
 
   const resetConversation = useCallback(async () => {
-    if (!API) return;
     setMessages([]);
     setVoiceMode(null);
-    await fetch(`${API}/api/reset`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: USER_ID }),
-      credentials: "include", // <-- keep cookie
-    }).catch(() => {});
+    await apiPost("/api/reset", { userId: USER_ID }).catch(() => {});
     show("Conversation reset");
   }, [show]);
 
@@ -223,7 +208,7 @@ export default function ChatPage() {
     MediaRecorder.isTypeSupported(mime);
 
   const sendVoiceBlob = useCallback(async (blob: Blob, mimeType?: string) => {
-    if (!API || !langReady) return;
+    if (!langReady) return;
     setTyping(true);
     setLoading(true);
     try {
@@ -310,14 +295,14 @@ export default function ChatPage() {
 
   const openSettings = useCallback(async () => {
     setSettingsOpen(true);
-    if (loadingPresets.current || !API) return;
+    if (loadingPresets.current) return;
     loadingPresets.current = true;
     try {
       const [pr, cr] = await Promise.all([
-        fetch(`${API}/api/get-voice-presets`, { credentials: "include" }).then((r) =>
+        fetch(`/api/get-voice-presets`, { credentials: "include" }).then((r) =>
           r.json() as Promise<PresetsResponse>
         ),
-        fetch(`${API}/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`, {
+        fetch(`/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`, {
           credentials: "include",
         }).then((r) => r.json() as Promise<CurrentPresetResponse>),
       ]);
@@ -332,11 +317,11 @@ export default function ChatPage() {
 
   const applyPreset = useCallback(async (key: string) => {
     try {
-      const r = await fetch(`${API}/api/apply-voice-preset`, {
+      const r = await fetch(`/api/apply-voice-preset`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId: USER_ID, preset: key }),
-        credentials: "include", // <-- keep cookie
+        credentials: "include",
       });
       const data = (await r.json()) as ApplyPresetResponse;
       if (data?.ok) {
