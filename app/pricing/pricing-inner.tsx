@@ -4,11 +4,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * We call our backend through Next.js rewrites on the SAME ORIGIN.
- * This makes the browser include the httpOnly session cookie.
- * (So do NOT put an absolute https://… host in front of /api here.)
+ * IMPORTANT: use relative calls so cookies live on the same host as the app.
+ * Leave API_BASE empty and always fetch('/api/...').
  */
-// const API_BASE = ""; // (intentionally unused)
+const API_BASE = ""; // <- unified to relative
 
 /** Your Lemon URLs */
 const LEMON_MONTHLY_URL =
@@ -43,6 +42,7 @@ export default function PricingInner() {
         headers: { "Cache-Control": "no-cache" },
       });
       const j = await r.json();
+
       // capture email for later (to prefill/lock Lemon checkout)
       if (j?.email) emailRef.current = j.email as string;
 
@@ -52,9 +52,8 @@ export default function PricingInner() {
         return true;
       }
     } catch (e) {
-      // network/cors issue → just try again on next tick
-      // eslint-disable-next-line no-console
-      console.debug("checkPaidOnce error:", e);
+      // just try again on next tick
+      // console.debug("checkPaidOnce error:", e);
     }
     return false;
   }, [goChat]);
@@ -401,7 +400,7 @@ export default function PricingInner() {
           {/* helper row */}
           <div className="mt-8 text-center text-xs text-white/70 space-y-3">
             <div>
-              Pai already but still here?{" "}
+              Paid already but still here?{" "}
               <button
                 onClick={onCheckStatus}
                 className="underline underline-offset-4 hover:opacity-80"
