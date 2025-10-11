@@ -3,10 +3,6 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ||
-  "https://ellie-api-1.onrender.com";
-
 /** Your Lemon URLs */
 const LEMON_MONTHLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a";
@@ -35,7 +31,7 @@ export default function PricingInner() {
 
   const checkPaidOnce = useCallback(async (): Promise<boolean> => {
     try {
-      const r = await fetch(`${API_BASE}/api/auth/me`, {
+      const r = await fetch(`/api/auth/me`, {
         credentials: "include",
         headers: { "Cache-Control": "no-cache" },
       });
