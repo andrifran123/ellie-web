@@ -4,10 +4,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * IMPORTANT: use relative calls so cookies live on the same host as the app.
- * Leave API_BASE empty and always fetch('/api/...').
+ * IMPORTANT:
+ * - Use a configurable API base so cookies go to the API origin when needed.
+ * - If NEXT_PUBLIC_API_BASE is empty, we fall back to relative /api paths.
  */
-const API_BASE = ""; // <- unified to relative
+const API_BASE =
+  (typeof process !== "undefined" && (process as any).env?.NEXT_PUBLIC_API_BASE) || "";
+
+const toApiUrl = (path: string) => {
+  const normalized = path.startsWith("/api") ? path : `/api${path.startsWith("/") ? "" : "/"}${path}`;
+  return API_BASE ? `${API_BASE}${normalized}` : normalized;
+};
 
 /** Your Lemon URLs */
 const LEMON_MONTHLY_URL =
@@ -37,7 +44,7 @@ export default function PricingInner() {
 
   const checkPaidOnce = useCallback(async (): Promise<boolean> => {
     try {
-      const r = await fetch(`/api/auth/me`, {
+      const r = await fetch(toApiUrl("/auth/me"), {
         credentials: "include",
         headers: { "Cache-Control": "no-cache" },
       });
@@ -51,9 +58,8 @@ export default function PricingInner() {
         goChat();
         return true;
       }
-    } catch (e) {
-      // just try again on next tick
-      // console.debug("checkPaidOnce error:", e);
+    } catch {
+      // ignore; we'll check again on next tick
     }
     return false;
   }, [goChat]);
@@ -202,79 +208,46 @@ export default function PricingInner() {
       return mix(a,b,u.x)+(c-a)*u.y*(1.0-u.x)+(d-b)*u.x*u.y; }
     float fbm(vec2 p){ float v=0.0; float a=0.5; for(int i=0;i<6;i++){ v+=a*noise(p); p*=2.02; a*=0.5;} return v; }
     float starKernel(vec2 d,float sz){ float r=length(d); float core=smoothstep(sz,0.0,r); float glow=smoothstep(0.6,0.0,r/(sz*4.0)); return core*0.85+glow*0.35; }
-    float starLayer(vec2 uv,float density,float size,float speed,float twinkle,vec2 dir){
-      vec2 sUv=uv+dir*speed*u_time; vec2 grid=sUv*density; vec2 cell=floor(grid); vec2 f=fract(grid);
-      float rnd=hash(cell);
-      vec2 starPos=fract(vec2(sin(rnd*37.0)*43758.5,sin(rnd*91.0)*12345.6));
-      vec2 d=f-starPos; float base=starKernel(d,size);
-      float tw=sin(u_time*(0.5+twinkle*2.0)+rnd*12.0)*0.5+0.5;
-      float flash=step(0.9975,hash(cell+7.0))*(sin(u_time*8.0+rnd*50.0)*0.5+0.5);
-      return base*(0.55+0.45*tw)+flash*0.35*base;
+    float starLayer(vec2 uv,float density,float size,float seed){
+      float s=0.0; for(int i=0;i<36;i++){ float a=float(i)/36.0*6.2831853+seed; vec2 p=vec2(cos(a),sin(a))*0.5+uv;
+        float n=fbm(p*12.0+seed); vec2 d=uv-p*(0.98+0.04*sin(seed*13.0)); s+=starKernel(d,size*(0.7+0.6*n)); }
+      return s*density;
     }
     void main(){
-      vec2 uv=(vUv-0.5); uv.x*=u_ratio;
-      vec2 cam=vec2(sin(u_time*0.03),cos(u_time*0.025));
-      float n1=fbm((uv*1.6+cam*0.10)*2.0+u_time*0.03);
-      float n2=fbm((uv*0.9+cam*0.05)*3.0-u_time*0.02);
-      float n3=fbm((uv*2.8-cam*0.02)*1.7+u_time*0.015);
-      float neb=clamp(n1*0.6+n2*0.8+n3*0.4,0.0,1.2);
-      vec3 colA=vec3(0.06,0.04,0.14), colB=vec3(0.45,0.14,0.62), colC=vec3(0.22,0.60,0.86);
-      vec3 nebula=mix(colA,colB,smoothstep(0.15,0.85,neb));
-      nebula=mix(nebula,colC,pow(smoothstep(0.35,1.0,neb),2.2)*0.6);
-      float r=length(uv); float vig=smoothstep(1.0,0.25,r);
-      vec2 suv=uv; suv.x=suv.x/max(1e-4,u_ratio); suv+=0.5;
-      vec2 dir=normalize(vec2(0.6,-0.4));
-      float sf=starLayer(suv*0.85,420.0,0.010,0.004,0.8,dir);
-      float sm=starLayer(suv*1.20,260.0,0.016,0.010,1.0,dir);
-      float sn=starLayer(suv*1.65,160.0,0.024,0.022,1.3,dir);
-      vec3 starCol=vec3(1.0,1.0,1.0)*0.85+vec3(0.05,0.10,0.20);
-      vec3 color=nebula*(0.5+0.5*vig); color+=starCol*(sf*0.9+sm*0.8+sn*0.75);
-      float dust=noise(suv*u_res.xy*0.35)*0.06; color+=vec3(dust);
-      color=pow(color,vec3(0.94)); fragColor=vec4(color,1.0);
+      vec2 uv = (vUv - 0.5) * vec2(u_ratio, 1.0);
+      float t = u_time * 0.15;
+      float neb = fbm(uv*1.6 + vec2(t*0.3, -t*0.25));
+      vec3 col = mix(vec3(0.01,0.01,0.06), vec3(0.46,0.38,0.95), smoothstep(0.2,0.85,neb));
+      float stars = starLayer(uv*0.75, 0.08, 0.02, 1.3) + starLayer(uv*1.1, 0.06, 0.015, 2.7);
+      col += vec3(stars*0.65);
+      fragColor = vec4(col, 1.0);
     }`;
 
-    const compile = (src: string, type: number) => {
-      const sh = gl.createShader(type)!;
-      gl.shaderSource(sh, src);
-      gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        const info = gl.getShaderInfoLog(sh) || "unknown";
-        gl.deleteShader(sh);
-        throw new Error("Shader compile failed: " + info);
+    const glsl = (type: number, src: string) => {
+      const shader = gl.createShader(type)!;
+      gl.shaderSource(shader, src);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.warn(gl.getShaderInfoLog(shader) || "shader compile error");
       }
-      return sh;
-    };
-    const link = (vs: WebGLShader, fs: WebGLShader) => {
-      const p = gl.createProgram()!;
-      gl.attachShader(p, vs);
-      gl.attachShader(p, fs);
-      gl.bindAttribLocation(p, 0, "pos");
-      gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-        const info = gl.getProgramInfoLog(p) || "unknown";
-        gl.deleteProgram(p);
-        throw new Error("Program link failed: " + info);
-      }
-      return p;
+      return shader;
     };
 
-    const vs = compile(VERT, gl.VERTEX_SHADER);
-    const fs = compile(FRAG, gl.FRAGMENT_SHADER);
-    const prog = link(vs, fs);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
+    const prog = gl.createProgram()!;
+    const vs = glsl(gl.VERTEX_SHADER, VERT);
+    const fs = glsl(gl.FRAGMENT_SHADER, FRAG);
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
 
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
-
-    const tri = new Float32Array([-1, -1, 3, -1, -1, 3]);
     const vbo = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, tri, gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-    gl.useProgram(prog);
     const uTime = gl.getUniformLocation(prog, "u_time");
     const uRes = gl.getUniformLocation(prog, "u_res");
     const uRatio = gl.getUniformLocation(prog, "u_ratio");
@@ -282,21 +255,20 @@ export default function PricingInner() {
 
     const resize = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = Math.floor(window.innerWidth);
-      const h = Math.floor(window.innerHeight);
-      canvas.width = Math.max(1, Math.floor(w * dpr));
-      canvas.height = Math.max(1, Math.floor(h * dpr));
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
+      const w = Math.floor(canvas.clientWidth * dpr);
+      const h = Math.floor(canvas.clientHeight * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w; canvas.height = h;
+      }
       gl.viewport(0, 0, canvas.width, canvas.height);
-
       gl.useProgram(prog);
       gl.uniform2f(uRes, canvas.width, canvas.height);
-      gl.uniform1f(uRatio, w / Math.max(1, h));
+      gl.uniform1f(uRatio, canvas.width / canvas.height);
       gl.uniform1f(uDpr, dpr);
     };
+    const onResize = () => resize();
+    window.addEventListener("resize", onResize);
     resize();
-    window.addEventListener("resize", resize, { passive: true });
 
     let start = 0;
     let raf = 0;
@@ -312,7 +284,7 @@ export default function PricingInner() {
 
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", onResize);
       gl.deleteBuffer(vbo);
       gl.deleteVertexArray(vao);
       gl.deleteProgram(prog);
@@ -369,49 +341,47 @@ export default function PricingInner() {
               <div className="mt-4 text-sm text-white/80">
                 Unlimited chat and voice. Memory &amp; mood. Cancel anytime.
               </div>
-              <a
-                href={LEMON_MONTHLY_URL}
-                onClick={openLemonAndPoll(LEMON_MONTHLY_URL)}
-                className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-white text-black font-semibold px-4 py-2.5 hover:scale-[1.01] active:scale-[0.99] transition"
-              >
-                Subscribe Monthly — $9.99
-              </a>
+
+              <div className="mt-6">
+                <a
+                  href={LEMON_MONTHLY_URL}
+                  onClick={openLemonAndPoll(LEMON_MONTHLY_URL)}
+                  className="inline-flex items-center justify-center rounded-xl bg-white text-black px-5 py-3 font-semibold hover:bg-white/90 transition"
+                >
+                  Get Monthly
+                </a>
+              </div>
             </div>
 
-            {/* Yearly / Bundle */}
-            <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(60,180,255,0.15)]">
+            {/* Yearly */}
+            <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
               <div className="text-xs font-semibold tracking-wide text-white/80">
-                YEARLY / BUNDLE
+                YEARLY
               </div>
-              <div className="mt-2 text-4xl font-bold">$89.99</div>
+              <div className="mt-2 text-4xl font-bold">$89</div>
               <div className="mt-4 text-sm text-white/80">
-                2 months free. Priority compute &amp; early features.
+                Two months free. All features included.
               </div>
-              <a
-                href={LEMON_YEARLY_URL}
-                onClick={openLemonAndPoll(LEMON_YEARLY_URL)}
-                className="mt-6 inline-flex w-full items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 font-semibold hover:bg-white/10 transition"
-              >
-                Subscribe Bundle — 3 months $29.80
-              </a>
+
+              <div className="mt-6">
+                <a
+                  href={LEMON_YEARLY_URL}
+                  onClick={openLemonAndPoll(LEMON_YEARLY_URL)}
+                  className="inline-flex items-center justify-center rounded-xl bg-white text-black px-5 py-3 font-semibold hover:bg-white/90 transition"
+                >
+                  Get Yearly
+                </a>
+              </div>
             </div>
           </div>
 
-          {/* helper row */}
-          <div className="mt-8 text-center text-xs text-white/70 space-y-3">
-            <div>
-              Paid already but still here?{" "}
-              <button
-                onClick={onCheckStatus}
-                className="underline underline-offset-4 hover:opacity-80"
-              >
-                Check my status
-              </button>
-            </div>
-            <div>
-              We’ll prefill &amp; lock your checkout email to match your account,
-              so activation is instant once the payment clears.
-            </div>
+          <div className="mt-10 text-center">
+            <button
+              onClick={onCheckStatus}
+              className="inline-flex items-center justify-center rounded-xl border border-white/20 px-4 py-2 text-sm hover:bg-white/10 transition"
+            >
+              I already paid — check my status
+            </button>
           </div>
         </div>
       </main>
