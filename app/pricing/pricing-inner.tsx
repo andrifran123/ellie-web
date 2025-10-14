@@ -1,4 +1,3 @@
-// app/pricing/pricing-inner.tsx
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -8,8 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
  * - Use a configurable API base so cookies go to the API origin when needed.
  * - If NEXT_PUBLIC_API_BASE is empty, we fall back to relative /api paths.
  */
-const API_BASE =
-  (typeof process !== "undefined" && (process as any).env?.NEXT_PUBLIC_API_BASE) || "";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 const toApiUrl = (path: string) => {
   const normalized = path.startsWith("/api") ? path : `/api${path.startsWith("/") ? "" : "/"}${path}`;
@@ -110,9 +108,9 @@ export default function PricingInner() {
         if (!data || typeof data !== "object") return;
 
         if (
-          data.event === "checkout_success" ||
-          data.event === "lemon_checkout_success" ||
-          data.type === "lemon_checkout_success"
+          (data as { event?: string; type?: string }).event === "checkout_success" ||
+          (data as { event?: string; type?: string }).event === "lemon_checkout_success" ||
+          (data as { event?: string; type?: string }).type === "lemon_checkout_success"
         ) {
           setStatusMsg("Activating your plan…");
           beginPolling();

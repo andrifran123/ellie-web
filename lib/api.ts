@@ -13,7 +13,7 @@ let csrfToken: string | null = null;
  * Public API base. If empty, we use relative /api paths (works with a proxy).
  * When set (e.g. https://your-api.onrender.com), we send cookies to that origin.
  */
-export const API = (typeof process !== "undefined" && (process as any).env?.NEXT_PUBLIC_API_BASE) || "";
+export const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 /** Normalize a path to always begin with /api and return an absolute URL when API is set. */
 export function toApiUrl(path: string): string {
