@@ -3,18 +3,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * IMPORTANT:
- * - Use a configurable API base so cookies go to the API origin when needed.
- * - If NEXT_PUBLIC_API_BASE is empty, we fall back to relative /api paths.
+ * We now call relative /api paths (Vercel rewrite proxies to Render).
+ * This avoids CORS and keeps cookies first-party.
  */
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
-
 const toApiUrl = (path: string) => {
   const normalized = path.startsWith("/api") ? path : `/api${path.startsWith("/") ? "" : "/"}${path}`;
-  return API_BASE ? `${API_BASE}${normalized}` : normalized;
+  return normalized;
 };
 
-/** Your Lemon URLs */
+/** Lemon Squeezy URLs (unchanged) */
 const LEMON_MONTHLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a";
 const LEMON_YEARLY_URL =
@@ -42,10 +39,8 @@ export default function PricingInner() {
 
   const checkPaidOnce = useCallback(async (): Promise<boolean> => {
     try {
-      const r = await fetch(toApiUrl("/auth/me"), {
-        credentials: "include",
-        headers: { "Cache-Control": "no-cache" },
-      });
+      // NOTE: no extra headers → simple GET → no preflight
+      const r = await fetch(toApiUrl("/auth/me"), { credentials: "include" });
       const j = await r.json();
 
       // capture email for later (to prefill/lock Lemon checkout)
@@ -107,11 +102,8 @@ export default function PricingInner() {
         const data = ev.data;
         if (!data || typeof data !== "object") return;
 
-        if (
-          (data as { event?: string; type?: string }).event === "checkout_success" ||
-          (data as { event?: string; type?: string }).event === "lemon_checkout_success" ||
-          (data as { event?: string; type?: string }).type === "lemon_checkout_success"
-        ) {
+        const evt = (data as { event?: string; type?: string }).event || (data as { event?: string; type?: string }).type;
+        if (evt === "checkout_success" || evt === "lemon_checkout_success") {
           setStatusMsg("Activating your plan…");
           beginPolling();
         }
@@ -167,9 +159,19 @@ export default function PricingInner() {
     if (!ok) setStatusMsg("No active subscription yet.");
   };
 
-  // ───────────────────────── nebula bg ────────────────────────
+  // ───────────────────────── nebula bg (full-screen) ────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current!;
+    // Ensure canvas covers full viewport
+    const ensureSize = () => {
+      canvas.style.position = "absolute";
+      canvas.style.top = "0";
+      canvas.style.left = "0";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+    };
+    ensureSize();
+
     const gl =
       canvas.getContext("webgl2", {
         antialias: true,
@@ -179,7 +181,7 @@ export default function PricingInner() {
 
     if (!gl) {
       canvas.style.background =
-        "radial-gradient(1200px circle at 60% 70%, #120824, #060214 55%, #03010b 85%)";
+        "radial-gradient(1800px circle at 60% 70%, #120824, #060214 55%, #03010b 85%)";
       return;
     }
 
@@ -252,11 +254,13 @@ export default function PricingInner() {
     const uDpr = gl.getUniformLocation(prog, "u_dpr");
 
     const resize = () => {
+      // ensure canvas truly fills viewport
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = Math.floor(canvas.clientWidth * dpr);
-      const h = Math.floor(canvas.clientHeight * dpr);
+      const w = Math.floor(window.innerWidth * dpr);
+      const h = Math.floor(window.innerHeight * dpr);
       if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w; canvas.height = h;
+        canvas.width = w;
+        canvas.height = h;
       }
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.useProgram(prog);
@@ -292,7 +296,8 @@ export default function PricingInner() {
   // ───────────────────────── UI ─────────────────────────
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      <canvas ref={canvasRef} className="absolute inset-0 block" />
+      {/* Full-screen canvas */}
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-[0.05]"
