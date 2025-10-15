@@ -4,8 +4,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "";
-
 type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
 type SignupResp = { ok?: boolean; message?: string };
@@ -13,8 +11,12 @@ type MeResponse = { email: string | null; paid: boolean };
 type Mode = "signin" | "signup";
 type Flash = "none" | "signedin" | "signedup" | "signedout";
 
+/** Build API paths that always go through Vercel’s /api rewrite (first-party cookies) */
+const toApi = (path: string) =>
+  path.startsWith("/api") ? path : `/api${path.startsWith("/") ? "" : "/"}${path}`;
+
 /* ─────────────────────────────────────────────────────────────
-   Inline Nebula Background (no extra files needed)
+   Inline Nebula Background (full-screen)
    ───────────────────────────────────────────────────────────── */
 function NebulaBackground() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -239,24 +241,21 @@ export default function LoginInnerPage() {
   const [me, setMe] = useState<MeResponse>({ email: null, paid: false });
   const [loadingMe, setLoadingMe] = useState(true);
 
-  // tiny UX cookie used only by middleware (not security)
+  // tiny UX cookie used only by middleware (not for security)
   function setAuthedCookie(on: boolean) {
     document.cookie = `ellie_authed=${on ? "1" : ""}; Path=/; SameSite=Lax; Max-Age=${
       on ? 60 * 60 * 24 * 90 : 0
     }`;
   }
 
+  // Load current session
   useEffect(() => {
-    if (!API) return;
     setLoadingMe(true);
-    fetch(`${API}/api/auth/me`, {
-      credentials: "include",
-      headers: { "X-CSRF": "1" },
-    })
+    fetch(toApi("/auth/me"), { credentials: "include" })
       .then((r) => r.json())
       .then((m: MeResponse) => {
         setMe(m);
-        if (m?.email) setAuthedCookie(true); // ensure middleware lets you through
+        if (m?.email) setAuthedCookie(true); // allow middleware UX
       })
       .catch(() => setMe({ email: null, paid: false }))
       .finally(() => setLoadingMe(false));
@@ -265,9 +264,9 @@ export default function LoginInnerPage() {
   async function signOut() {
     try {
       setLoading(true);
-      await fetch(`${API}/api/auth/logout`, { method: "POST", credentials: "include" });
+      await fetch(toApi("/auth/logout"), { method: "POST", credentials: "include" });
       setMe({ email: null, paid: false });
-      setAuthedCookie(false); // clear UX flag
+      setAuthedCookie(false);
       setFlash("signedout");
     } finally {
       setLoading(false);
@@ -289,14 +288,13 @@ export default function LoginInnerPage() {
     setErr(null);
     const e = siEmail.trim().toLowerCase();
     if (!emailRegex.test(e)) return setErr("Enter a valid email.");
-    if (!API) return setErr("Missing NEXT_PUBLIC_API_URL");
 
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/auth/start`, {
+      const r = await fetch(toApi("/auth/start"), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", "X-CSRF": "1" },
+        headers: { "Content-Type": "application/json" }, // simple header, preflight minimal
         body: JSON.stringify({ email: e }),
       });
       const data: StartResp = await r.json();
@@ -318,14 +316,13 @@ export default function LoginInnerPage() {
     const c = code.trim();
     if (!emailRegex.test(e)) return setErr("Enter a valid email.");
     if (!c) return setErr("Enter the 6-digit code.");
-    if (!API) return setErr("Missing NEXT_PUBLIC_API_URL");
 
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/auth/verify`, {
+      const r = await fetch(toApi("/auth/verify"), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", "X-CSRF": "1" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: e, code: c }),
       });
       const data: VerifyResp = await r.json();
@@ -333,16 +330,17 @@ export default function LoginInnerPage() {
         setErr(data.message || "Invalid or expired code.");
         return;
       }
-      // set session UI & UX cookie
+      // session established
       setMe({ email: e, paid: !!data.paid });
       setAuthedCookie(true);
-      setStep("email");
-      setCode("");
-      setSiEmail("");
       setFlash("signedin");
-      // Optional navigate:
-      // if (data.paid) location.href = dest;
-      // else location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
+
+      // redirect:
+      if (data.paid) {
+        window.location.href = dest || "/chat";
+      } else {
+        window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
+      }
     } catch {
       setErr("Network error.");
     } finally {
@@ -358,14 +356,13 @@ export default function LoginInnerPage() {
     if (!n) return setErr("Enter your name.");
     if (!emailRegex.test(e)) return setErr("Enter a valid email.");
     if (p.length < 8) return setErr("Password must be at least 8 characters.");
-    if (!API) return setErr("Missing NEXT_PUBLIC_API_URL");
 
     setLoading(true);
     try {
-      const r = await fetch(`${API}/api/auth/signup`, {
+      const r = await fetch(toApi("/auth/signup"), {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json", "X-CSRF": "1" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: n, email: e, password: p }),
       });
       const data: SignupResp = await r.json();
@@ -379,8 +376,7 @@ export default function LoginInnerPage() {
       setSuEmail("");
       setPassword("");
       setFlash("signedup");
-      // Optional: go to pricing
-      // location.href = `/pricing?redirect=${encodeURIComponent(dest)}`;
+      window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
     } catch {
       setErr("Network error.");
     } finally {
@@ -573,7 +569,7 @@ export default function LoginInnerPage() {
                               autoComplete="one-time-code"
                             />
                             <button
-                              disabled={loading}
+                              disabled={loading || code.length < 6}
                               onClick={verifyCode}
                               className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
                               aria-busy={loading ? "true" : "false"}
