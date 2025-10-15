@@ -504,12 +504,14 @@ export default function LoginInnerPage() {
                           </>
                         )}
 
-                        {step === "code" and (
+                        {step === "code" && (
                           <>
                             <label className="text-sm text-white/80">Enter 6-digit code</label>
                             <input
                               value={code}
-                              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                              onChange={(e) =>
+                                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                              }
                               placeholder="123456"
                               className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none focus:border-white/30 transition"
                               inputMode="numeric"
