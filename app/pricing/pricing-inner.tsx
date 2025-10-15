@@ -1,3 +1,4 @@
+// app/pricing/pricing-inner.tsx
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -10,6 +11,9 @@ const LEMON_MONTHLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/8bcb0766-7f48-42cf-91ec-76f56c813c2a";
 const LEMON_YEARLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4";
+
+type MeResponse = { email: string | null; paid: boolean };
+type LemonMessage = { event?: string; type?: string };
 
 export default function PricingInner() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -24,12 +28,12 @@ export default function PricingInner() {
     (async () => {
       try {
         const r = await fetch(toApi("/auth/me"), { credentials: "include" });
-        const j = await r.json();
+        const j: MeResponse = await r.json();
         if (!j?.email) {
           window.location.href = "/login?redirect=/pricing";
           return;
         }
-        emailRef.current = j.email as string;
+        emailRef.current = j.email;
         if (j?.paid) {
           window.location.href = "/chat";
           return;
@@ -48,14 +52,16 @@ export default function PricingInner() {
   const checkPaidOnce = useCallback(async (): Promise<boolean> => {
     try {
       const r = await fetch(toApi("/auth/me"), { credentials: "include" });
-      const j = await r.json();
-      if (j?.email) emailRef.current = j.email as string;
+      const j: MeResponse = await r.json();
+      if (j?.email) emailRef.current = j.email;
       if (j?.paid) {
         setStatusMsg("Payment confirmed. Taking you to Chat…");
         goChat();
         return true;
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
     return false;
   }, [goChat]);
 
@@ -85,14 +91,19 @@ export default function PricingInner() {
     };
   }, [beginPolling, checkPaidOnce]);
 
+  // Narrowed message handler (no 'any')
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
       const okOrigin =
         typeof ev.origin === "string" &&
         (ev.origin.includes("lemonsqueezy.com") || ev.origin === window.location.origin);
       if (!okOrigin) return;
-      const data = ev.data as any;
-      const evt = data?.event || data?.type;
+
+      const data: unknown = ev.data;
+      if (!data || typeof data !== "object") return;
+
+      const maybe = data as LemonMessage;
+      const evt = maybe.event ?? maybe.type;
       if (evt === "checkout_success" || evt === "lemon_checkout_success") {
         setStatusMsg("Activating your plan…");
         beginPolling();
@@ -142,7 +153,11 @@ export default function PricingInner() {
   useEffect(() => {
     const canvas = canvasRef.current!;
     const gl =
-      canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: false, powerPreference: "high-performance" }) || null;
+      canvas.getContext("webgl2", {
+        antialias: true,
+        preserveDrawingBuffer: false,
+        powerPreference: "high-performance",
+      }) || null;
 
     const ensureSize = () => {
       canvas.style.position = "absolute";
@@ -170,37 +185,68 @@ export default function PricingInner() {
     void main(){ vec2 uv=(vUv-.5); uv.x*=u_ratio; float t=u_time*.15; float neb=f(uv*1.6+vec2(t*.3,-t*.25));
       vec3 col=mix(vec3(.01,.01,.06), vec3(.46,.38,.95), smoothstep(.2,.85,neb)); fragColor=vec4(col,1.0);} `;
     const sh = (s: string, t: number, glctx: WebGL2RenderingContext) => {
-      const x = glctx.createShader(t)!; glctx.shaderSource(x, s); glctx.compileShader(x); return x;
+      const x = glctx.createShader(t)!;
+      glctx.shaderSource(x, s);
+      glctx.compileShader(x);
+      return x;
     };
     const prog = gl.createProgram()!;
     gl.attachShader(prog, sh(VERT, gl.VERTEX_SHADER, gl));
     gl.attachShader(prog, sh(FRAG, gl.FRAGMENT_SHADER, gl));
     gl.linkProgram(prog);
-    const vao = gl.createVertexArray()!; gl.bindVertexArray(vao);
-    const vbo = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
-    const uTime = gl.getUniformLocation(prog,"u_time");
-    const uRatio = gl.getUniformLocation(prog,"u_ratio");
+    const vao = gl.createVertexArray()!;
+    gl.bindVertexArray(vao);
+    const vbo = gl.createBuffer()!;
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    const uTime = gl.getUniformLocation(prog, "u_time");
+    const uRatio = gl.getUniformLocation(prog, "u_ratio");
 
     const resize = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const w = Math.floor(window.innerWidth * dpr); const h = Math.floor(window.innerHeight * dpr);
-      if (canvas.width!==w || canvas.height!==h){ canvas.width=w; canvas.height=h; }
-      gl.viewport(0,0,canvas.width,canvas.height);
+      const w = Math.floor(window.innerWidth * dpr);
+      const h = Math.floor(window.innerHeight * dpr);
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      gl.viewport(0, 0, canvas.width, canvas.height);
     };
-    window.addEventListener("resize", resize); resize();
-    let start=0; const frame=(t:number)=>{ if(!start) start=t; const sec=(t-start)/1000; gl.useProgram(prog);
-      gl.uniform1f(uTime,sec); gl.uniform1f(uRatio, canvas.width/Math.max(1,canvas.height)); gl.drawArrays(gl.TRIANGLES,0,3); requestAnimationFrame(frame); };
+    window.addEventListener("resize", resize);
+    resize();
+    let start = 0;
+    const frame = (t: number) => {
+      if (!start) start = t;
+      const sec = (t - start) / 1000;
+      gl.useProgram(prog);
+      gl.uniform1f(uTime, sec);
+      gl.uniform1f(uRatio, canvas.width / Math.max(1, canvas.height));
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      requestAnimationFrame(frame);
+    };
     requestAnimationFrame(frame);
-    return ()=>{ window.removeEventListener("resize",resize); gl.deleteBuffer(vbo); gl.deleteVertexArray(vao); gl.deleteProgram(prog); };
+    return () => {
+      window.removeEventListener("resize", resize);
+      gl.deleteBuffer(vbo);
+      gl.deleteVertexArray(vao);
+      gl.deleteProgram(prog);
+    };
   }, []);
 
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
-      <div aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.05]"
-        style={{ background:"linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px", mixBlendMode:"screen" }} />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-[0.05]"
+        style={{
+          background:
+            "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
+          mixBlendMode: "screen",
+        }}
+      />
 
       {statusMsg && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-xl bg-white/90 text-black px-4 py-2 text-sm shadow-lg z-50">
@@ -216,30 +262,52 @@ export default function PricingInner() {
       <main className="relative z-10 flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-6xl">
           <div className="text-center mb-10">
-            <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight" style={{ textShadow:"0 0 32px rgba(140,110,255,0.35)" }}>Pricing</h1>
-            <p className="mt-3 text-white/70">Pick a plan. We’ll take you to Chat as soon as your payment is active.</p>
+            <h1
+              className="text-5xl md:text-7xl font-extrabold tracking-tight"
+              style={{ textShadow: "0 0 32px rgba(140,110,255,0.35)" }}
+            >
+              Pricing
+            </h1>
+            <p className="mt-3 text-white/70">
+              Pick a plan. We’ll take you to Chat as soon as your payment is
+              active.
+            </p>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2">
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
-              <div className="text-xs font-semibold tracking-wide text-white/80">MONTHLY</div>
+              <div className="text-xs font-semibold tracking-wide text-white/80">
+                MONTHLY
+              </div>
               <div className="mt-2 text-4xl font-bold">$9.99</div>
-              <div className="mt-4 text-sm text-white/80">Unlimited chat and voice. Memory &amp; mood. Cancel anytime.</div>
+              <div className="mt-4 text-sm text-white/80">
+                Unlimited chat and voice. Memory &amp; mood. Cancel anytime.
+              </div>
               <div className="mt-6">
-                <a href={LEMON_MONTHLY_URL} onClick={openLemonAndPoll(LEMON_MONTHLY_URL)}
-                   className="inline-flex items-center justify-center rounded-xl bg-white text-black px-5 py-3 font-semibold hover:bg-white/90 transition">
+                <a
+                  href={LEMON_MONTHLY_URL}
+                  onClick={openLemonAndPoll(LEMON_MONTHLY_URL)}
+                  className="inline-flex items-center justify-center rounded-xl bg-white text-black px-5 py-3 font-semibold hover:bg-white/90 transition"
+                >
                   Get Monthly
                 </a>
               </div>
             </div>
 
             <div className="rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
-              <div className="text-xs font-semibold tracking-wide text-white/80">YEARLY</div>
+              <div className="text-xs font-semibold tracking-wide text-white/80">
+                YEARLY
+              </div>
               <div className="mt-2 text-4xl font-bold">$89</div>
-              <div className="mt-4 text-sm text-white/80">Two months free. All features included.</div>
+              <div className="mt-4 text-sm text-white/80">
+                Two months free. All features included.
+              </div>
               <div className="mt-6">
-                <a href={LEMON_YEARLY_URL} onClick={openLemonAndPoll(LEMON_YEARLY_URL)}
-                   className="inline-flex items-center justify-center rounded-xl bg-white text-black px-5 py-3 font-semibold hover:bg-white/90 transition">
+                <a
+                  href={LEMON_YEARLY_URL}
+                  onClick={openLemonAndPoll(LEMON_YEARLY_URL)}
+                  className="inline-flex items-center justify-center rounded-xl bg-white text-black px-5 py-3 font-semibold hover:bg-white/90 transition"
+                >
                   Get Yearly
                 </a>
               </div>
@@ -247,7 +315,10 @@ export default function PricingInner() {
           </div>
 
           <div className="mt-10 text-center">
-            <button onClick={onCheckStatus} className="inline-flex items-center justify-center rounded-xl border border-white/20 px-4 py-2 text-sm hover:bg-white/10 transition">
+            <button
+              onClick={onCheckStatus}
+              className="inline-flex items-center justify-center rounded-xl border border-white/20 px-4 py-2 text-sm hover:bg-white/10 transition"
+            >
               I already paid — check my status
             </button>
           </div>
