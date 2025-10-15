@@ -4,14 +4,21 @@
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
+// ─────────────────────────────────────────────────────────────
+// IMPORTANT: Route ALL auth via /api so cookies are first-party
+// ─────────────────────────────────────────────────────────────
+const toApi = (path: string) =>
+  path.startsWith("/api") ? path : `/api${path.startsWith("/") ? "" : "/"}${path}`;
+
 type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
+type SignupResp = { ok?: boolean; message?: string };
 type MeResponse = { email: string | null; paid: boolean };
 type Mode = "signin" | "signup";
 type Flash = "none" | "signedin" | "signedup" | "signedout";
 
 /* ─────────────────────────────────────────────────────────────
-   Inline Nebula Background (full-screen)
+   Nebula Background (full-screen)
    ───────────────────────────────────────────────────────────── */
 function NebulaBackground() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -49,9 +56,9 @@ function NebulaBackground() {
 
     float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }
     float noise(vec2 p){ vec2 i=floor(p),f=fract(p);
-      float a=hash(i), b=hash(i+vec2(1.0,0.0)), c=hash(i+vec2(0.0,1.0)), d=hash(i+vec2(1.0,1.0));
-      vec2 u=f*f*(3.0-2.0*f);
-      return mix(a,b,u.x)+(c-a)*u.y*(1.0-u.x)+(d-b)*u.x*u.y;
+      float a=hash(i), b=hash(i+vec2(1.,0.)), c=hash(i+vec2(0.,1.)), d=hash(i+vec2(1.,1.));
+      vec2 u=f*f*(3.-2.*f);
+      return mix(a,b,u.x)+(c-a)*u.y*(1.-u.x)+(d-b)*u.x*u.y;
     }
     float fbm(vec2 p){ float v=0., a=.5; for(int i=0;i<6;i++){ v+=a*noise(p); p*=2.02; a*=.5; } return v; }
 
@@ -61,37 +68,27 @@ function NebulaBackground() {
       float glow=smoothstep(.6,0.,r/(sz*4.));
       return core*.85+glow*.35;
     }
-    float starLayer(vec2 uv,float density,float size,float seed){
-      float s=0.;
-      for(int i=0;i<36;i++){
-        float a=float(i)/36.*6.2831853+seed;
-        vec2 p=vec2(cos(a),sin(a))*0.5+uv;
-        float n=fbm(p*12.+seed);
-        vec2 d=uv-p*(.98+.04*sin(seed*13.));
-        s+=starKernel(d,size*(.7+.6*n));
-      }
-      return s*density;
-    }
+
     void main(){
-      vec2 uv = (vUv - 0.5) * vec2(u_ratio, 1.0);
+      vec2 uv=(vUv-.5); uv.x*=u_ratio;
       float t = u_time * 0.15;
       float neb = fbm(uv*1.6 + vec2(t*0.3, -t*0.25));
       vec3 col = mix(vec3(0.01,0.01,0.06), vec3(0.46,0.38,0.95), smoothstep(0.2,0.85,neb));
-      float stars = starLayer(uv*0.75, 0.08, 0.02, 1.3) + starLayer(uv*1.1, 0.06, 0.015, 2.7);
-      col += vec3(stars*0.65);
+      float star = starKernel(uv, 0.02) * 0.2;
+      col += vec3(star);
       fragColor = vec4(col, 1.0);
     }`;
 
     const compile = (src: string, type: number) => {
-      const s = gl.createShader(type)!;
-      gl.shaderSource(s, src);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        const info = gl.getShaderInfoLog(s) || "unknown";
-        gl.deleteShader(s);
+      const sh = gl.createShader(type)!;
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        const info = gl.getShaderInfoLog(sh) || "unknown";
+        gl.deleteShader(sh);
         throw new Error("Shader compile failed: " + info);
       }
-      return s;
+      return sh;
     };
     const link = (vs: WebGLShader, fs: WebGLShader) => {
       const p = gl.createProgram()!;
@@ -116,7 +113,7 @@ function NebulaBackground() {
     const vao = gl.createVertexArray()!;
     gl.bindVertexArray(vao);
 
-    const quad = new Float32Array([-1, -1, 3, -1, -1, 3]);
+    const quad = new Float32Array([-1, -1, 3, -1, -1, 3]); // fullscreen tri
     const vbo = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
@@ -170,7 +167,7 @@ function NebulaBackground() {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Login Page (Passwordless email code)
+   Login Page
    ───────────────────────────────────────────────────────────── */
 export default function LoginInnerPage() {
   // query params
@@ -209,14 +206,16 @@ export default function LoginInnerPage() {
     }`;
   }
 
-  // Load current session
+  // Load current session (through our domain)
   useEffect(() => {
     setLoadingMe(true);
-    fetch("/api/auth/me", { credentials: "include" })
+    fetch(toApi("/auth/me"), {
+      credentials: "include",
+    })
       .then((r) => r.json())
       .then((m: MeResponse) => {
         setMe(m);
-        if (m?.email) setAuthedCookie(true);
+        if (m?.email) setAuthedCookie(true); // allow middleware UX
       })
       .catch(() => setMe({ email: null, paid: false }))
       .finally(() => setLoadingMe(false));
@@ -225,7 +224,7 @@ export default function LoginInnerPage() {
   async function signOut() {
     try {
       setLoading(true);
-      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      await fetch(toApi("/auth/logout"), { method: "POST", credentials: "include" });
       setMe({ email: null, paid: false });
       setAuthedCookie(false);
       setFlash("signedout");
@@ -239,6 +238,10 @@ export default function LoginInnerPage() {
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email" | "code">("email");
 
+  // sign up (name/email/password)
+  const [name, setName] = useState("");
+  const [suEmail, setSuEmail] = useState("");
+  const [password, setPassword] = useState("");
   const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
   async function sendCode() {
@@ -248,7 +251,7 @@ export default function LoginInnerPage() {
 
     setLoading(true);
     try {
-      const r = await fetch("/api/auth/start", {
+      const r = await fetch(toApi("/auth/start"), {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -276,7 +279,7 @@ export default function LoginInnerPage() {
 
     setLoading(true);
     try {
-      const r = await fetch("/api/auth/verify", {
+      const r = await fetch(toApi("/auth/verify"), {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -287,29 +290,86 @@ export default function LoginInnerPage() {
         setErr(data.message || "Invalid or expired code.");
         return;
       }
-      // session established → mark authed for middleware UX
+      // session established
       setMe({ email: e, paid: !!data.paid });
       setAuthedCookie(true);
+      setStep("email");
+      setCode("");
+      setSiEmail("");
       setFlash("signedin");
 
-      // redirect:
-      // - if already paid → go to dest (default /chat)
-      // - if not paid → send to pricing
+      // redirect choice (kept same behavior)
       if (data.paid) {
         window.location.href = dest || "/chat";
       } else {
-        window.location.href = "/pricing";
+        window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
       }
     } catch {
-      setErr("Verify failed. Please try again.");
+      setErr("Network error.");
     } finally {
       setLoading(false);
     }
   }
 
+  async function signUp() {
+    setErr(null);
+    const n = name.trim();
+    const e = suEmail.trim().toLowerCase();
+    const p = password.trim();
+    if (!n) return setErr("Enter your name.");
+    if (!emailRegex.test(e)) return setErr("Enter a valid email.");
+    if (p.length < 8) return setErr("Password must be at least 8 characters.");
+
+    setLoading(true);
+    try {
+      const r = await fetch(toApi("/auth/signup"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: n, email: e, password: p }),
+      });
+      const data: SignupResp = await r.json();
+      if (!r.ok || !data.ok) {
+        setErr(data.message || "Could not create account.");
+        return;
+      }
+      setMe({ email: e, paid: false });
+      setAuthedCookie(true);
+      setName("");
+      setSuEmail("");
+      setPassword("");
+      setFlash("signedup");
+      window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
+    } catch {
+      setErr("Network error.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // inline spinner
+  const Spinner = () => (
+    <svg className="inline size-4 animate-spin" viewBox="0 0 24 24" aria-hidden="true">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4A4 4 0 008 12H4z" />
+    </svg>
+  );
+
+  const flashText =
+    flash === "signedin"
+      ? "Signed in!"
+      : flash === "signedup"
+      ? "Account created!"
+      : flash === "signedout"
+      ? "Signed out"
+      : "";
+
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
+      {/* Background */}
       <NebulaBackground />
+
+      {/* faint grid overlay */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-[0.05]"
@@ -320,96 +380,247 @@ export default function LoginInnerPage() {
         }}
       />
 
-      {/* Flash toasts */}
+      {/* Toast */}
       {flash !== "none" && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-xl bg-white/90 text-black px-4 py-2 text-sm shadow-lg z-50">
-          {flash === "signedin" && "Signed in!"}
-          {flash === "signedup" && "Signed up!"}
-          {flash === "signedout" && "Signed out."}
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 backdrop-blur-lg bg-white/10 text-white px-4 py-2 rounded-xl border border-white/15 shadow">
+          <span className="mr-2">✅</span> {flashText}
         </div>
       )}
 
-      <main className="relative z-10 flex min-h-screen items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-2xl border border-white/15 bg-white/10 backdrop-blur p-6 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
-          <div className="text-center">
-            <h1 className="text-3xl font-bold">Welcome back</h1>
-            <p className="mt-2 text-white/70">Sign in with a one-time code</p>
-          </div>
+      {/* Foreground content */}
+      <main className="relative z-10 px-6 md:px-10 py-10">
+        <div className="max-w-5xl mx-auto">
+          <h1
+            className="text-center text-4xl md:text-6xl font-extrabold mb-10"
+            style={{ textShadow: "0 0 32px rgba(140,110,255,0.35)" }}
+          >
+            welcome
+          </h1>
 
-          {/* Session status */}
-          <div className="mt-4 text-sm text-white/70">
-            {loadingMe ? "Checking your session…" : me.email ? (
-              <>
-                Signed in as <span className="font-semibold">{me.email}</span>
-                {me.paid ? " — Paid ✅" : " — Free 🚧"}
-              </>
-            ) : (
-              "Not signed in"
-            )}
-          </div>
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Left: Auth card */}
+            <div className="rounded-2xl p-6 md:p-8 border border-white/10 backdrop-blur-sm bg-white/10 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
+              {/* Signed-in panel (NO AUTO-REDIRECT) */}
+              {!loadingMe && me.email ? (
+                <div className="space-y-4">
+                  <div className="text-sm text-white/80">
+                    You’re signed in as <span className="font-semibold">{me.email}</span>
+                    {me.paid ? " (active subscription)" : " (no active subscription)"}
+                  </div>
 
-          {err && (
-            <div className="mt-4 rounded-lg bg-red-500/90 px-3 py-2 text-sm font-medium text-white">
-              {err}
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <Link
+                      href={dest || "/chat"}
+                      onClick={() => setAuthedCookie(true)}
+                      className="w-full text-center rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                    >
+                      Go to Chat
+                    </Link>
+
+                    {!me.paid ? (
+                      <Link
+                        href={`/pricing?redirect=${encodeURIComponent(dest || "/chat")}`}
+                        className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition"
+                        onClick={() => setAuthedCookie(true)}
+                      >
+                        Go to Pricing
+                      </Link>
+                    ) : (
+                      <Link
+                        href="/call"
+                        onClick={() => setAuthedCookie(true)}
+                        className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition"
+                      >
+                        Start Call
+                      </Link>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={signOut}
+                    disabled={loading}
+                    className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition disabled:opacity-60"
+                    aria-busy={loading ? "true" : "false"}
+                  >
+                    {loading ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Spinner /> Signing out…
+                      </span>
+                    ) : (
+                      "Sign out"
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Toggle */}
+                  <div className="flex items-center gap-2 bg-white/10 rounded-xl p-1 w-fit mx-auto">
+                    <button
+                      onClick={() => {
+                        setMode("signin");
+                        setErr(null);
+                      }}
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                        mode === "signin" ? "bg-white text-black" : "text-white/80 hover:text-white"
+                      }`}
+                    >
+                      Sign in
+                    </button>
+                    <button
+                      onClick={() => {
+                        setMode("signup");
+                        setErr(null);
+                      }}
+                      className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                        mode === "signup" ? "bg-white text-black" : "text-white/80 hover:text-white"
+                      }`}
+                    >
+                      Sign up
+                    </button>
+                  </div>
+
+                  <div className="mt-6 space-y-3 max-w-md mx-auto w-full">
+                    {mode === "signin" ? (
+                      <>
+                        {step === "email" && (
+                          <>
+                            <label className="text-sm text-white/80">Email</label>
+                            <input
+                              value={siEmail}
+                              onChange={(e) => setSiEmail(e.target.value)}
+                              placeholder="you@example.com"
+                              className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
+                              type="email"
+                              autoComplete="email"
+                            />
+                            <button
+                              disabled={loading}
+                              onClick={sendCode}
+                              className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                              aria-busy={loading ? "true" : "false"}
+                            >
+                              {loading ? "Sending…" : "Send code"}
+                            </button>
+                          </>
+                        )}
+
+                        {step === "code" and (
+                          <>
+                            <label className="text-sm text-white/80">Enter 6-digit code</label>
+                            <input
+                              value={code}
+                              onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                              placeholder="123456"
+                              className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none focus:border-white/30 transition"
+                              inputMode="numeric"
+                              autoComplete="one-time-code"
+                            />
+                            <button
+                              disabled={loading || code.length < 6}
+                              onClick={verifyCode}
+                              className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                              aria-busy={loading ? "true" : "false"}
+                            >
+                              {loading ? "Verifying…" : "Verify & continue"}
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setStep("email");
+                                setCode("");
+                                setErr(null);
+                              }}
+                              className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition"
+                            >
+                              ← Use a different email
+                            </button>
+                            <div className="text-xs text-white/60 text-center">
+                              We emailed you a 6-digit code.
+                            </div>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <label className="text-sm text-white/80">Name</label>
+                        <input
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          placeholder="Your name"
+                          className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
+                          type="text"
+                          autoComplete="name"
+                        />
+
+                        <label className="text-sm text-white/80">Email</label>
+                        <input
+                          value={suEmail}
+                          onChange={(e) => setSuEmail(e.target.value)}
+                          placeholder="you@example.com"
+                          className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
+                          type="email"
+                          autoComplete="email"
+                        />
+
+                        <label className="text-sm text-white/80">Password</label>
+                        <input
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          placeholder="At least 8 characters"
+                          className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition"
+                          type="password"
+                          autoComplete="new-password"
+                        />
+
+                        <button
+                          disabled={loading}
+                          onClick={signUp}
+                          className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60"
+                          aria-busy={loading ? "true" : "false"}
+                        >
+                          {loading ? "Creating…" : "Create account"}
+                        </button>
+                      </>
+                    )}
+
+                    {err && (
+                      <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">
+                        {err}
+                      </div>
+                    )}
+
+                    <div className="text-xs text-white/60 text-center mt-2">
+                      <Link href="/" className="underline">
+                        ← Back home
+                      </Link>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
-          )}
 
-          {/* Email → Code flow */}
-          <div className="mt-6 space-y-4">
-            {step === "email" ? (
-              <>
-                <label className="block text-sm text-white/80">Email</label>
-                <input
-                  type="email"
-                  value={siEmail}
-                  onChange={(e) => setSiEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full rounded-xl border border-white/20 bg-black/20 px-4 py-3 outline-none focus:border-white/40"
-                />
-                <button
-                  onClick={sendCode}
-                  disabled={loading}
-                  className="w-full rounded-xl bg-white text-black px-4 py-3 font-semibold hover:bg-white/90 transition disabled:opacity-60"
-                >
-                  {loading ? "Sending…" : "Send login code"}
-                </button>
-              </>
-            ) : (
-              <>
-                <label className="block text-sm text-white/80">6-digit code</label>
-                <input
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  placeholder="123456"
-                  className="w-full rounded-xl border border-white/20 bg-black/20 px-4 py-3 outline-none focus:border-white/40 tracking-widest text-center"
-                />
-                <button
-                  onClick={verifyCode}
-                  disabled={loading || code.length < 6}
-                  className="w-full rounded-xl bg-white text-black px-4 py-3 font-semibold hover:bg-white/90 transition disabled:opacity-60"
-                >
-                  {loading ? "Verifying…" : "Verify & continue"}
-                </button>
-                <button
-                  onClick={() => setStep("email")}
-                  className="w-full mt-2 rounded-xl border border-white/20 px-4 py-3 text-sm hover:bg-white/10 transition"
-                >
-                  Use a different email
-                </button>
-              </>
-            )}
-          </div>
+            {/* Right: “What you get” */}
+            <div className="rounded-2xl p-6 md:p-8 border border-white/10 backdrop-blur-sm bg-white/10 shadow-[0_0_60px_rgba(120,80,255,0.15)]">
+              <div className="text-sm font-semibold mb-2">What you get</div>
+              <ul className="space-y-2 text-sm text-white/80">
+                <li>• Ellie remembers you naturally</li>
+                <li>• Mood-aware replies</li>
+                <li>• High-quality voice</li>
+                <li>• Priority compute</li>
+              </ul>
 
-          {/* Footer actions */}
-          <div className="mt-6 flex items-center justify-between text-sm text-white/70">
-            <Link href="/" className="hover:underline">Home</Link>
-            {me.email ? (
-              <button onClick={signOut} className="hover:underline">Sign out</button>
-            ) : (
-              <Link href="/pricing" className="hover:underline">Skip to pricing</Link>
-            )}
+              <div className="mt-6 text-xs text-white/60">
+                Already have an account?{" "}
+                <button type="button" onClick={() => setMode("signin")} className="underline">
+                  Sign in
+                </button>
+                . New here?{" "}
+                <button type="button" onClick={() => setMode("signup")} className="underline">
+                  Create your account
+                </button>
+                .
+              </div>
+            </div>
           </div>
         </div>
       </main>
