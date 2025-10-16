@@ -1,3 +1,4 @@
+// app/login/login-inner.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -10,7 +11,7 @@ const toApi = (path: string) =>
 type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
 type SignupResp = { ok?: boolean; message?: string };
-type MeResponse = { email: string | null; paid: boolean };
+type MeResponse = { ok?: boolean; loggedIn?: boolean; email: string | null; paid: boolean };
 type Mode = "signin" | "signup";
 type Flash = "none" | "signedin" | "signedup" | "signedout";
 
@@ -127,8 +128,11 @@ export default function LoginInnerPage() {
   useEffect(() => {
     setLoadingMe(true);
     fetch(toApi("/auth/me"), { credentials: "include" })
-      .then(r => r.json())
-      .then((m: MeResponse) => { setMe(m); if (m?.email) setAuthedCookie(true); })
+      .then(async (r) => {
+        if (r.status === 401) return { email: null, paid: false } as MeResponse;
+        return (await r.json()) as MeResponse;
+      })
+      .then((m) => { setMe(m); if (m?.email) setAuthedCookie(true); })
       .catch(() => setMe({ email: null, paid: false }))
       .finally(() => setLoadingMe(false));
   }, []);
@@ -236,11 +240,11 @@ export default function LoginInnerPage() {
                   </div>
 
                   <div className="grid sm:grid-cols-2 gap-3">
-                    <Link href={dest || "/chat"} onClick={() => setAuthedCookie(true)} className="w-full text-center rounded-lg bg白 text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60">Go to Chat</Link>
+                    <Link href={dest || "/chat"} onClick={() => setAuthedCookie(true)} className="w-full text-center rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60">Go to Chat</Link>
                     {!me.paid ? (
                       <Link href={`/pricing?redirect=${encodeURIComponent(dest || "/chat")}`} onClick={() => setAuthedCookie(true)} className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition">Go to Pricing</Link>
                     ) : (
-                      <Link href="/call" onClick={() => setAuthedCookie(true)} className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg白/10 transition">Start Call</Link>
+                      <Link href="/call" onClick={() => setAuthedCookie(true)} className="w-full text-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition">Start Call</Link>
                     )}
                   </div>
 

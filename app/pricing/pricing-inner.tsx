@@ -12,7 +12,7 @@ const LEMON_MONTHLY_URL =
 const LEMON_YEARLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4";
 
-type MeResponse = { email: string | null; paid: boolean };
+type MeResponse = { ok?: boolean; loggedIn?: boolean; email: string | null; paid: boolean };
 type LemonMessage = { event?: string; type?: string };
 
 export default function PricingInner() {
@@ -28,6 +28,10 @@ export default function PricingInner() {
     (async () => {
       try {
         const r = await fetch(toApi("/auth/me"), { credentials: "include" });
+        if (r.status === 401) {
+          window.location.href = "/login?redirect=/pricing";
+          return;
+        }
         const j: MeResponse = await r.json();
         if (!j?.email) {
           window.location.href = "/login?redirect=/pricing";
@@ -52,6 +56,7 @@ export default function PricingInner() {
   const checkPaidOnce = useCallback(async (): Promise<boolean> => {
     try {
       const r = await fetch(toApi("/auth/me"), { credentials: "include" });
+      if (r.status === 401) return false;
       const j: MeResponse = await r.json();
       if (j?.email) emailRef.current = j.email;
       if (j?.paid) {
