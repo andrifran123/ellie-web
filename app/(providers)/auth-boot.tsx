@@ -3,13 +3,12 @@
 
 import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { refreshSession } from "@/lib/api";
 
-/**
- * Only guards real PROTECTED pages (/chat, /call).
- * - If logged out or unpaid AND trying to open a protected page → send to /pricing
- * - Never blocks public pages.
- */
+const toApi = (path: string) =>
+  path.startsWith("/api") ? path : `/api${path.startsWith("/") ? "" : "/"}${path}`;
+
+type MeResponse = { email: string | null; paid: boolean };
+
 export default function AuthBoot() {
   const pathname = usePathname();
   const router = useRouter();
@@ -17,31 +16,46 @@ export default function AuthBoot() {
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
+    const guard = async () => {
       try {
-        const { email, paid } = await refreshSession();
-        if (cancelled) return;
-
         const protectedRoutes = ["/chat", "/call"];
         const onProtected = protectedRoutes.some((p) => pathname?.startsWith(p));
 
-        if (onProtected) {
-          // not logged in → pricing
-          if (!email) {
-            router.replace(`/pricing?redirect=${encodeURIComponent(pathname || "/chat")}`);
-            return;
-          }
-          // logged in but unpaid → pricing
-          if (!paid) {
-            router.replace(`/pricing?redirect=${encodeURIComponent(pathname || "/chat")}`);
-            return;
-          }
-        }
-      } catch {
-        // don’t crash page if /api/auth/me fails
-      }
-    })();
+        if (!onProtected) return; // public page → do nothing
 
+        const here = `${pathname || "/chat"}`;
+        const toLogin = `/login?redirect=${encodeURIComponent(here)}`;
+        const toPricing = `/pricing?redirect=${encodeURIComponent(here)}`;
+
+        const r = await fetch(toApi("/auth/me"), { credentials: "include" });
+
+        // Not logged in
+        if (r.status === 401) {
+          if (!cancelled) router.replace(toLogin);
+          return;
+        }
+
+        const me = (await r.json()) as MeResponse;
+
+        // Missing email → treat as logged out
+        if (!me?.email) {
+          if (!cancelled) router.replace(toLogin);
+          return;
+        }
+
+        // Logged in but unpaid → pricing
+        if (!me.paid) {
+          if (!cancelled) router.replace(toPricing);
+          return;
+        }
+
+        // else: logged in + paid → allow render
+      } catch {
+        // Fail soft: don't crash the page. If you prefer, you can send to /login here.
+      }
+    };
+
+    guard();
     return () => {
       cancelled = true;
     };
