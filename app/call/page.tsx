@@ -1,11 +1,5 @@
 "use client";
 
-// Prevent static generation / prerender for this page
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-export const fetchCache = "default-no-store";
-export const runtime = "nodejs"; // avoids Edge for WebRTC/WS-heavy pages
-
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
