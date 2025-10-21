@@ -7,13 +7,6 @@ import { useToasts } from "../(providers)/toast";
 import { httpToWs, joinUrl } from "@/lib/url";
 import { motion } from "framer-motion";
 
-/**
- * Premium Call UI:
- * - Futuristic/Cozy: nebula background, glass grid, glowing “energy orb”
- * - Orb breathes to mic level (RMS)
- * - Minimal glass control bar (Mute / Hang up / Gain)
- */
-
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 type Status = "connecting" | "connected" | "closed" | "error";
@@ -53,17 +46,20 @@ export default function CallClient() {
     return out;
   }
 
-  const ensureAudioGraph = useCallback(async () => {
-    if (acRef.current) return acRef.current;
-    type WinWithWebkit = typeof window & { webkitAudioContext?: typeof AudioContext };
-    const w = window as WinWithWebkit;
-    const AC: typeof AudioContext = (w.AudioContext || w.webkitAudioContext)!;
-    const ac = new AC({ sampleRate: 16000 });
-    acRef.current = ac;
-    return ac;
+  const ensureAudio = useCallback(async () => {
+    if (!acRef.current) {
+      // Safari compatibility
+      const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
+      const AC = window.AudioContext || AnyWin.webkitAudioContext;
+      acRef.current = new AC({ sampleRate: 16000 });
+    }
+    if (!micStreamRef.current) {
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    return acRef.current!;
   }, []);
 
-  // visual RMS meter loop
+  // visual RMS meter loop (runs regardless of WS state)
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -81,14 +77,16 @@ export default function CallClient() {
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
-      const smooth = Math.min(1, Math.max(0, rms * 3.2)); // scale for nicer UI
-      setLevel((prev) => prev * 0.7 + smooth * 0.3);
 
-      const speakingNow = smooth > 0.06; // threshold
+      // stronger curve so it “breathes” more
+      const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
+      setLevel((prev) => prev * 0.65 + boosted * 0.35);
+
+      const speakingNow = boosted > 0.07;
       if (speakingNow) {
         setSpeaking(true);
         if (calmTimer) window.clearTimeout(calmTimer);
-        calmTimer = window.setTimeout(() => setSpeaking(false), 180);
+        calmTimer = window.setTimeout(() => setSpeaking(false), 160);
       }
       raf = requestAnimationFrame(loop);
     };
@@ -103,12 +101,27 @@ export default function CallClient() {
   }, []);
 
   const connect = useCallback(async () => {
-    if (!API) {
-      setStatus("error");
-      show("Missing NEXT_PUBLIC_API_URL");
-      return;
-    }
     try {
+      // 1) Always prep mic + meter first → orb animates even if WS fails
+      const ac = await ensureAudio();
+      const stream = micStreamRef.current!;
+      const src = ac.createMediaStreamSource(stream);
+      micNodeRef.current = src;
+
+      const gn = ac.createGain();
+      gn.gain.value = gain;
+      gainRef.current = gn;
+
+      src.connect(gn);
+      const stopMeter = startMeter(gn);
+
+      // 2) Then try the WebSocket
+      if (!API) {
+        setStatus("error");
+        show("Missing NEXT_PUBLIC_API_URL");
+        return;
+      }
+
       const wsUrl = httpToWs(joinUrl(API, "/ws/phone"));
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
@@ -118,23 +131,7 @@ export default function CallClient() {
         setStatus("connected");
         show("Call connected");
 
-        const ac = await ensureAudioGraph();
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        micStreamRef.current = stream;
-
-        const src = ac.createMediaStreamSource(stream);
-        micNodeRef.current = src;
-
-        const gn = ac.createGain();
-        gn.gain.value = gain;
-        gainRef.current = gn;
-
-        src.connect(gn);
-
-        // Start the meter branch BEFORE processor/worklet (no audible output)
-        const stopMeter = startMeter(gn);
-
-        // Preferred: AudioWorklet (low-latency)
+        // Try worklet for low-latency; fallback to script processor
         let usingWorklet = false;
         try {
           if (ac.audioWorklet) {
@@ -148,7 +145,7 @@ export default function CallClient() {
             };
             usingWorklet = true;
           }
-        } catch { /* fallback below */ }
+        } catch { /* ignore */ }
 
         if (!usingWorklet) {
           const proc = ac.createScriptProcessor(4096, 1, 1);
@@ -156,58 +153,42 @@ export default function CallClient() {
           gn.connect(proc);
           proc.connect(ac.destination);
           proc.onaudioprocess = (ev) => {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (ws.readyState !== WebSocket.OPEN) return;
             const input = ev.inputBuffer.getChannelData(0);
             const pcm16 = floatTo16BitPCM(input);
             ws.send(pcm16.buffer);
           };
         }
 
-        // cleanup for this branch
         ws.onclose = () => {
           setStatus("closed");
           show("Call ended");
           try { stopMeter(); } catch {}
-          processorRef.current?.disconnect();
-          gainRef.current?.disconnect();
-          micNodeRef.current?.disconnect();
-          workletRef.current?.disconnect();
-          micStreamRef.current?.getTracks().forEach((t) => t.stop());
+          cleanupAudio();
           wsRef.current = null;
         };
       };
 
-      ws.onmessage = async () => {
-        // (Optional) if server streams audio back, you can play it here
-      };
       ws.onerror = () => {
         setStatus("error");
-        show("WebSocket error");
+        show("Connection error");
+        // keep meter alive so the orb still reacts
       };
     } catch {
       setStatus("error");
-      show("Failed to connect call");
+      show("Mic permission or connection failed");
     }
-  }, [ensureAudioGraph, show, gain, startMeter]);
+  }, [ensureAudio, gain, show, startMeter]);
 
   useEffect(() => {
     void connect();
-    return () => {
-      try { wsRef.current?.close(); } catch {}
-      processorRef.current?.disconnect();
-      gainRef.current?.disconnect();
-      micNodeRef.current?.disconnect();
-      workletRef.current?.disconnect();
-      micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    };
+    return () => cleanupAll();
   }, [connect]);
 
-  // update gain live
+  // live gain update + persist
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
-    if (typeof window !== "undefined") {
-      localStorage.setItem("ellie_call_gain", String(gain));
-    }
+    if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
   }, [gain]);
 
   const toggleMute = () => {
@@ -223,11 +204,9 @@ export default function CallClient() {
     router.push("/chat");
   };
 
-  // Keyboard: M to toggle mute
+  // Keyboard M → mute
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "m") toggleMute();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -236,16 +215,16 @@ export default function CallClient() {
   /* ===================== UI ===================== */
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      {/* Ambient nebula */}
+      {/* Starfield backdrop + nebula */}
+      <Starfield />
       <div
         aria-hidden
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(1600px circle at 70% 65%, #150a2d 0%, #0a0620 58%, #060316 85%)",
+            "radial-gradient(1600px circle at 70% 65%, #130b2d 0%, #0b0722 55%, #070616 85%)",
         }}
       />
-      {/* Glass grid overlay */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 opacity-[0.06]"
@@ -262,11 +241,7 @@ export default function CallClient() {
           <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
           <div className="text-sm">
             <div className="font-semibold">Call</div>
-            <div
-              className={`text-xs ${
-                status === "connected" ? "text-emerald-400" : "text-white/60"
-              }`}
-            >
+            <div className={`text-xs ${status === "connected" ? "text-emerald-400" : "text-white/60"}`}>
               {status === "connecting" && "Connecting…"}
               {status === "connected" && "Connected"}
               {status === "closed" && "Ended"}
@@ -274,7 +249,6 @@ export default function CallClient() {
             </div>
           </div>
         </div>
-
         <div className="text-xs text-white/60">
           Press <span className="px-1 rounded bg-white/10">M</span> to mute / unmute
         </div>
@@ -282,31 +256,27 @@ export default function CallClient() {
 
       {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
-        <div className="relative w-[min(78vw,540px)] aspect-square">
-          {/* Concentric rings */}
-          <div className="absolute inset-0 -z-10 rounded-full ring-1 ring-white/5" />
-          <div className="absolute inset-6 -z-10 rounded-full ring-1 ring-white/5" />
-          <div className="absolute inset-12 -z-10 rounded-full ring-1 ring-white/5" />
-          <div className="absolute inset-20 -z-10 rounded-full ring-1 ring-white/5" />
-
-          {/* Soft glow */}
+        <div className="relative w-[min(78vw,560px)] aspect-square">
+          {/* subtle concentric glass rings */}
+          {[0,8,16,26].map((g, i) => (
+            <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
+          ))}
+          {/* glow underlay */}
           <div
             className="absolute -inset-6 rounded-full blur-3xl"
             style={{
               background:
-                "radial-gradient(60% 60% at 50% 50%, rgba(140,110,255,0.28), transparent 70%)",
+                "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
             }}
           />
-
-          {/* Energy orb that breathes with mic level */}
-          <Orb level={Math.max(0, Math.min(1, level ?? 0))} speaking={!!speaking} />
+          {/* Animated energy orb */}
+          <EnergyOrb level={level} speaking={speaking} />
         </div>
       </main>
 
       {/* Controls */}
       <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
         <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
-          {/* Mute */}
           <button
             onClick={toggleMute}
             className={`h-11 px-4 rounded-xl font-medium transition ${
@@ -316,8 +286,6 @@ export default function CallClient() {
           >
             {muted ? "Unmute" : "Mute"}
           </button>
-
-          {/* Hang up */}
           <button
             onClick={hangUp}
             className="h-11 px-4 rounded-xl font-semibold bg-rose-600 text-white hover:bg-rose-500 transition"
@@ -325,8 +293,6 @@ export default function CallClient() {
           >
             Hang up
           </button>
-
-          {/* Gain */}
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-white/70 w-12">Gain</span>
             <input
@@ -341,16 +307,37 @@ export default function CallClient() {
           </div>
         </div>
       </footer>
+
+      {/* toasts */}
+      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
+        {toasts.map((t) => (
+          <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
+            {t.text}
+          </div>
+        ))}
+      </div>
     </div>
   );
+
+  function cleanupAudio() {
+    try { processorRef.current?.disconnect(); } catch {}
+    try { gainRef.current?.disconnect(); } catch {}
+    try { micNodeRef.current?.disconnect(); } catch {}
+    try { workletRef.current?.disconnect(); } catch {}
+    try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+  }
+  function cleanupAll() {
+    try { wsRef.current?.close(); } catch {}
+    cleanupAudio();
+  }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   Orb — futuristic, cozy “energy” sphere that scales to mic level
-   ───────────────────────────────────────────────────────────── */
-function Orb({ level, speaking }: { level: number; speaking: boolean }) {
-  // scale between 1.0 and ~1.18 based on level
-  const scale = 1 + Math.min(0.18, level * 0.25);
+/* ------------- Visuals ------------- */
+
+function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
+  // scale & glow
+  const scale = 1 + Math.min(0.35, level * 0.8);
+  const glow = 0.25 + Math.min(0.75, level * 1.2);
 
   return (
     <motion.div
@@ -358,12 +345,13 @@ function Orb({ level, speaking }: { level: number; speaking: boolean }) {
       animate={{ scale }}
       transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
     >
-      {/* inner core */}
+      {/* core */}
       <div
         className="relative size-full rounded-full"
         style={{
           background:
-            "radial-gradient(60% 60% at 50% 50%, rgba(255,255,255,0.9), rgba(255,255,255,0.65) 35%, rgba(180,160,255,0.25) 70%, rgba(80,50,150,0.15) 100%)",
+            "radial-gradient(60% 60% at 50% 50%, rgba(255,255,255,0.95), rgba(240,230,255,0.75) 34%, rgba(170,150,255,0.32) 70%, rgba(90,60,170,0.20) 100%)",
+          boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
         }}
       >
         {/* flowing sheen */}
@@ -371,27 +359,76 @@ function Orb({ level, speaking }: { level: number; speaking: boolean }) {
           className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
           style={{
             background:
-              "conic-gradient(from 210deg at 50% 50%, rgba(160,120,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
-            maskImage:
-              "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 72%)",
+              "conic-gradient(from 210deg at 50% 50%, rgba(180,140,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
+            maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
-
-        {/* speaking sparkle */}
+        {/* scan ring */}
         <motion.div
-          className="absolute inset-0 rounded-full"
-          animate={{ opacity: speaking ? [0.25, 0.6, 0.25] : 0.15 }}
-          transition={{
-            duration: 1.5,
-            repeat: speaking ? Infinity : 0,
-            ease: "easeInOut",
-          }}
-          style={{
-            background:
-              "radial-gradient(30% 30% at 55% 35%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
-          }}
+          className="absolute inset-2 rounded-full border-2 border-white/10"
+          animate={{ rotate: 360 }}
+          transition={{ ease: "linear", duration: 14, repeat: Infinity }}
+          style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
         />
+        {/* speaking pulses */}
+        {speaking && (
+          <>
+            <PulseRing delay={0} />
+            <PulseRing delay={0.35} />
+            <PulseRing delay={0.7} />
+          </>
+        )}
       </div>
     </motion.div>
   );
+}
+
+function PulseRing({ delay }: { delay: number }) {
+  return (
+    <motion.span
+      className="absolute inset-0 rounded-full border-2 border-indigo-300/60"
+      initial={{ opacity: 0.0, scale: 1.0 }}
+      animate={{ opacity: [0.35, 0.0], scale: [1.05, 1.45] }}
+      transition={{ duration: 1.4, delay, repeat: Infinity, ease: "easeOut" }}
+    />
+  );
+}
+
+function Starfield() {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const c = ref.current!;
+    const ctx = c.getContext("2d")!;
+    let w = (c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
+    let h = (c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
+    const stars = Array.from({ length: Math.floor((w * h) / 25000) }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      z: 0.2 + Math.random() * 0.8,
+      s: 0.6 + Math.random() * 1.2,
+    }));
+
+    const draw = () => {
+      ctx.clearRect(0, 0, w, h);
+      for (const st of stars) {
+        st.x += 0.02 * st.z;
+        if (st.x > w) st.x = 0;
+        ctx.globalAlpha = 0.15 * st.z;
+        ctx.fillStyle = "#c9b6ff";
+        ctx.fillRect(st.x, st.y, st.s, st.s);
+      }
+      requestAnimationFrame(draw);
+    };
+    draw();
+
+    const onResize = () => {
+      w = c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1);
+      h = c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return <canvas ref={ref} className="absolute inset-0 z-0 opacity-[0.35]" />;
 }
