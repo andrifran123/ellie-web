@@ -1,4 +1,3 @@
-// app/pricing/pricing-inner.tsx
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -12,20 +11,19 @@ const LEMON_MONTHLY_URL =
 const LEMON_YEARLY_URL =
   "https://ellie-elite.lemonsqueezy.com/buy/63d6d95d-313f-44f8-ade3-53885b3457e4";
 
-type MeResponse = { ok?: boolean; loggedIn?: boolean; email: string | null; paid: boolean };
+type MeResponse = { email: string | null; paid: boolean };
 type LemonMessage = { event?: string; type?: string };
 
 export default function PricingInner() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [redirecting, setRedirecting] = useState(false);
-  const [paidReady, setPaidReady] = useState(false); // ← show button when true
+  const [paidReady, setPaidReady] = useState(false);
 
   const emailRef = useRef<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const startPollingRef = useRef<(() => void) | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Require login; if already paid, show button instead of redirecting
   useEffect(() => {
     (async () => {
       try {
@@ -71,9 +69,7 @@ export default function PricingInner() {
         setStatusMsg("Payment confirmed! You can open chat now.");
         return true;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch {}
     return false;
   }, []);
 
@@ -97,7 +93,6 @@ export default function PricingInner() {
 
   useEffect(() => {
     startPollingRef.current = beginPolling;
-    // initial “am I already paid?” check
     checkPaidOnce().catch(() => {});
     return () => {
       startPollingRef.current = null;
@@ -105,7 +100,6 @@ export default function PricingInner() {
     };
   }, [beginPolling, checkPaidOnce]);
 
-  // Listen to Lemon’s postMessage to start polling after checkout success
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
       const okOrigin =
@@ -157,13 +151,7 @@ export default function PricingInner() {
       startPollingRef.current?.();
     };
 
-  const onCheckStatus = async () => {
-    setStatusMsg("Checking your status…");
-    const ok = await checkPaidOnce();
-    if (!ok && !paidReady) setStatusMsg("No active subscription yet.");
-  };
-
-  // full-screen nebula
+  // Nebula background
   useEffect(() => {
     const canvas = canvasRef.current!;
     const gl =
@@ -262,12 +250,12 @@ export default function PricingInner() {
         }}
       />
 
-      {/* Floating "Open Chat" button once paid */}
+      {/* Centered “Open Chat” button */}
       {paidReady && (
-        <div className="fixed bottom-6 right-6 z-50">
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 animate-fade-in">
           <button
             onClick={goChat}
-            className="backdrop-blur-md bg-white/10 border border-white/20 shadow-xl text-white px-5 py-3 rounded-2xl font-semibold hover:bg-white/15 active:bg-white/20 transition"
+            className="backdrop-blur-lg bg-white/10 border border-white/20 text-white px-6 py-3 rounded-2xl font-semibold shadow-lg hover:bg-white/15 active:bg-white/20 transition"
           >
             Open Chat
           </button>
@@ -280,7 +268,7 @@ export default function PricingInner() {
         </div>
       )}
       {redirecting && (
-        <div className="fixed bottom-16 left-1/2 -translate-x-1/2 rounded-xl bg-white/90 text-black px-4 py-2 text-sm shadow-lg z-50">
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 rounded-xl bg-white/90 text-black px-4 py-2 text-sm shadow-lg z-50">
           Taking you to Chat…
         </div>
       )}
@@ -295,7 +283,8 @@ export default function PricingInner() {
               Pricing
             </h1>
             <p className="mt-3 text-white/70">
-              Pick a plan. We’ll show an “Open Chat” button as soon as your payment is active.
+              Pick a plan. As soon as your payment is active, you’ll see an
+              <strong> “Open Chat” </strong> button below.
             </p>
           </div>
 
@@ -337,15 +326,6 @@ export default function PricingInner() {
                 </a>
               </div>
             </div>
-          </div>
-
-          <div className="mt-10 text-center">
-            <button
-              onClick={onCheckStatus}
-              className="inline-flex items-center justify-center rounded-xl border border-white/20 px-4 py-2 text-sm hover:bg-white/10 transition"
-            >
-              I already paid — check my status
-            </button>
           </div>
         </div>
       </main>
