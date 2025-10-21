@@ -18,12 +18,14 @@ type LemonMessage = { event?: string; type?: string };
 export default function PricingInner() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [redirecting, setRedirecting] = useState(false);
+  const [paidReady, setPaidReady] = useState(false); // ← show button when true
+
   const emailRef = useRef<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const startPollingRef = useRef<(() => void) | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Require login (guarantees ellie_session exists)
+  // Require login; if already paid, show button instead of redirecting
   useEffect(() => {
     (async () => {
       try {
@@ -39,8 +41,8 @@ export default function PricingInner() {
         }
         emailRef.current = j.email;
         if (j?.paid) {
-          window.location.href = "/chat";
-          return;
+          setPaidReady(true);
+          setStatusMsg("Your subscription is active.");
         }
       } catch {
         window.location.href = "/login?redirect=/pricing";
@@ -53,6 +55,11 @@ export default function PricingInner() {
     window.location.href = "/chat";
   }, []);
 
+  const stopPolling = () => {
+    if (pollRef.current) window.clearInterval(pollRef.current);
+    pollRef.current = null;
+  };
+
   const checkPaidOnce = useCallback(async (): Promise<boolean> => {
     try {
       const r = await fetch(toApi("/auth/me"), { credentials: "include" });
@@ -60,25 +67,27 @@ export default function PricingInner() {
       const j: MeResponse = await r.json();
       if (j?.email) emailRef.current = j.email;
       if (j?.paid) {
-        setStatusMsg("Payment confirmed. Taking you to Chat…");
-        goChat();
+        setPaidReady(true);
+        setStatusMsg("Payment confirmed! You can open chat now.");
         return true;
       }
     } catch {
       /* ignore */
     }
     return false;
-  }, [goChat]);
+  }, []);
 
   const beginPolling = useCallback(() => {
-    if (pollRef.current) window.clearInterval(pollRef.current);
+    stopPolling();
     const started = Date.now();
     const tick = async () => {
       const ok = await checkPaidOnce();
-      if (ok) return;
+      if (ok) {
+        stopPolling();
+        return;
+      }
       if (Date.now() - started > 3 * 60 * 1000) {
-        if (pollRef.current) window.clearInterval(pollRef.current);
-        pollRef.current = null;
+        stopPolling();
         setStatusMsg(null);
       }
     };
@@ -88,15 +97,15 @@ export default function PricingInner() {
 
   useEffect(() => {
     startPollingRef.current = beginPolling;
+    // initial “am I already paid?” check
     checkPaidOnce().catch(() => {});
     return () => {
       startPollingRef.current = null;
-      if (pollRef.current) window.clearInterval(pollRef.current);
-      pollRef.current = null;
+      stopPolling();
     };
   }, [beginPolling, checkPaidOnce]);
 
-  // Narrowed message handler (no 'any')
+  // Listen to Lemon’s postMessage to start polling after checkout success
   useEffect(() => {
     const onMsg = (ev: MessageEvent) => {
       const okOrigin =
@@ -151,7 +160,7 @@ export default function PricingInner() {
   const onCheckStatus = async () => {
     setStatusMsg("Checking your status…");
     const ok = await checkPaidOnce();
-    if (!ok) setStatusMsg("No active subscription yet.");
+    if (!ok && !paidReady) setStatusMsg("No active subscription yet.");
   };
 
   // full-screen nebula
@@ -253,6 +262,18 @@ export default function PricingInner() {
         }}
       />
 
+      {/* Floating "Open Chat" button once paid */}
+      {paidReady && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <button
+            onClick={goChat}
+            className="backdrop-blur-md bg-white/10 border border-white/20 shadow-xl text-white px-5 py-3 rounded-2xl font-semibold hover:bg-white/15 active:bg-white/20 transition"
+          >
+            Open Chat
+          </button>
+        </div>
+      )}
+
       {statusMsg && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 rounded-xl bg-white/90 text-black px-4 py-2 text-sm shadow-lg z-50">
           {statusMsg}
@@ -274,8 +295,7 @@ export default function PricingInner() {
               Pricing
             </h1>
             <p className="mt-3 text-white/70">
-              Pick a plan. We’ll take you to Chat as soon as your payment is
-              active.
+              Pick a plan. We’ll show an “Open Chat” button as soon as your payment is active.
             </p>
           </div>
 
