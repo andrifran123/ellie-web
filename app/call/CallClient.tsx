@@ -5,20 +5,20 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
 import { httpToWs, joinUrl } from "@/lib/url";
+import { motion } from "framer-motion";
 
 /**
  * Premium Call UI:
- * - Center “core” circle with Pepsi-style blue waves
- * - Waves react to mic level (AnalyserNode RMS)
- * - Minimal bottom controls (Mute, Hang up)
- * - Gain on long-press or open mini-panel (kept simple here)
+ * - Futuristic/Cozy: nebula background, glass grid, glowing “energy orb”
+ * - Orb breathes to mic level (RMS)
+ * - Minimal glass control bar (Mute / Hang up / Gain)
  */
 
 const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 type Status = "connecting" | "connected" | "closed" | "error";
 
-export default function CallPage() {
+export default function CallClient() {
   const router = useRouter();
   const { toasts, show } = useToasts();
 
@@ -223,54 +223,112 @@ export default function CallPage() {
     router.push("/chat");
   };
 
-  // UI — full-screen premium canvas
+  // Keyboard: M to toggle mute
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "m") toggleMute();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [muted]);
+
+  /* ===================== UI ===================== */
   return (
-    <main className="min-h-screen relative overflow-hidden text-white">
-      {/* Subtle blue/purple gradient backdrop */}
+    <div className="relative min-h-screen w-full overflow-hidden text-white">
+      {/* Ambient nebula */}
       <div
         aria-hidden
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(1200px 800px at 50% 20%, #101322 0%, #0a0c12 60%, #07080d 100%)",
+            "radial-gradient(1600px circle at 70% 65%, #150a2d 0%, #0a0620 58%, #060316 85%)",
+        }}
+      />
+      {/* Glass grid overlay */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-[0.06]"
+        style={{
+          background:
+            "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
+          mixBlendMode: "screen",
         }}
       />
 
-      {/* Back nav */}
-      <div className="absolute top-6 left-6 text-sm text-white/80">
-        <Link href="/" className="hover:text-white/100">← Home</Link>
-        <span className="mx-2 text-white/40">/</span>
-        <Link href="/chat" className="hover:text-white/100">Chat</Link>
-      </div>
-
-      {/* Center stage: core + waves */}
-      <div className="relative grid place-items-center min-h-screen">
-        <WaveCore level={level} speaking={speaking} />
-
-        {/* Status badge */}
-        <div className="absolute top-8 right-8 text-xs rounded-full px-3 py-1 glass border border-white/10">
-          {status === "connecting" && "Connecting…"}
-          {status === "connected" && "Connected"}
-          {status === "closed" && "Call ended"}
-          {status === "error" && "Connection error"}
+      {/* Top bar */}
+      <header className="relative z-10 flex items-center justify-between px-6 pt-5">
+        <div className="flex items-center gap-2">
+          <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
+          <div className="text-sm">
+            <div className="font-semibold">Call</div>
+            <div
+              className={`text-xs ${
+                status === "connected" ? "text-emerald-400" : "text-white/60"
+              }`}
+            >
+              {status === "connecting" && "Connecting…"}
+              {status === "connected" && "Connected"}
+              {status === "closed" && "Ended"}
+              {status === "error" && "Error"}
+            </div>
+          </div>
         </div>
 
-        {/* Bottom controls */}
-        <div className="absolute bottom-10 left-0 right-0 flex items-center justify-center gap-4">
+        <div className="text-xs text-white/60">
+          Press <span className="px-1 rounded bg-white/10">M</span> to mute / unmute
+        </div>
+      </header>
+
+      {/* Center Orb */}
+      <main className="relative z-10 grid place-items-center px-6 pt-6">
+        <div className="relative w-[min(78vw,540px)] aspect-square">
+          {/* Concentric rings */}
+          <div className="absolute inset-0 -z-10 rounded-full ring-1 ring-white/5" />
+          <div className="absolute inset-6 -z-10 rounded-full ring-1 ring-white/5" />
+          <div className="absolute inset-12 -z-10 rounded-full ring-1 ring-white/5" />
+          <div className="absolute inset-20 -z-10 rounded-full ring-1 ring-white/5" />
+
+          {/* Soft glow */}
+          <div
+            className="absolute -inset-6 rounded-full blur-3xl"
+            style={{
+              background:
+                "radial-gradient(60% 60% at 50% 50%, rgba(140,110,255,0.28), transparent 70%)",
+            }}
+          />
+
+          {/* Energy orb that breathes with mic level */}
+          <Orb level={Math.max(0, Math.min(1, level ?? 0))} speaking={!!speaking} />
+        </div>
+      </main>
+
+      {/* Controls */}
+      <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
+        <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
+          {/* Mute */}
           <button
             onClick={toggleMute}
-            className={`h-12 px-5 rounded-full font-medium backdrop-blur-md border ${
-              muted
-                ? "bg-amber-500 text-black border-amber-400"
-                : "bg-white/8 text-white border-white/15 hover:bg-white/12"
+            className={`h-11 px-4 rounded-xl font-medium transition ${
+              muted ? "bg-rose-500 text-white" : "bg-white text-black"
             }`}
-            title={muted ? "Unmute mic" : "Mute mic"}
+            title="Mute (M)"
           >
-            {muted ? "🔇 Unmute" : "🎙️ Mute"}
+            {muted ? "Unmute" : "Mute"}
           </button>
 
-          <div className="hidden sm:flex items-center gap-3 bg-white/6 border border-white/10 rounded-full px-4 py-2">
-            <span className="text-xs text-white/70">Mic gain</span>
+          {/* Hang up */}
+          <button
+            onClick={hangUp}
+            className="h-11 px-4 rounded-xl font-semibold bg-rose-600 text-white hover:bg-rose-500 transition"
+            title="Hang up"
+          >
+            Hang up
+          </button>
+
+          {/* Gain */}
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-white/70 w-12">Gain</span>
             <input
               type="range"
               min={0.2}
@@ -280,97 +338,60 @@ export default function CallPage() {
               onChange={(e) => setGain(Number(e.target.value))}
               className="w-40 accent-white"
             />
-            <span className="text-xs text-white/70">{gain.toFixed(2)}×</span>
           </div>
-
-          <button
-            onClick={hangUp}
-            className="h-12 px-5 rounded-full font-semibold bg-rose-600 hover:bg-rose-500"
-            title="Hang up"
-          >
-            🔴 Hang up
-          </button>
         </div>
-      </div>
-
-      {/* toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15"
-          >
-            {t.text}
-          </div>
-        ))}
-      </div>
-    </main>
-  );
-}
-
-/** Center visualizer */
-function WaveCore({ level, speaking }: { level: number; speaking: boolean }) {
-  // Map RMS to nicer visual scales
-  const scale = 1 + Math.min(0.28, level * 0.6);
-  const glow = Math.min(1, 0.25 + level * 0.9);
-  const ringOpacity = Math.min(0.7, 0.25 + level * 0.9);
-
-  return (
-    <div className="relative">
-      {/* Base “Pepsi blue” waves */}
-      <div
-        className="relative size-[280px] sm:size-[340px] rounded-full"
-        style={{
-          transform: `scale(${scale})`,
-          transition: "transform 90ms linear",
-          background:
-            "radial-gradient(closest-side, rgba(40,150,255,0.95) 0%, rgba(40,150,255,0.75) 40%, rgba(20,80,180,0.5) 60%, rgba(10,30,60,0.0) 72%)",
-          boxShadow: `0 0 120px rgba(40,150,255,${glow})`,
-        }}
-      >
-        {/* center disc */}
-        <div className="absolute inset-0 grid place-items-center">
-          <div className="size-[120px] sm:size-[140px] rounded-full bg-white/90 shadow-2xl" />
-        </div>
-
-        {/* static soft rings */}
-        {[1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="absolute inset-0 rounded-full border"
-            style={{
-              borderColor: `rgba(120,180,255,${ringOpacity / (i + 0.2)})`,
-              transform: `scale(${1 + i * 0.2})`,
-              filter: "blur(0.3px)",
-            }}
-          />
-        ))}
-      </div>
-
-      {/* speaking ripples (animated) */}
-      <div className="pointer-events-none absolute inset-0 grid place-items-center">
-        {speaking && (
-          <>
-            <Ripple delay="0s" />
-            <Ripple delay="0.3s" />
-            <Ripple delay="0.6s" />
-          </>
-        )}
-      </div>
+      </footer>
     </div>
   );
 }
 
-function Ripple({ delay }: { delay: string }) {
+/* ─────────────────────────────────────────────────────────────
+   Orb — futuristic, cozy “energy” sphere that scales to mic level
+   ───────────────────────────────────────────────────────────── */
+function Orb({ level, speaking }: { level: number; speaking: boolean }) {
+  // scale between 1.0 and ~1.18 based on level
+  const scale = 1 + Math.min(0.18, level * 0.25);
+
   return (
-    <span
-      aria-hidden
-      className="absolute rounded-full border-2 border-blue-300/70 wave-pulse"
-      style={{
-        animationDelay: delay,
-        width: 280,
-        height: 280,
-      }}
-    />
+    <motion.div
+      className="absolute inset-0 rounded-full grid place-items-center"
+      animate={{ scale }}
+      transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
+    >
+      {/* inner core */}
+      <div
+        className="relative size-full rounded-full"
+        style={{
+          background:
+            "radial-gradient(60% 60% at 50% 50%, rgba(255,255,255,0.9), rgba(255,255,255,0.65) 35%, rgba(180,160,255,0.25) 70%, rgba(80,50,150,0.15) 100%)",
+        }}
+      >
+        {/* flowing sheen */}
+        <div
+          className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
+          style={{
+            background:
+              "conic-gradient(from 210deg at 50% 50%, rgba(160,120,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
+            maskImage:
+              "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 72%)",
+          }}
+        />
+
+        {/* speaking sparkle */}
+        <motion.div
+          className="absolute inset-0 rounded-full"
+          animate={{ opacity: speaking ? [0.25, 0.6, 0.25] : 0.15 }}
+          transition={{
+            duration: 1.5,
+            repeat: speaking ? Infinity : 0,
+            ease: "easeInOut",
+          }}
+          style={{
+            background:
+              "radial-gradient(30% 30% at 55% 35%, rgba(255,255,255,0.7), rgba(255,255,255,0) 60%)",
+          }}
+        />
+      </div>
+    </motion.div>
   );
 }
