@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import _Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
 import { httpToWs, joinUrl } from "@/lib/url";
@@ -18,10 +17,7 @@ export default function CallClient() {
   const [status, setStatus] = useState<Status>("connecting");
   const [muted, setMuted] = useState(false);
   const [gain, setGain] = useState<number>(() => {
-    const v =
-      typeof window !== "undefined"
-        ? localStorage.getItem("ellie_call_gain")
-        : null;
+    const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
   });
 
@@ -52,16 +48,12 @@ export default function CallClient() {
   const ensureAudio = useCallback(async () => {
     if (!acRef.current) {
       // Safari compatibility
-      const AnyWin = window as unknown as {
-        webkitAudioContext?: typeof AudioContext;
-      };
+      const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       acRef.current = new AC({ sampleRate: 16000 });
     }
     if (!micStreamRef.current) {
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-      });
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
     return acRef.current!;
   }, []);
@@ -80,10 +72,12 @@ export default function CallClient() {
 
     const loop = () => {
       analyser.getFloatTimeDomainData(buf);
+      // RMS
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
 
+      // stronger curve so it “breathes” more
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -108,6 +102,90 @@ export default function CallClient() {
       analyserRef.current = null;
     };
   }, []);
+
+  const connect = useCallback(async () => {
+    try {
+      // 1) Always prep mic + meter first → orb animates even if WS fails
+      const ac = await ensureAudio();
+      const stream = micStreamRef.current!;
+      const src = ac.createMediaStreamSource(stream);
+      micNodeRef.current = src;
+
+      const gn = ac.createGain();
+      gn.gain.value = gain;
+      gainRef.current = gn;
+
+      src.connect(gn);
+      const stopMeter = startMeter(gn);
+
+      // 2) Then try the WebSocket
+      if (!API) {
+        setStatus("error");
+        show("Missing NEXT_PUBLIC_API_URL");
+        return;
+      }
+
+      const wsUrl = httpToWs(joinUrl(API, "/ws/phone"));
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+      wsRef.current = ws;
+
+      ws.onopen = async () => {
+        setStatus("connected");
+        show("Call connected");
+
+        // Try worklet for low-latency; fallback to script processor
+        let usingWorklet = false;
+        try {
+          if (ac.audioWorklet) {
+            await ac.audioWorklet.addModule("/worklets/mic-processor.js");
+            const worklet = new AudioWorkletNode(ac, "mic-processor");
+            workletRef.current = worklet;
+            gn.connect(worklet);
+            worklet.connect(ac.destination); // silent; keeps node alive
+            worklet.port.onmessage = (ev) => {
+              if (ws.readyState === WebSocket.OPEN) ws.send(ev.data);
+            };
+            usingWorklet = true;
+          }
+        } catch {
+          /* ignore */
+        }
+
+        if (!usingWorklet) {
+          const proc = ac.createScriptProcessor(4096, 1, 1);
+          processorRef.current = proc;
+          gn.connect(proc);
+          proc.connect(ac.destination);
+          proc.onaudioprocess = (ev) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            const input = ev.inputBuffer.getChannelData(0);
+            const pcm16 = floatTo16BitPCM(input);
+            ws.send(pcm16.buffer);
+          };
+        }
+
+        ws.onclose = () => {
+          setStatus("closed");
+          show("Call ended");
+          try {
+            stopMeter();
+          } catch {}
+          cleanupAudio();
+          wsRef.current = null;
+        };
+      };
+
+      ws.onerror = () => {
+        setStatus("error");
+        show("Connection error");
+        // keep meter alive so the orb still reacts
+      };
+    } catch {
+      setStatus("error");
+      show("Mic permission or connection failed");
+    }
+  }, [ensureAudio, gain, show, startMeter]);
 
   const cleanupAudio = useCallback(() => {
     try {
@@ -134,90 +212,6 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-  const connect = useCallback(
-    async () => {
-      try {
-        // 1) Always prep mic + meter first → orb animates even if WS fails
-        const ac = await ensureAudio();
-        const stream = micStreamRef.current!;
-        const src = ac.createMediaStreamSource(stream);
-        micNodeRef.current = src;
-
-        const gn = ac.createGain();
-        gn.gain.value = gain;
-        gainRef.current = gn;
-
-        src.connect(gn);
-        const stopMeter = startMeter(gn);
-
-        // 2) Then try the WebSocket
-        if (!API) {
-          setStatus("error");
-          show("Missing NEXT_PUBLIC_API_URL");
-          return;
-        }
-
-        const wsUrl = httpToWs(joinUrl(API, "/ws/phone"));
-        const ws = new WebSocket(wsUrl);
-        ws.binaryType = "arraybuffer";
-        wsRef.current = ws;
-
-        ws.onopen = async () => {
-          setStatus("connected");
-          show("Call connected");
-
-          // Try worklet for low-latency; fallback to script processor
-          let usingWorklet = false;
-          try {
-            if (ac.audioWorklet) {
-              await ac.audioWorklet.addModule("/worklets/mic-processor.js");
-              const worklet = new AudioWorkletNode(ac, "mic-processor");
-              workletRef.current = worklet;
-              gn.connect(worklet);
-              worklet.connect(ac.destination);
-              worklet.port.onmessage = (ev) => {
-                if (ws.readyState === WebSocket.OPEN) ws.send(ev.data);
-              };
-              usingWorklet = true;
-            }
-          } catch {}
-
-          if (!usingWorklet) {
-            const proc = ac.createScriptProcessor(4096, 1, 1);
-            processorRef.current = proc;
-            gn.connect(proc);
-            proc.connect(ac.destination);
-            proc.onaudioprocess = (ev) => {
-              if (ws.readyState !== WebSocket.OPEN) return;
-              const input = ev.inputBuffer.getChannelData(0);
-              const pcm16 = floatTo16BitPCM(input);
-              ws.send(pcm16.buffer);
-            };
-          }
-
-          ws.onclose = () => {
-            setStatus("closed");
-            show("Call ended");
-            try {
-              stopMeter();
-            } catch {}
-            cleanupAudio();
-            wsRef.current = null;
-          };
-        };
-
-        ws.onerror = () => {
-          setStatus("error");
-          show("Connection error");
-        };
-      } catch {
-        setStatus("error");
-        show("Mic permission or connection failed");
-      }
-    },
-    [ensureAudio, gain, show, startMeter, cleanupAudio]
-  );
-
   useEffect(() => {
     void connect();
     return () => cleanupAll();
@@ -226,17 +220,16 @@ export default function CallClient() {
   // live gain update + persist
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
-    if (typeof window !== "undefined")
-      localStorage.setItem("ellie_call_gain", String(gain));
+    if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
   }, [gain]);
 
-  const toggleMute = () => {
+  const toggleMute = useCallback(() => {
     const s = micStreamRef.current;
     if (!s) return;
     const next = !muted;
     s.getAudioTracks().forEach((t) => (t.enabled = !next));
     setMuted(next);
-  };
+  }, [muted]);
 
   const hangUp = () => {
     try {
@@ -252,7 +245,7 @@ export default function CallClient() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [muted]);
+  }, [toggleMute]);
 
   /* ===================== UI ===================== */
   return (
@@ -280,16 +273,10 @@ export default function CallClient() {
       {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
-          <div className="size-8 grid place-items-center rounded-lg bg-white/10">
-            📞
-          </div>
+          <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
           <div className="text-sm">
             <div className="font-semibold">Call</div>
-            <div
-              className={`text-xs ${
-                status === "connected" ? "text-emerald-400" : "text-white/60"
-              }`}
-            >
+            <div className={`text-xs ${status === "connected" ? "text-emerald-400" : "text-white/60"}`}>
               {status === "connecting" && "Connecting…"}
               {status === "connected" && "Connected"}
               {status === "closed" && "Ended"}
@@ -298,28 +285,25 @@ export default function CallClient() {
           </div>
         </div>
         <div className="text-xs text-white/60">
-          Press <span className="px-1 rounded bg-white/10">M</span> to mute /
-          unmute
+          Press <span className="px-1 rounded bg-white/10">M</span> to mute / unmute
         </div>
       </header>
 
       {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w-[min(78vw,560px)] aspect-square">
+          {/* subtle concentric glass rings */}
           {[0, 8, 16, 26].map((g, i) => (
-            <div
-              key={i}
-              className="absolute -z-10 rounded-full ring-1 ring-white/6"
-              style={{ inset: g }}
-            />
+            <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
           ))}
+          {/* glow underlay */}
           <div
             className="absolute -inset-6 rounded-full blur-3xl"
             style={{
-              background:
-                "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
+              background: "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
             }}
           />
+          {/* Animated energy orb */}
           <EnergyOrb level={level} speaking={speaking} />
         </div>
       </main>
@@ -359,16 +343,9 @@ export default function CallClient() {
       </footer>
 
       {/* toasts */}
-      <div
-        className="fixed top-4 right-4 z-50 space-y-2"
-        aria-live="polite"
-        aria-relevant="additions"
-      >
+      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
-          <div
-            key={t.id}
-            className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15"
-          >
+          <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
             {t.text}
           </div>
         ))}
@@ -380,6 +357,7 @@ export default function CallClient() {
 /* ------------- Visuals ------------- */
 
 function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
+  // scale & glow
   const scale = 1 + Math.min(0.35, level * 0.8);
   const glow = 0.25 + Math.min(0.75, level * 1.2);
 
@@ -389,6 +367,7 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
       animate={{ scale }}
       transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
     >
+      {/* core */}
       <div
         className="relative size-full rounded-full"
         style={{
@@ -397,21 +376,23 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
           boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
         }}
       >
+        {/* flowing sheen */}
         <div
           className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
           style={{
             background:
               "conic-gradient(from 210deg at 50% 50%, rgba(180,140,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
-            maskImage:
-              "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
+            maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
+        {/* scan ring */}
         <motion.div
           className="absolute inset-2 rounded-full border-2 border-white/10"
           animate={{ rotate: 360 }}
           transition={{ ease: "linear", duration: 14, repeat: Infinity }}
           style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
         />
+        {/* speaking pulses */}
         {speaking && (
           <>
             <PulseRing delay={0} />
@@ -441,21 +422,14 @@ function Starfield() {
   useEffect(() => {
     const c = ref.current!;
     const ctx = c.getContext("2d")!;
-    let w =
-      (c.width =
-        window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
-    let h =
-      (c.height =
-        window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
-    const stars = Array.from(
-      { length: Math.floor((w * h) / 25000) },
-      () => ({
-        x: Math.random() * w,
-        y: Math.random() * h,
-        z: 0.2 + Math.random() * 0.8,
-        s: 0.6 + Math.random() * 1.2,
-      })
-    );
+    let w = (c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
+    let h = (c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
+    const stars = Array.from({ length: Math.floor((w * h) / 25000) }, () => ({
+      x: Math.random() * w,
+      y: Math.random() * h,
+      z: 0.2 + Math.random() * 0.8,
+      s: 0.6 + Math.random() * 1.2,
+    }));
 
     const draw = () => {
       ctx.clearRect(0, 0, w, h);
@@ -471,12 +445,8 @@ function Starfield() {
     draw();
 
     const onResize = () => {
-      w =
-        c.width =
-        window.innerWidth * Math.min(2, window.devicePixelRatio || 1);
-      h =
-        c.height =
-        window.innerHeight * Math.min(2, window.devicePixelRatio || 1);
+      w = c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1);
+      h = c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1);
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
