@@ -49,7 +49,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 /** Refresh session & store csrfToken + paid flag (used by auth-boot/pricing). */
 export async function refreshSession(): Promise<{ email: string | null; paid: boolean; csrfToken?: string | null }> {
   const res = await fetch(toApiUrl("/auth/me"), { credentials: "include" });
-  const data = await handle<any>(res);
+  const data = await handle<unknown>(res);
   csrfToken = data?.csrfToken || null;
   return { email: data?.email ?? null, paid: !!data?.paid, csrfToken };
 }

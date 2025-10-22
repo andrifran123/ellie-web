@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import _Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
 import { httpToWs, joinUrl } from "@/lib/url";
@@ -326,11 +326,16 @@ export default function CallClient() {
     try { workletRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
   }
-  function cleanupAll() {
-    try { wsRef.current?.close(); } catch {}
-    cleanupAudio();
-  }
-}
+  const cleanupAll = useCallback(() => {
+  try { wsRef.current?.close(); } catch {}
+  cleanupAudio();
+}, []);
+
+
+useEffect(() => {
+  void connect();
+  return () => cleanupAll();
+}, [connect, cleanupAll]);
 
 /* ------------- Visuals ------------- */
 
