@@ -3,13 +3,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
-import { httpToWs } from "@/lib/url";
+import { buildWsUrl } from "@/lib/api"; // ✅ Centralized WebSocket URL helper
 import { motion } from "framer-motion";
 
 type Status = "connecting" | "connected" | "closed" | "error";
-
-// Build-time env with a safe fallback (Render API host if provided)
-const API = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
 export default function CallClient() {
   const router = useRouter();
@@ -32,7 +29,6 @@ export default function CallClient() {
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // visual meter state
   const [level, setLevel] = useState(0); // 0..1 RMS
   const [speaking, setSpeaking] = useState(false);
 
@@ -48,7 +44,6 @@ export default function CallClient() {
 
   const ensureAudio = useCallback(async () => {
     if (!acRef.current) {
-      // Safari compatibility
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       acRef.current = new AC({ sampleRate: 16000 });
@@ -59,7 +54,7 @@ export default function CallClient() {
     return acRef.current!;
   }, []);
 
-  // visual RMS meter loop (runs regardless of WS state)
+  // visual RMS meter loop
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -73,12 +68,9 @@ export default function CallClient() {
 
     const loop = () => {
       analyser.getFloatTimeDomainData(buf);
-      // RMS
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
-
-      // stronger curve so it “breathes” more
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -100,19 +92,6 @@ export default function CallClient() {
     };
   }, []);
 
-  /**
-   * WebSocket must hit the Render origin directly when API host is set.
-   * HTTP can go through /api rewrites, but Vercel won’t proxy WS upgrades to external domains.
-   */
-  const buildWsUrl = useCallback(() => {
-    const wsPath = "/api/ws/phone"; // your server should expose WS here
-    if (API) {
-      return httpToWs(`${API}${wsPath}`); // direct to Render host
-    }
-    // local dev / same-origin fallback
-    return httpToWs(`${window.location.origin}${wsPath}`);
-  }, []);
-
   const cleanupAudio = useCallback(() => {
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
@@ -128,7 +107,6 @@ export default function CallClient() {
 
   const connect = useCallback(async () => {
     try {
-      // 1) Prep mic + meter first → orb animates even if WS fails
       const ac = await ensureAudio();
       const stream = micStreamRef.current!;
       const src = ac.createMediaStreamSource(stream);
@@ -141,8 +119,11 @@ export default function CallClient() {
       src.connect(gn);
       const stopMeter = startMeter(gn);
 
-      // 2) WebSocket (direct to API host if provided)
-      const ws = new WebSocket(buildWsUrl());
+      const ws = new WebSocket(buildWsUrl()); // ✅ using the centralized helper
+ws.onmessage = (ev) => {
+  console.log("📡 server message:", ev.data);
+};
+
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
@@ -150,7 +131,6 @@ export default function CallClient() {
         setStatus("connected");
         show("Call connected");
 
-        // Try worklet for low-latency; fallback to script processor
         let usingWorklet = false;
         try {
           if (ac.audioWorklet) {
@@ -158,13 +138,13 @@ export default function CallClient() {
             const worklet = new AudioWorkletNode(ac, "mic-processor");
             workletRef.current = worklet;
             gn.connect(worklet);
-            worklet.connect(ac.destination); // silent; keeps node alive
+            worklet.connect(ac.destination);
             worklet.port.onmessage = (ev) => {
               if (ws.readyState === WebSocket.OPEN) ws.send(ev.data);
             };
             usingWorklet = true;
           }
-        } catch { /* ignore */ }
+        } catch {}
 
         if (!usingWorklet) {
           const proc = ac.createScriptProcessor(4096, 1, 1);
@@ -191,20 +171,18 @@ export default function CallClient() {
       ws.onerror = () => {
         setStatus("error");
         show("Connection error");
-        // keep meter alive so the orb still reacts
       };
     } catch {
       setStatus("error");
       show("Mic permission or connection failed");
     }
-  }, [ensureAudio, gain, show, startMeter, buildWsUrl, cleanupAudio]);
+  }, [ensureAudio, gain, show, startMeter, cleanupAudio]);
 
   useEffect(() => {
     void connect();
     return () => cleanupAll();
   }, [connect, cleanupAll]);
 
-  // live gain update + persist
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
     if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
@@ -223,17 +201,14 @@ export default function CallClient() {
     router.push("/chat");
   }, [router]);
 
-  // Keyboard M → mute
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleMute]);
 
-  /* ===================== UI ===================== */
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      {/* Starfield backdrop + nebula */}
       <Starfield />
       <div
         aria-hidden
@@ -253,7 +228,6 @@ export default function CallClient() {
         }}
       />
 
-      {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
           <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
@@ -272,14 +246,11 @@ export default function CallClient() {
         </div>
       </header>
 
-      {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w=[min(78vw,560px)] sm:w-[min(78vw,560px)] w-[min(78vw,560px)] aspect-square">
-          {/* subtle concentric glass rings */}
           {[0, 8, 16, 26].map((g, i) => (
             <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
           ))}
-          {/* glow underlay */}
           <div
             className="absolute -inset-6 rounded-full blur-3xl"
             style={{
@@ -287,12 +258,10 @@ export default function CallClient() {
                 "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
             }}
           />
-          {/* Animated energy orb */}
           <EnergyOrb level={level} speaking={speaking} />
         </div>
       </main>
 
-      {/* Controls */}
       <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
         <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
           <button
@@ -326,7 +295,6 @@ export default function CallClient() {
         </div>
       </footer>
 
-      {/* toasts */}
       <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
           <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
@@ -338,8 +306,6 @@ export default function CallClient() {
   );
 }
 
-/* ------------- Visuals ------------- */
-
 function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
   const scale = 1 + Math.min(0.35, level * 0.8);
   const glow = 0.25 + Math.min(0.75, level * 1.2);
@@ -350,7 +316,6 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
       animate={{ scale }}
       transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
     >
-      {/* core */}
       <div
         className="relative size-full rounded-full"
         style={{
@@ -359,7 +324,6 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
           boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
         }}
       >
-        {/* flowing sheen */}
         <div
           className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
           style={{
@@ -368,14 +332,12 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
             maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
-        {/* scan ring */}
         <motion.div
           className="absolute inset-2 rounded-full border-2 border-white/10"
           animate={{ rotate: 360 }}
           transition={{ ease: "linear", duration: 14, repeat: Infinity }}
           style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
         />
-        {/* speaking pulses */}
         {speaking && (
           <>
             <PulseRing delay={0} />
