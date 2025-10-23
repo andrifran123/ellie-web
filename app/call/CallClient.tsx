@@ -179,6 +179,14 @@ export default function CallClient() {
 
       // 2) WebSocket (JSON protocol with hello + audio.append)
       const ws = new WebSocket("wss://ellie-api-1.onrender.com/ws/phone");
+ws.onopen = () => {
+  console.log("[WS OPEN]");
+  ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
+};
+ws.onmessage = (e) => console.log("[WS MSG]", e.data);
+ws.onerror = (e) => console.log("[WS ERR]", e);
+ws.onclose = (e) => console.log("[WS CLOSE]", e);
+
 console.log("[WS dialing] wss://ellie-api-1.onrender.com/ws/phone");
 
 
