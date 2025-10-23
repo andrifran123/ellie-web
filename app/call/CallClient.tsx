@@ -178,7 +178,10 @@ export default function CallClient() {
       const stopMeter = startMeter(gn);
 
       // 2) WebSocket (JSON protocol with hello + audio.append)
-      const ws = new WebSocket(buildWsUrl());
+      const ws = new WebSocket("wss://ellie-api-1.onrender.com/ws/phone");
+console.log("[WS dialing] wss://ellie-api-1.onrender.com/ws/phone");
+
+
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
