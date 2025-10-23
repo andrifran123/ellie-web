@@ -3,10 +3,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
-import { httpToWs, joinUrl } from "@/lib/url";
+import { httpToWs } from "@/lib/url";
+import { toApiUrl } from "@/lib/api";
 import { motion } from "framer-motion";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "";
 
 type Status = "connecting" | "connected" | "closed" | "error";
 
@@ -93,15 +92,34 @@ export default function CallClient() {
 
     return () => {
       cancelAnimationFrame(raf);
-      try {
-        nodeAfterGain.disconnect(analyser);
-      } catch {}
-      try {
-        analyser.disconnect();
-      } catch {}
+      try { nodeAfterGain.disconnect(analyser); } catch {}
+      try { analyser.disconnect(); } catch {}
       analyserRef.current = null;
     };
   }, []);
+
+  // Build a same-origin WS URL so cookies are first-party.
+  const buildWsUrl = useCallback(() => {
+    // toApiUrl("/ws/phone") -> "/api/ws/phone"
+    const httpUrl = toApiUrl("/ws/phone");
+    const absolute = httpUrl.startsWith("/")
+      ? `${window.location.origin}${httpUrl}`
+      : httpUrl;
+    return httpToWs(absolute);
+  }, []);
+
+  const cleanupAudio = useCallback(() => {
+    try { processorRef.current?.disconnect(); } catch {}
+    try { gainRef.current?.disconnect(); } catch {}
+    try { micNodeRef.current?.disconnect(); } catch {}
+    try { workletRef.current?.disconnect(); } catch {}
+    try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+  }, []);
+
+  const cleanupAll = useCallback(() => {
+    try { wsRef.current?.close(); } catch {}
+    cleanupAudio();
+  }, [cleanupAudio]);
 
   const connect = useCallback(async () => {
     try {
@@ -118,15 +136,8 @@ export default function CallClient() {
       src.connect(gn);
       const stopMeter = startMeter(gn);
 
-      // 2) Then try the WebSocket
-      if (!API) {
-        setStatus("error");
-        show("Missing NEXT_PUBLIC_API_URL");
-        return;
-      }
-
-      const wsUrl = httpToWs(joinUrl(API, "/ws/phone"));
-      const ws = new WebSocket(wsUrl);
+      // 2) WebSocket via SAME ORIGIN → cookies are 1st-party
+      const ws = new WebSocket(buildWsUrl());
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
@@ -148,9 +159,7 @@ export default function CallClient() {
             };
             usingWorklet = true;
           }
-        } catch {
-          /* ignore */
-        }
+        } catch { /* ignore */ }
 
         if (!usingWorklet) {
           const proc = ac.createScriptProcessor(4096, 1, 1);
@@ -168,9 +177,7 @@ export default function CallClient() {
         ws.onclose = () => {
           setStatus("closed");
           show("Call ended");
-          try {
-            stopMeter();
-          } catch {}
+          try { stopMeter(); } catch {}
           cleanupAudio();
           wsRef.current = null;
         };
@@ -185,32 +192,7 @@ export default function CallClient() {
       setStatus("error");
       show("Mic permission or connection failed");
     }
-  }, [ensureAudio, gain, show, startMeter]);
-
-  const cleanupAudio = useCallback(() => {
-    try {
-      processorRef.current?.disconnect();
-    } catch {}
-    try {
-      gainRef.current?.disconnect();
-    } catch {}
-    try {
-      micNodeRef.current?.disconnect();
-    } catch {}
-    try {
-      workletRef.current?.disconnect();
-    } catch {}
-    try {
-      micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch {}
-  }, []);
-
-  const cleanupAll = useCallback(() => {
-    try {
-      wsRef.current?.close();
-    } catch {}
-    cleanupAudio();
-  }, [cleanupAudio]);
+  }, [ensureAudio, gain, show, startMeter, buildWsUrl, cleanupAudio]);
 
   useEffect(() => {
     void connect();
@@ -231,18 +213,14 @@ export default function CallClient() {
     setMuted(next);
   }, [muted]);
 
-  const hangUp = () => {
-    try {
-      wsRef.current?.close();
-    } catch {}
+  const hangUp = useCallback(() => {
+    try { wsRef.current?.close(); } catch {}
     router.push("/chat");
-  };
+  }, [router]);
 
   // Keyboard M → mute
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "m") toggleMute();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleMute]);
@@ -292,18 +270,16 @@ export default function CallClient() {
       {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w-[min(78vw,560px)] aspect-square">
-          {/* subtle concentric glass rings */}
           {[0, 8, 16, 26].map((g, i) => (
             <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
           ))}
-          {/* glow underlay */}
           <div
             className="absolute -inset-6 rounded-full blur-3xl"
             style={{
-              background: "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
+              background:
+                "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
             }}
           />
-          {/* Animated energy orb */}
           <EnergyOrb level={level} speaking={speaking} />
         </div>
       </main>
@@ -357,7 +333,6 @@ export default function CallClient() {
 /* ------------- Visuals ------------- */
 
 function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
-  // scale & glow
   const scale = 1 + Math.min(0.35, level * 0.8);
   const glow = 0.25 + Math.min(0.75, level * 1.2);
 
@@ -367,7 +342,6 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
       animate={{ scale }}
       transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
     >
-      {/* core */}
       <div
         className="relative size-full rounded-full"
         style={{
@@ -376,7 +350,6 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
           boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
         }}
       >
-        {/* flowing sheen */}
         <div
           className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
           style={{
@@ -385,14 +358,12 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
             maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
-        {/* scan ring */}
         <motion.div
           className="absolute inset-2 rounded-full border-2 border-white/10"
           animate={{ rotate: 360 }}
           transition={{ ease: "linear", duration: 14, repeat: Infinity }}
           style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
         />
-        {/* speaking pulses */}
         {speaking && (
           <>
             <PulseRing delay={0} />

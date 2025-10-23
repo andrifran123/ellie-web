@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/api/ws/(.*)", "destination": "https://ellie-api-1.onrender.com/ws/$1" },
     { "source": "/api/(.*)", "destination": "https://ellie-api-1.onrender.com/api/$1" }
   ],
   "headers": [
