@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
-import { buildWsUrl } from "@/lib/api"; // ✅ Centralized WebSocket URL helper
+import { buildWsUrl } from "@/lib/api";
 import { motion } from "framer-motion";
 
 type Status = "connecting" | "connected" | "closed" | "error";
@@ -29,10 +29,15 @@ export default function CallClient() {
   const workletRef = useRef<AudioWorkletNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
+  // playback pipeline (for server audio.delta)
+  const playbackQueueRef = useRef<ArrayBuffer[]>([]);
+  const playingRef = useRef(false);
+
+  // visual meter state
   const [level, setLevel] = useState(0); // 0..1 RMS
   const [speaking, setSpeaking] = useState(false);
 
-  // PCM16 helper
+  // ===== helpers =====
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -42,11 +47,29 @@ export default function CallClient() {
     return out;
   }
 
+  function abToBase64(buf: ArrayBuffer) {
+    const bytes = new Uint8Array(buf);
+    const chunk = 0x8000;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as unknown as number[]);
+    }
+    return btoa(binary);
+  }
+
+  function base64ToArrayBuffer(b64: string): ArrayBuffer {
+    const binary = atob(b64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
   const ensureAudio = useCallback(async () => {
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
-      acRef.current = new AC({ sampleRate: 16000 });
+      acRef.current = new AC({ sampleRate: 16000 }); // input path @16k
     }
     if (!micStreamRef.current) {
       micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -54,7 +77,7 @@ export default function CallClient() {
     return acRef.current!;
   }, []);
 
-  // visual RMS meter loop
+  // visual RMS meter loop (runs regardless of WS state)
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -68,9 +91,12 @@ export default function CallClient() {
 
     const loop = () => {
       analyser.getFloatTimeDomainData(buf);
+      // RMS
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
+
+      // stronger curve so it “breathes” more
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -92,6 +118,37 @@ export default function CallClient() {
     };
   }, []);
 
+  // play server PCM16 (base64) chunks as they arrive
+  const drainPlayback = useCallback(async () => {
+    if (playingRef.current) return;
+    playingRef.current = true;
+
+    try {
+      const ac = acRef.current!;
+      while (playbackQueueRef.current.length) {
+        const buf = playbackQueueRef.current.shift()!;
+        // server output is PCM16 mono; OpenAI default output is 24000 Hz
+        const pcm16 = new Int16Array(buf);
+        const f32 = new Float32Array(pcm16.length);
+        for (let i = 0; i < pcm16.length; i++) f32[i] = Math.max(-1, Math.min(1, pcm16[i] / 0x8000));
+
+        const sampleRate = 24000; // matches server output_audio_format
+        const audioBuf = ac.createBuffer(1, f32.length, sampleRate);
+        audioBuf.copyToChannel(f32, 0);
+
+        const src = ac.createBufferSource();
+        src.buffer = audioBuf;
+        src.connect(ac.destination);
+        await new Promise<void>((resolve) => {
+          src.onended = () => resolve();
+          src.start();
+        });
+      }
+    } finally {
+      playingRef.current = false;
+    }
+  }, []);
+
   const cleanupAudio = useCallback(() => {
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
@@ -107,6 +164,7 @@ export default function CallClient() {
 
   const connect = useCallback(async () => {
     try {
+      // 1) Prep mic + meter first → orb animates even if WS fails
       const ac = await ensureAudio();
       const stream = micStreamRef.current!;
       const src = ac.createMediaStreamSource(stream);
@@ -119,11 +177,8 @@ export default function CallClient() {
       src.connect(gn);
       const stopMeter = startMeter(gn);
 
-      const ws = new WebSocket(buildWsUrl()); // ✅ using the centralized helper
-ws.onmessage = (ev) => {
-  console.log("📡 server message:", ev.data);
-};
-
+      // 2) WebSocket (JSON protocol with hello + audio.append)
+      const ws = new WebSocket(buildWsUrl());
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
@@ -131,6 +186,34 @@ ws.onmessage = (ev) => {
         setStatus("connected");
         show("Call connected");
 
+        // handshake: tell server sample rate and language
+        ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
+
+        // Receive: handle server messages
+        ws.onmessage = (ev) => {
+          try {
+            const obj = JSON.parse(String(ev.data));
+            if (obj?.type === "hello-server") {
+              // optional: console.log("WS handshake:", obj);
+              return;
+            }
+            if (obj?.type === "audio.delta" && obj.audio) {
+              const ab = base64ToArrayBuffer(obj.audio);
+              playbackQueueRef.current.push(ab);
+              // fire-and-forget, drain sequentially
+              void drainPlayback();
+              return;
+            }
+            if (obj?.type === "error") {
+              console.error("Server error:", obj.message || obj);
+              show("Server error (see console)");
+            }
+          } catch {
+            // ignore non-JSON frames
+          }
+        };
+
+        // Try worklet for low-latency; fallback to script processor
         let usingWorklet = false;
         try {
           if (ac.audioWorklet) {
@@ -138,13 +221,19 @@ ws.onmessage = (ev) => {
             const worklet = new AudioWorkletNode(ac, "mic-processor");
             workletRef.current = worklet;
             gn.connect(worklet);
-            worklet.connect(ac.destination);
+            worklet.connect(ac.destination); // silent; keeps node alive
             worklet.port.onmessage = (ev) => {
-              if (ws.readyState === WebSocket.OPEN) ws.send(ev.data);
+              // Worklet would have to send Int16Array; assume ev.data is Float32Array for now
+              const float = ev.data as Float32Array;
+              const pcm16 = floatTo16BitPCM(float);
+              const b64 = abToBase64(pcm16.buffer);
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+              }
             };
             usingWorklet = true;
           }
-        } catch {}
+        } catch { /* ignore */ }
 
         if (!usingWorklet) {
           const proc = ac.createScriptProcessor(4096, 1, 1);
@@ -155,7 +244,8 @@ ws.onmessage = (ev) => {
             if (ws.readyState !== WebSocket.OPEN) return;
             const input = ev.inputBuffer.getChannelData(0);
             const pcm16 = floatTo16BitPCM(input);
-            ws.send(pcm16.buffer);
+            const b64 = abToBase64(pcm16.buffer);
+            ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
           };
         }
 
@@ -172,17 +262,19 @@ ws.onmessage = (ev) => {
         setStatus("error");
         show("Connection error");
       };
-    } catch {
+    } catch (e) {
       setStatus("error");
       show("Mic permission or connection failed");
+      // console.error(e);
     }
-  }, [ensureAudio, gain, show, startMeter, cleanupAudio]);
+  }, [ensureAudio, gain, show, startMeter, cleanupAudio, drainPlayback]);
 
   useEffect(() => {
     void connect();
     return () => cleanupAll();
   }, [connect, cleanupAll]);
 
+  // live gain update + persist
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
     if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
@@ -201,14 +293,17 @@ ws.onmessage = (ev) => {
     router.push("/chat");
   }, [router]);
 
+  // Keyboard M → mute
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleMute]);
 
+  /* ===================== UI ===================== */
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
+      {/* Starfield backdrop + nebula */}
       <Starfield />
       <div
         aria-hidden
@@ -228,6 +323,7 @@ ws.onmessage = (ev) => {
         }}
       />
 
+      {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
           <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
@@ -246,6 +342,7 @@ ws.onmessage = (ev) => {
         </div>
       </header>
 
+      {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w=[min(78vw,560px)] sm:w-[min(78vw,560px)] w-[min(78vw,560px)] aspect-square">
           {[0, 8, 16, 26].map((g, i) => (
@@ -258,10 +355,12 @@ ws.onmessage = (ev) => {
                 "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
             }}
           />
+          {/* Animated energy orb */}
           <EnergyOrb level={level} speaking={speaking} />
         </div>
       </main>
 
+      {/* Controls */}
       <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
         <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
           <button
@@ -295,6 +394,7 @@ ws.onmessage = (ev) => {
         </div>
       </footer>
 
+      {/* toasts */}
       <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
           <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
@@ -306,6 +406,8 @@ ws.onmessage = (ev) => {
   );
 }
 
+/* ------------- Visuals ------------- */
+
 function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
   const scale = 1 + Math.min(0.35, level * 0.8);
   const glow = 0.25 + Math.min(0.75, level * 1.2);
@@ -316,6 +418,7 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
       animate={{ scale }}
       transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
     >
+      {/* core */}
       <div
         className="relative size-full rounded-full"
         style={{
@@ -324,6 +427,7 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
           boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
         }}
       >
+        {/* flowing sheen */}
         <div
           className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
           style={{
@@ -332,12 +436,14 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
             maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
+        {/* scan ring */}
         <motion.div
           className="absolute inset-2 rounded-full border-2 border-white/10"
           animate={{ rotate: 360 }}
           transition={{ ease: "linear", duration: 14, repeat: Infinity }}
           style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
         />
+        {/* speaking pulses */}
         {speaking && (
           <>
             <PulseRing delay={0} />
