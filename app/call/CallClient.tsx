@@ -11,7 +11,7 @@ type Status = "connecting" | "connected" | "closed" | "error";
 
 // ✅ Build-time env with a safe fallback
 const API =
-  process.env.NEXT_PUBLIC_API_URL || "https://ellie-api-1.onrender.com";
+  const API = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
 export default function CallClient() {
   const router = useRouter();
@@ -109,10 +109,19 @@ export default function CallClient() {
   }, []);
 
   // ✅ Always target your API origin for WS (so cookies/session are valid there)
-  const buildWsUrl = useCallback(() => {
-    const httpUrl = `${API}/ws/phone`;
-    return httpToWs(httpUrl);
-  }, []);
+ /**
+ * WebSocket must hit the Render origin directly.
+ * HTTP stays same-origin via /api rewrite, but Vercel won’t proxy WS upgrades to external domains.
+ */
+const buildWsUrl = useCallback(() => {
+  const wsPath = "/api/ws/phone"; // <- make sure your server listens here (under /api)
+  if (API) {
+    // Direct to Render host for WS
+    return httpToWs(`${API}${wsPath}`);
+  }
+  // Local dev / same-origin fallback
+  return httpToWs(`${window.location.origin}${wsPath}`);
+}, []);
 
   const cleanupAudio = useCallback(() => {
     try {
