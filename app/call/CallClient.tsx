@@ -9,6 +9,10 @@ import { motion } from "framer-motion";
 
 type Status = "connecting" | "connected" | "closed" | "error";
 
+// ✅ Build-time env with a safe fallback
+const API =
+  process.env.NEXT_PUBLIC_API_URL || "https://ellie-api-1.onrender.com";
+
 export default function CallClient() {
   const router = useRouter();
   const { toasts, show } = useToasts();
@@ -16,7 +20,10 @@ export default function CallClient() {
   const [status, setStatus] = useState<Status>("connecting");
   const [muted, setMuted] = useState(false);
   const [gain, setGain] = useState<number>(() => {
-    const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
+    const v =
+      typeof window !== "undefined"
+        ? localStorage.getItem("ellie_call_gain")
+        : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
   });
 
@@ -31,10 +38,9 @@ export default function CallClient() {
   const analyserRef = useRef<AnalyserNode | null>(null);
 
   // visual meter state
-  const [level, setLevel] = useState(0); // 0..1 RMS
+  const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
-  // PCM16 helper
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -46,18 +52,20 @@ export default function CallClient() {
 
   const ensureAudio = useCallback(async () => {
     if (!acRef.current) {
-      // Safari compatibility
-      const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
+      const AnyWin = window as unknown as {
+        webkitAudioContext?: typeof AudioContext;
+      };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       acRef.current = new AC({ sampleRate: 16000 });
     }
     if (!micStreamRef.current) {
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
     }
     return acRef.current!;
   }, []);
 
-  // visual RMS meter loop (runs regardless of WS state)
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -71,12 +79,10 @@ export default function CallClient() {
 
     const loop = () => {
       analyser.getFloatTimeDomainData(buf);
-      // RMS
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
 
-      // stronger curve so it “breathes” more
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -92,38 +98,49 @@ export default function CallClient() {
 
     return () => {
       cancelAnimationFrame(raf);
-      try { nodeAfterGain.disconnect(analyser); } catch {}
-      try { analyser.disconnect(); } catch {}
+      try {
+        nodeAfterGain.disconnect(analyser);
+      } catch {}
+      try {
+        analyser.disconnect();
+      } catch {}
       analyserRef.current = null;
     };
   }, []);
 
-  // Build a same-origin WS URL so cookies are first-party.
+  // ✅ Always target your API origin for WS (so cookies/session are valid there)
   const buildWsUrl = useCallback(() => {
-    // toApiUrl("/ws/phone") -> "/api/ws/phone"
-    const httpUrl = toApiUrl("/ws/phone");
-    const absolute = httpUrl.startsWith("/")
-      ? `${window.location.origin}${httpUrl}`
-      : httpUrl;
-    return httpToWs(absolute);
+    const httpUrl = `${API}/ws/phone`;
+    return httpToWs(httpUrl);
   }, []);
 
   const cleanupAudio = useCallback(() => {
-    try { processorRef.current?.disconnect(); } catch {}
-    try { gainRef.current?.disconnect(); } catch {}
-    try { micNodeRef.current?.disconnect(); } catch {}
-    try { workletRef.current?.disconnect(); } catch {}
-    try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+    try {
+      processorRef.current?.disconnect();
+    } catch {}
+    try {
+      gainRef.current?.disconnect();
+    } catch {}
+    try {
+      micNodeRef.current?.disconnect();
+    } catch {}
+    try {
+      workletRef.current?.disconnect();
+    } catch {}
+    try {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
   }, []);
 
   const cleanupAll = useCallback(() => {
-    try { wsRef.current?.close(); } catch {}
+    try {
+      wsRef.current?.close();
+    } catch {}
     cleanupAudio();
   }, [cleanupAudio]);
 
   const connect = useCallback(async () => {
     try {
-      // 1) Always prep mic + meter first → orb animates even if WS fails
       const ac = await ensureAudio();
       const stream = micStreamRef.current!;
       const src = ac.createMediaStreamSource(stream);
@@ -136,7 +153,6 @@ export default function CallClient() {
       src.connect(gn);
       const stopMeter = startMeter(gn);
 
-      // 2) WebSocket via SAME ORIGIN → cookies are 1st-party
       const ws = new WebSocket(buildWsUrl());
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -145,7 +161,6 @@ export default function CallClient() {
         setStatus("connected");
         show("Call connected");
 
-        // Try worklet for low-latency; fallback to script processor
         let usingWorklet = false;
         try {
           if (ac.audioWorklet) {
@@ -153,13 +168,13 @@ export default function CallClient() {
             const worklet = new AudioWorkletNode(ac, "mic-processor");
             workletRef.current = worklet;
             gn.connect(worklet);
-            worklet.connect(ac.destination); // silent; keeps node alive
+            worklet.connect(ac.destination);
             worklet.port.onmessage = (ev) => {
               if (ws.readyState === WebSocket.OPEN) ws.send(ev.data);
             };
             usingWorklet = true;
           }
-        } catch { /* ignore */ }
+        } catch {}
 
         if (!usingWorklet) {
           const proc = ac.createScriptProcessor(4096, 1, 1);
@@ -177,7 +192,9 @@ export default function CallClient() {
         ws.onclose = () => {
           setStatus("closed");
           show("Call ended");
-          try { stopMeter(); } catch {}
+          try {
+            stopMeter();
+          } catch {}
           cleanupAudio();
           wsRef.current = null;
         };
@@ -186,7 +203,6 @@ export default function CallClient() {
       ws.onerror = () => {
         setStatus("error");
         show("Connection error");
-        // keep meter alive so the orb still reacts
       };
     } catch {
       setStatus("error");
@@ -199,10 +215,10 @@ export default function CallClient() {
     return () => cleanupAll();
   }, [connect, cleanupAll]);
 
-  // live gain update + persist
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
-    if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
+    if (typeof window !== "undefined")
+      localStorage.setItem("ellie_call_gain", String(gain));
   }, [gain]);
 
   const toggleMute = useCallback(() => {
@@ -214,13 +230,16 @@ export default function CallClient() {
   }, [muted]);
 
   const hangUp = useCallback(() => {
-    try { wsRef.current?.close(); } catch {}
+    try {
+      wsRef.current?.close();
+    } catch {}
     router.push("/chat");
   }, [router]);
 
-  // Keyboard M → mute
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "m") toggleMute();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [toggleMute]);
@@ -228,7 +247,6 @@ export default function CallClient() {
   /* ===================== UI ===================== */
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      {/* Starfield backdrop + nebula */}
       <Starfield />
       <div
         aria-hidden
@@ -248,13 +266,18 @@ export default function CallClient() {
         }}
       />
 
-      {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
-          <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
+          <div className="size-8 grid place-items-center rounded-lg bg-white/10">
+            📞
+          </div>
           <div className="text-sm">
             <div className="font-semibold">Call</div>
-            <div className={`text-xs ${status === "connected" ? "text-emerald-400" : "text-white/60"}`}>
+            <div
+              className={`text-xs ${
+                status === "connected" ? "text-emerald-400" : "text-white/60"
+              }`}
+            >
               {status === "connecting" && "Connecting…"}
               {status === "connected" && "Connected"}
               {status === "closed" && "Ended"}
@@ -263,15 +286,19 @@ export default function CallClient() {
           </div>
         </div>
         <div className="text-xs text-white/60">
-          Press <span className="px-1 rounded bg-white/10">M</span> to mute / unmute
+          Press <span className="px-1 rounded bg-white/10">M</span> to mute /
+          unmute
         </div>
       </header>
 
-      {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w-[min(78vw,560px)] aspect-square">
           {[0, 8, 16, 26].map((g, i) => (
-            <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
+            <div
+              key={i}
+              className="absolute -z-10 rounded-full ring-1 ring-white/6"
+              style={{ inset: g }}
+            />
           ))}
           <div
             className="absolute -inset-6 rounded-full blur-3xl"
@@ -284,7 +311,6 @@ export default function CallClient() {
         </div>
       </main>
 
-      {/* Controls */}
       <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
         <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
           <button
@@ -318,10 +344,16 @@ export default function CallClient() {
         </div>
       </footer>
 
-      {/* toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
+      <div
+        className="fixed top-4 right-4 z-50 space-y-2"
+        aria-live="polite"
+        aria-relevant="additions"
+      >
         {toasts.map((t) => (
-          <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
+          <div
+            key={t.id}
+            className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15"
+          >
             {t.text}
           </div>
         ))}
@@ -355,7 +387,8 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
           style={{
             background:
               "conic-gradient(from 210deg at 50% 50%, rgba(180,140,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
-            maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
+            maskImage:
+              "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
         <motion.div
@@ -393,8 +426,12 @@ function Starfield() {
   useEffect(() => {
     const c = ref.current!;
     const ctx = c.getContext("2d")!;
-    let w = (c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
-    let h = (c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
+    let w =
+      (c.width =
+        window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
+    let h =
+      (c.height =
+        window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
     const stars = Array.from({ length: Math.floor((w * h) / 25000) }, () => ({
       x: Math.random() * w,
       y: Math.random() * h,
@@ -416,8 +453,12 @@ function Starfield() {
     draw();
 
     const onResize = () => {
-      w = c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1);
-      h = c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1);
+      w =
+        (c.width =
+          window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
+      h =
+        (c.height =
+          window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
