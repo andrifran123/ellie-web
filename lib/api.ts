@@ -23,6 +23,25 @@ export function toApiUrl(path: string): string {
   return API ? `${API}${normalized}` : normalized;
 }
 
+/** Convert HTTP(S) URL to WS(S) */
+export function httpToWs(url: string) {
+  if (url.startsWith("wss://") || url.startsWith("ws://")) return url;
+  if (url.startsWith("https://")) return url.replace("https://", "wss://");
+  if (url.startsWith("http://")) return url.replace("http://", "ws://");
+  return url;
+}
+
+/**
+ * ✅ Helper for voice calls:
+ * If API is set → use /ws/phone directly (Render)
+ * Else → use /api/ws/phone (Vercel rewrite)
+ */
+export function buildWsUrl() {
+  const base = API || window.location.origin;
+  const wsPath = API ? "/ws/phone" : "/api/ws/phone";
+  return httpToWs(`${base}${wsPath}`);
+}
+
 /** Simple handler for JSON + HTTP errors. */
 async function handle<T>(res: Response): Promise<T> {
   if (res.status === 401) throw new Error("401_NOT_LOGGED_IN");
