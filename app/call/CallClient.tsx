@@ -157,6 +157,7 @@ export default function CallClient() {
     try {
       // --- A) Open the WS FIRST (so we can see it) ---
       const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+	const ws = new WebSocket(WS_URL);
       console.log("[WS dialing]", WS_URL);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;

@@ -10,20 +10,23 @@ type Json =
 let csrfToken: string | null = null;
 
 /**
- * Public API base. If empty, we use relative /api paths (works with a proxy).
- * When set (e.g. https://your-api.onrender.com), we send cookies to that origin.
+ * Keep HTTP on same-origin (via Vercel rewrites) for cookies/CSRF.
+ * Do NOT set NEXT_PUBLIC_API_BASE if it breaks login.
  */
-export const API = process.env.NEXT_PUBLIC_API_BASE ?? "";
+export const API = ""; // leave empty on purpose
 
-/** Normalize a path to always begin with /api and return an absolute URL when API is set. */
+/** WebSocket can use a separate origin safely (no cookies needed). */
+export const WS_ORIGIN = process.env.NEXT_PUBLIC_WS_ORIGIN ?? "";
+
+/** Normalize API URLs for HTTP (still uses /api/... through Vercel). */
 export function toApiUrl(path: string): string {
   const normalized = path.startsWith("/api")
     ? path
     : `/api${path.startsWith("/") ? "" : "/"}${path}`;
-  return API ? `${API}${normalized}` : normalized;
+  return normalized; // stays relative → Vercel rewrites
 }
 
-/** Convert HTTP(S) URL to WS(S) */
+/** Convert HTTP(S) URL to WS(S). */
 export function httpToWs(url: string) {
   if (url.startsWith("wss://") || url.startsWith("ws://")) return url;
   if (url.startsWith("https://")) return url.replace("https://", "wss://");
@@ -31,14 +34,10 @@ export function httpToWs(url: string) {
   return url;
 }
 
-/**
- * ✅ Helper for voice calls:
- * If API is set → use /ws/phone directly (Render)
- * Else → use /api/ws/phone (Vercel rewrite)
- */
+/** Build WS URL: direct to Render when WS_ORIGIN is set, else via Vercel rewrite. */
 export function buildWsUrl() {
-  const base = API || window.location.origin;
-  const wsPath = API ? "/ws/phone" : "/api/ws/phone";
+  const base = WS_ORIGIN || window.location.origin;
+  const wsPath = WS_ORIGIN ? "/ws/phone" : "/api/ws/phone";
   return httpToWs(`${base}${wsPath}`);
 }
 
@@ -50,14 +49,8 @@ async function handle<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-/** shape returned by /api/auth/me */
-type MeApi = {
-  email?: string | null;
-  paid?: boolean;
-  csrfToken?: string | null;
-};
+type MeApi = { email?: string | null; paid?: boolean; csrfToken?: string | null };
 
-/** Refresh session & fetch csrfToken + paid flag */
 export async function refreshSession(): Promise<{ email: string | null; paid: boolean }> {
   const res = await fetch(toApiUrl("/auth/me"), { credentials: "include" });
   const data = await handle<MeApi>(res);
@@ -65,10 +58,8 @@ export async function refreshSession(): Promise<{ email: string | null; paid: bo
   return { email: data?.email ?? null, paid: !!data?.paid };
 }
 
-/** POST JSON */
 export async function apiPost<T>(path: string, body?: Json): Promise<T> {
   if (!csrfToken) await refreshSession();
-
   const res = await fetch(toApiUrl(path), {
     method: "POST",
     credentials: "include",
@@ -79,14 +70,11 @@ export async function apiPost<T>(path: string, body?: Json): Promise<T> {
     },
     body: JSON.stringify(body ?? {}),
   });
-
   return handle<T>(res);
 }
 
-/** POST FormData */
 export async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   if (!csrfToken) await refreshSession();
-
   const res = await fetch(toApiUrl(path), {
     method: "POST",
     credentials: "include",
@@ -96,6 +84,5 @@ export async function apiPostForm<T>(path: string, formData: FormData): Promise<
     },
     body: formData,
   });
-
   return handle<T>(res);
 }
