@@ -25,7 +25,6 @@ export default function CallClient() {
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
-  const workletRef = useRef<AudioWorkletNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
   // playback pipeline (for server audio.delta)
@@ -90,12 +89,10 @@ export default function CallClient() {
 
     const loop = () => {
       analyser.getFloatTimeDomainData(buf);
-      // RMS
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
 
-      // stronger curve so it “breathes” more
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -121,20 +118,16 @@ export default function CallClient() {
   const drainPlayback = useCallback(async () => {
     if (playingRef.current) return;
     playingRef.current = true;
-
     try {
       const ac = acRef.current!;
       while (playbackQueueRef.current.length) {
         const buf = playbackQueueRef.current.shift()!;
-        // server output is PCM16 mono; OpenAI default output is 24000 Hz
         const pcm16 = new Int16Array(buf);
         const f32 = new Float32Array(pcm16.length);
         for (let i = 0; i < pcm16.length; i++) f32[i] = Math.max(-1, Math.min(1, pcm16[i] / 0x8000));
-
-        const sampleRate = 24000; // matches server output_audio_format
+        const sampleRate = 24000; // server output
         const audioBuf = ac.createBuffer(1, f32.length, sampleRate);
         audioBuf.copyToChannel(f32, 0);
-
         const src = ac.createBufferSource();
         src.buffer = audioBuf;
         src.connect(ac.destination);
@@ -152,7 +145,6 @@ export default function CallClient() {
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
-    try { workletRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
   }, []);
 
@@ -163,59 +155,30 @@ export default function CallClient() {
 
   const connect = useCallback(async () => {
     try {
-      // 1) Prep mic + meter first → orb animates even if WS fails
-      const ac = await ensureAudio();
-      const stream = micStreamRef.current!;
-      const src = ac.createMediaStreamSource(stream);
-      micNodeRef.current = src;
-
-      const gn = ac.createGain();
-      gn.gain.value = gain;
-      gainRef.current = gn;
-
-      src.connect(gn);
-      const stopMeter = startMeter(gn);
-
-      // 2) WebSocket — hardwired for now (no env confusion)
+      // --- A) Open the WS FIRST (so we can see it) ---
       const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
       console.log("[WS dialing]", WS_URL);
-
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
 
-      ws.onopen = async () => {
+      ws.onopen = () => {
         console.log("[WS OPEN]");
         setStatus("connected");
         show("Call connected");
-
-        // handshake: tell server sample rate and language
         ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
       };
 
-      // Receive: handle server messages
       ws.onmessage = (ev) => {
         try {
           const obj = JSON.parse(String(ev.data));
           console.log("[WS MSG]", obj?.type, obj);
-
-          if (obj?.type === "hello-server") return;
-
           if (obj?.type === "audio.delta" && obj.audio) {
             const ab = base64ToArrayBuffer(obj.audio);
             playbackQueueRef.current.push(ab);
-            void drainPlayback(); // play sequentially
-            return;
+            void drainPlayback();
           }
-
-          if (obj?.type === "error") {
-            console.error("Server error:", obj.message || obj);
-            show("Server error (see console)");
-            return;
-          }
-        } catch {
-          // ignore non-JSON frames
-        }
+        } catch { /* ignore */ }
       };
 
       ws.onerror = (e) => {
@@ -228,50 +191,39 @@ export default function CallClient() {
         console.log("[WS CLOSE]", e.code, e.reason);
         setStatus("closed");
         show("Call ended");
-        try { stopMeter(); } catch {}
         cleanupAudio();
         wsRef.current = null;
       };
 
-      // 3) Mic → server: worklet if available; fallback to ScriptProcessor
-      let usingWorklet = false;
-      try {
-        if (ac.audioWorklet) {
-          await ac.audioWorklet.addModule("/worklets/mic-processor.js");
-          const worklet = new AudioWorkletNode(ac, "mic-processor");
-          workletRef.current = worklet;
-          gn.connect(worklet);
-          worklet.connect(ac.destination); // silent; keeps node alive
-          worklet.port.onmessage = (ev) => {
-            const float = ev.data as Float32Array;    // mono float32
-            const pcm16 = floatTo16BitPCM(float);     // convert to PCM16
-            const b64 = abToBase64(pcm16.buffer);     // base64 for JSON
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-            }
-          };
-          usingWorklet = true;
-        }
-      } catch { /* ignore */ }
+      // --- B) THEN set up mic + meter (no worklet, avoid 404) ---
+      const ac = await ensureAudio();
+      const stream = micStreamRef.current!;
+      const src = ac.createMediaStreamSource(stream);
+      micNodeRef.current = src;
 
-      if (!usingWorklet) {
-        const proc = ac.createScriptProcessor(4096, 1, 1);
-        processorRef.current = proc;
-        gn.connect(proc);
-        proc.connect(ac.destination);
-        proc.onaudioprocess = (ev) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          const input = ev.inputBuffer.getChannelData(0);
-          const pcm16 = floatTo16BitPCM(input);
-          const b64 = abToBase64(pcm16.buffer);
-          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-        };
-      }
+      const gn = ac.createGain();
+      gn.gain.value = gain;
+      gainRef.current = gn;
+      src.connect(gn);
+      startMeter(gn);
+
+      // Fallback-only capture (ScriptProcessor): send base64 PCM16 as JSON
+      const proc = ac.createScriptProcessor(4096, 1, 1);
+      processorRef.current = proc;
+      gn.connect(proc);
+      proc.connect(ac.destination);
+      proc.onaudioprocess = (ev) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const input = ev.inputBuffer.getChannelData(0);
+        const pcm16 = floatTo16BitPCM(input);
+        const b64 = abToBase64(pcm16.buffer);
+        ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+      };
     } catch (e) {
       setStatus("error");
       show("Mic permission or connection failed");
     }
-  }, [ensureAudio, gain, show, startMeter, cleanupAudio, drainPlayback]);
+  }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
 
   useEffect(() => {
     void connect();
@@ -307,27 +259,16 @@ export default function CallClient() {
   /* ===================== UI ===================== */
   return (
     <div className="relative min-h-screen w-full overflow-hidden text-white">
-      {/* Starfield backdrop + nebula */}
       <Starfield />
-      <div
-        aria-hidden
-        className="absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(1600px circle at 70% 65%, #130b2d 0%, #0b0722 55%, #070616 85%)",
-        }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.06]"
-        style={{
-          background:
-            "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
-          mixBlendMode: "screen",
-        }}
-      />
+      <div aria-hidden className="absolute inset-0" style={{
+        background: "radial-gradient(1600px circle at 70% 65%, #130b2d 0%, #0b0722 55%, #070616 85%)",
+      }} />
+      <div aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.06]" style={{
+        background:
+          "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
+        mixBlendMode: "screen",
+      }} />
 
-      {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
           <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
@@ -346,25 +287,18 @@ export default function CallClient() {
         </div>
       </header>
 
-      {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w=[min(78vw,560px)] sm:w-[min(78vw,560px)] w-[min(78vw,560px)] aspect-square">
           {[0, 8, 16, 26].map((g, i) => (
             <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
           ))}
-          <div
-            className="absolute -inset-6 rounded-full blur-3xl"
-            style={{
-              background:
-                "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
-            }}
-          />
-          {/* Animated energy orb */}
+          <div className="absolute -inset-6 rounded-full blur-3xl" style={{
+            background: "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
+          }} />
           <EnergyOrb level={level} speaking={speaking} />
         </div>
       </main>
 
-      {/* Controls */}
       <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
         <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
           <button
@@ -398,7 +332,6 @@ export default function CallClient() {
         </div>
       </footer>
 
-      {/* toasts */}
       <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
         {toasts.map((t) => (
           <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
@@ -415,46 +348,26 @@ export default function CallClient() {
 function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
   const scale = 1 + Math.min(0.35, level * 0.8);
   const glow = 0.25 + Math.min(0.75, level * 1.2);
-
   return (
-    <motion.div
-      className="absolute inset-0 rounded-full grid place-items-center"
-      animate={{ scale }}
-      transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
-    >
-      {/* core */}
-      <div
-        className="relative size-full rounded-full"
+    <motion.div className="absolute inset-0 rounded-full grid place-items-center"
+      animate={{ scale }} transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}>
+      <div className="relative size-full rounded-full"
         style={{
           background:
             "radial-gradient(60% 60% at 50% 50%, rgba(255,255,255,0.95), rgba(240,230,255,0.75) 34%, rgba(170,150,255,0.32) 70%, rgba(90,60,170,0.20) 100%)",
           boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
-        }}
-      >
-        {/* flowing sheen */}
-        <div
-          className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
+        }}>
+        <div className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
           style={{
             background:
               "conic-gradient(from 210deg at 50% 50%, rgba(180,140,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
             maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
           }}
         />
-        {/* scan ring */}
-        <motion.div
-          className="absolute inset-2 rounded-full border-2 border-white/10"
-          animate={{ rotate: 360 }}
-          transition={{ ease: "linear", duration: 14, repeat: Infinity }}
-          style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
-        />
-        {/* speaking pulses */}
-        {speaking && (
-          <>
-            <PulseRing delay={0} />
-            <PulseRing delay={0.35} />
-            <PulseRing delay={0.7} />
-          </>
-        )}
+        <motion.div className="absolute inset-2 rounded-full border-2 border-white/10"
+          animate={{ rotate: 360 }} transition={{ ease: "linear", duration: 14, repeat: Infinity }}
+          style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }} />
+        {speaking && (<><PulseRing delay={0} /><PulseRing delay={0.35} /><PulseRing delay={0.7} /></>)}
       </div>
     </motion.div>
   );
@@ -462,8 +375,7 @@ function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
 
 function PulseRing({ delay }: { delay: number }) {
   return (
-    <motion.span
-      className="absolute inset-0 rounded-full border-2 border-indigo-300/60"
+    <motion.span className="absolute inset-0 rounded-full border-2 border-indigo-300/60"
       initial={{ opacity: 0.0, scale: 1.0 }}
       animate={{ opacity: [0.35, 0.0], scale: [1.05, 1.45] }}
       transition={{ duration: 1.4, delay, repeat: Infinity, ease: "easeOut" }}
@@ -473,7 +385,6 @@ function PulseRing({ delay }: { delay: number }) {
 
 function Starfield() {
   const ref = useRef<HTMLCanvasElement | null>(null);
-
   useEffect(() => {
     const c = ref.current!;
     const ctx = c.getContext("2d")!;
@@ -485,7 +396,6 @@ function Starfield() {
       z: 0.2 + Math.random() * 0.8,
       s: 0.6 + Math.random() * 1.2,
     }));
-
     const draw = () => {
       ctx.clearRect(0, 0, w, h);
       for (const st of stars) {
@@ -498,7 +408,6 @@ function Starfield() {
       requestAnimationFrame(draw);
     };
     draw();
-
     const onResize = () => {
       w = (c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
       h = (c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
@@ -506,6 +415,5 @@ function Starfield() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-
   return <canvas ref={ref} className="absolute inset-0 z-0 opacity-[0.35]" />;
 }
