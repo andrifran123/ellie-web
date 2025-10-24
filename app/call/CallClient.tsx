@@ -3,7 +3,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
-import { buildWsUrl } from "@/lib/api";
 import { motion } from "framer-motion";
 
 type Status = "connecting" | "connected" | "closed" | "error";
@@ -177,106 +176,100 @@ export default function CallClient() {
       src.connect(gn);
       const stopMeter = startMeter(gn);
 
-      // 2) WebSocket (JSON protocol with hello + audio.append)
-      const ws = new WebSocket("wss://ellie-api-1.onrender.com/ws/phone");
-ws.onopen = () => {
-  console.log("[WS OPEN]");
-  ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
-};
-ws.onmessage = (e) => console.log("[WS MSG]", e.data);
-ws.onerror = (e) => console.log("[WS ERR]", e);
-ws.onclose = (e) => console.log("[WS CLOSE]", e);
+      // 2) WebSocket — hardwired for now (no env confusion)
+      const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+      console.log("[WS dialing]", WS_URL);
 
-console.log("[WS dialing] wss://ellie-api-1.onrender.com/ws/phone");
-
-
-      ws.binaryType = "arraybuffer";
+      const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
+      ws.binaryType = "arraybuffer";
 
       ws.onopen = async () => {
+        console.log("[WS OPEN]");
         setStatus("connected");
         show("Call connected");
 
         // handshake: tell server sample rate and language
         ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
-
-        // Receive: handle server messages
-        ws.onmessage = (ev) => {
-          try {
-            const obj = JSON.parse(String(ev.data));
-            if (obj?.type === "hello-server") {
-              // optional: console.log("WS handshake:", obj);
-              return;
-            }
-            if (obj?.type === "audio.delta" && obj.audio) {
-              const ab = base64ToArrayBuffer(obj.audio);
-              playbackQueueRef.current.push(ab);
-              // fire-and-forget, drain sequentially
-              void drainPlayback();
-              return;
-            }
-            if (obj?.type === "error") {
-              console.error("Server error:", obj.message || obj);
-              show("Server error (see console)");
-            }
-          } catch {
-            // ignore non-JSON frames
-          }
-        };
-
-        // Try worklet for low-latency; fallback to script processor
-        let usingWorklet = false;
-        try {
-          if (ac.audioWorklet) {
-            await ac.audioWorklet.addModule("/worklets/mic-processor.js");
-            const worklet = new AudioWorkletNode(ac, "mic-processor");
-            workletRef.current = worklet;
-            gn.connect(worklet);
-            worklet.connect(ac.destination); // silent; keeps node alive
-            worklet.port.onmessage = (ev) => {
-              // Worklet would have to send Int16Array; assume ev.data is Float32Array for now
-              const float = ev.data as Float32Array;
-              const pcm16 = floatTo16BitPCM(float);
-              const b64 = abToBase64(pcm16.buffer);
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-              }
-            };
-            usingWorklet = true;
-          }
-        } catch { /* ignore */ }
-
-        if (!usingWorklet) {
-          const proc = ac.createScriptProcessor(4096, 1, 1);
-          processorRef.current = proc;
-          gn.connect(proc);
-          proc.connect(ac.destination);
-          proc.onaudioprocess = (ev) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
-            const input = ev.inputBuffer.getChannelData(0);
-            const pcm16 = floatTo16BitPCM(input);
-            const b64 = abToBase64(pcm16.buffer);
-            ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-          };
-        }
-
-        ws.onclose = () => {
-          setStatus("closed");
-          show("Call ended");
-          try { stopMeter(); } catch {}
-          cleanupAudio();
-          wsRef.current = null;
-        };
       };
 
-      ws.onerror = () => {
+      // Receive: handle server messages
+      ws.onmessage = (ev) => {
+        try {
+          const obj = JSON.parse(String(ev.data));
+          console.log("[WS MSG]", obj?.type, obj);
+
+          if (obj?.type === "hello-server") return;
+
+          if (obj?.type === "audio.delta" && obj.audio) {
+            const ab = base64ToArrayBuffer(obj.audio);
+            playbackQueueRef.current.push(ab);
+            void drainPlayback(); // play sequentially
+            return;
+          }
+
+          if (obj?.type === "error") {
+            console.error("Server error:", obj.message || obj);
+            show("Server error (see console)");
+            return;
+          }
+        } catch {
+          // ignore non-JSON frames
+        }
+      };
+
+      ws.onerror = (e) => {
+        console.log("[WS ERR]", e);
         setStatus("error");
         show("Connection error");
       };
+
+      ws.onclose = (e) => {
+        console.log("[WS CLOSE]", e.code, e.reason);
+        setStatus("closed");
+        show("Call ended");
+        try { stopMeter(); } catch {}
+        cleanupAudio();
+        wsRef.current = null;
+      };
+
+      // 3) Mic → server: worklet if available; fallback to ScriptProcessor
+      let usingWorklet = false;
+      try {
+        if (ac.audioWorklet) {
+          await ac.audioWorklet.addModule("/worklets/mic-processor.js");
+          const worklet = new AudioWorkletNode(ac, "mic-processor");
+          workletRef.current = worklet;
+          gn.connect(worklet);
+          worklet.connect(ac.destination); // silent; keeps node alive
+          worklet.port.onmessage = (ev) => {
+            const float = ev.data as Float32Array;    // mono float32
+            const pcm16 = floatTo16BitPCM(float);     // convert to PCM16
+            const b64 = abToBase64(pcm16.buffer);     // base64 for JSON
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+            }
+          };
+          usingWorklet = true;
+        }
+      } catch { /* ignore */ }
+
+      if (!usingWorklet) {
+        const proc = ac.createScriptProcessor(4096, 1, 1);
+        processorRef.current = proc;
+        gn.connect(proc);
+        proc.connect(ac.destination);
+        proc.onaudioprocess = (ev) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const input = ev.inputBuffer.getChannelData(0);
+          const pcm16 = floatTo16BitPCM(input);
+          const b64 = abToBase64(pcm16.buffer);
+          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+        };
+      }
     } catch (e) {
       setStatus("error");
       show("Mic permission or connection failed");
-      // console.error(e);
     }
   }, [ensureAudio, gain, show, startMeter, cleanupAudio, drainPlayback]);
 
