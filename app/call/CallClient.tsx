@@ -7,6 +7,9 @@ import { motion } from "framer-motion";
 
 type Status = "connecting" | "connected" | "closed" | "error";
 
+/** <<< CHANGE ME if you ever move servers >>> */
+const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+
 export default function CallClient() {
   const router = useRouter();
   const { toasts, show } = useToasts();
@@ -20,6 +23,7 @@ export default function CallClient() {
 
   // audio + socket refs
   const wsRef = useRef<WebSocket | null>(null);
+  const wsPingRef = useRef<number | null>(null);
   const acRef = useRef<AudioContext | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -35,7 +39,7 @@ export default function CallClient() {
   const [level, setLevel] = useState(0); // 0..1 RMS
   const [speaking, setSpeaking] = useState(false);
 
-  /* ===================== helpers ===================== */
+  // ===== helpers =====
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -89,12 +93,10 @@ export default function CallClient() {
 
     const loop = () => {
       analyser.getFloatTimeDomainData(buf);
-      // RMS
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
 
-      // stronger curve so it “breathes” more
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -120,20 +122,16 @@ export default function CallClient() {
   const drainPlayback = useCallback(async () => {
     if (playingRef.current) return;
     playingRef.current = true;
-
     try {
       const ac = acRef.current!;
       while (playbackQueueRef.current.length) {
         const buf = playbackQueueRef.current.shift()!;
-        // server output is PCM16 mono; Realtime default output is ~24000 Hz
         const pcm16 = new Int16Array(buf);
         const f32 = new Float32Array(pcm16.length);
         for (let i = 0; i < pcm16.length; i++) f32[i] = Math.max(-1, Math.min(1, pcm16[i] / 0x8000));
-
-        const sampleRate = 24000;
+        const sampleRate = 24000; // server output
         const audioBuf = ac.createBuffer(1, f32.length, sampleRate);
         audioBuf.copyToChannel(f32, 0);
-
         const src = ac.createBufferSource();
         src.buffer = audioBuf;
         src.connect(ac.destination);
@@ -147,6 +145,13 @@ export default function CallClient() {
     }
   }, []);
 
+  const stopPinger = () => {
+    if (wsPingRef.current) {
+      window.clearInterval(wsPingRef.current);
+      wsPingRef.current = null;
+    }
+  };
+
   const cleanupAudio = useCallback(() => {
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
@@ -155,28 +160,59 @@ export default function CallClient() {
   }, []);
 
   const cleanupAll = useCallback(() => {
+    stopPinger();
     try { wsRef.current?.close(); } catch {}
     cleanupAudio();
   }, [cleanupAudio]);
 
-  /* ===================== connect ===================== */
   const connect = useCallback(async () => {
     try {
-      setStatus("connecting");
-
-      // --- A) Open the WS FIRST (easier to debug) ---
-      const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+      // --- 1) Open the WebSocket first (easy to see in DevTools) ---
       console.log("[WS dialing]", WS_URL);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
         console.log("[WS OPEN]");
         setStatus("connected");
         show("Call connected");
-        // required hello for server session
+
+        // server requires an initial hello
         ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
+
+        // small keepalive (prevents idle close 1006)
+        stopPinger();
+        wsPingRef.current = window.setInterval(() => {
+          try {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
+          } catch {}
+        }, 20000);
+
+        // --- 2) After WS open, init mic pipeline ---
+        const ac = await ensureAudio();
+        const stream = micStreamRef.current!;
+        const src = ac.createMediaStreamSource(stream);
+        micNodeRef.current = src;
+
+        const gn = ac.createGain();
+        gn.gain.value = gain;
+        gainRef.current = gn;
+        src.connect(gn);
+        startMeter(gn);
+
+        // Simple ScriptProcessor: send base64 PCM16 as JSON
+        const proc = ac.createScriptProcessor(4096, 1, 1);
+        processorRef.current = proc;
+        gn.connect(proc);
+        proc.connect(ac.destination);
+        proc.onaudioprocess = (ev) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const input = ev.inputBuffer.getChannelData(0);
+          const pcm16 = floatTo16BitPCM(input);
+          const b64 = abToBase64(pcm16.buffer);
+          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+        };
       };
 
       ws.onmessage = (ev) => {
@@ -188,8 +224,8 @@ export default function CallClient() {
             playbackQueueRef.current.push(ab);
             void drainPlayback();
           }
-          if (obj?.type === "error" && obj.message) {
-            console.error("Server error:", obj.message);
+          if (obj?.type === "error") {
+            console.error("[WS ERROR]", obj.message || obj);
             show("Server error (see console)");
           }
         } catch {
@@ -204,36 +240,12 @@ export default function CallClient() {
       };
 
       ws.onclose = (e) => {
-        console.log("[WS CLOSE]", e.code, e.reason);
+        console.log("[WS CLOSE]", e.code, e.reason || "");
+        stopPinger();
         setStatus("closed");
         show("Call ended");
         cleanupAudio();
         wsRef.current = null;
-      };
-
-      // --- B) THEN set up mic + meter (no worklet) ---
-      const ac = await ensureAudio();
-      const stream = micStreamRef.current!;
-      const src = ac.createMediaStreamSource(stream);
-      micNodeRef.current = src;
-
-      const gn = ac.createGain();
-      gn.gain.value = gain;
-      gainRef.current = gn;
-      src.connect(gn);
-      startMeter(gn);
-
-      // Capture (ScriptProcessor): send base64 PCM16 inside JSON
-      const proc = ac.createScriptProcessor(4096, 1, 1);
-      processorRef.current = proc;
-      gn.connect(proc);
-      proc.connect(ac.destination);
-      proc.onaudioprocess = (ev) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const input = ev.inputBuffer.getChannelData(0);
-        const pcm16 = floatTo16BitPCM(input);
-        const b64 = abToBase64(pcm16.buffer);
-        wsRef.current.send(JSON.stringify({ type: "audio.append", audio: b64 }));
       };
     } catch (e) {
       setStatus("error");
@@ -294,6 +306,7 @@ export default function CallClient() {
         }}
       />
 
+      {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
           <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
@@ -312,6 +325,7 @@ export default function CallClient() {
         </div>
       </header>
 
+      {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
         <div className="relative w=[min(78vw,560px)] sm:w-[min(78vw,560px)] w-[min(78vw,560px)] aspect-square">
           {[0, 8, 16, 26].map((g, i) => (
@@ -328,6 +342,7 @@ export default function CallClient() {
         </div>
       </main>
 
+      {/* Controls */}
       <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
         <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
           <button
@@ -378,7 +393,6 @@ export default function CallClient() {
 function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
   const scale = 1 + Math.min(0.35, level * 0.8);
   const glow = 0.25 + Math.min(0.75, level * 1.2);
-
   return (
     <motion.div
       className="absolute inset-0 rounded-full grid place-items-center"
@@ -436,7 +450,6 @@ function PulseRing({ delay }: { delay: number }) {
 
 function Starfield() {
   const ref = useRef<HTMLCanvasElement | null>(null);
-
   useEffect(() => {
     const c = ref.current!;
     const ctx = c.getContext("2d")!;
