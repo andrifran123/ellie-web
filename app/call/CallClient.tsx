@@ -165,89 +165,25 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-  const connect = useCallback(async () => {
-  const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
-  const WAKE_URL = "https://ellie-api-1.onrender.com/"; // any HTTP route wakes Render
-
-  // simple helper: sleep ms
-  const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
-
-  // 1) Wake Render (cold start can take a few seconds)
+const connect = useCallback(async () => {
   try {
-    await fetch(WAKE_URL, { mode: "no-cors", cache: "no-store" });
-  } catch {}
-  // small grace period
-  await sleep(600);
+    // 1) Open WS first so we see success/failure immediately
+    const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+    console.log("[WS dialing]", WS_URL);
 
-  // 2) Try to open the socket with retries (handles 1006 during warmup)
-  let attempt = 0;
-  const maxAttempts = 6;
-
-  while (attempt < maxAttempts) {
-    attempt += 1;
-    console.log(`[WS dialing] ${WS_URL} (attempt ${attempt}/${maxAttempts})`);
-
-    // create WS
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
     ws.binaryType = "arraybuffer";
 
-    const opened = new Promise<boolean>((resolve) => {
-      ws.onopen = () => resolve(true);
-      ws.onerror = () => resolve(false);
-      // if server closes during handshake, treat as failure (1006)
-      ws.onclose = () => resolve(false);
-    });
+    ws.onopen = async () => {
+      console.log("[WS OPEN]");
+      setStatus("connected");
+      show("Call connected");
 
-    const ok = await opened;
-    if (!ok) {
-      try { ws.close(); } catch {}
-      // back-off: 400ms, 800ms, 1200ms, ...
-      await sleep(400 * attempt);
-      continue;
-    }
+      // Required hello for the server
+      ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
 
-    // 3) We are OPEN — set up handlers and audio
-    console.log("[WS OPEN]");
-    setStatus("connected");
-    show("Call connected");
-
-    // mandatory hello so server keeps the socket open
-    ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
-
-    // incoming messages (audio deltas, errors)
-    ws.onmessage = (ev) => {
-      try {
-        const obj = JSON.parse(String(ev.data));
-        if (obj?.type === "audio.delta" && obj.audio) {
-          const ab = base64ToArrayBuffer(obj.audio);
-          playbackQueueRef.current.push(ab);
-          void drainPlayback();
-        } else if (obj?.type === "error") {
-          console.error("Server error:", obj.message || obj);
-          show("Server error (see console)");
-        }
-      } catch {
-        /* ignore non-JSON frames */
-      }
-    };
-
-    ws.onerror = () => {
-      console.log("[WS ERR]");
-      setStatus("error");
-      show("Connection error");
-    };
-
-    ws.onclose = () => {
-      console.log("[WS CLOSE]");
-      setStatus("closed");
-      show("Call ended");
-      cleanupAudio();
-      wsRef.current = null;
-    };
-
-    // 4) Now prep mic + meter (we do this AFTER WS is open)
-    try {
+      // 2) After WS is open, bring up the mic + meter
       const ac = await ensureAudio();
       const stream = micStreamRef.current!;
       const src = ac.createMediaStreamSource(stream);
@@ -256,74 +192,53 @@ export default function CallClient() {
       const gn = ac.createGain();
       gn.gain.value = gain;
       gainRef.current = gn;
-
       src.connect(gn);
       startMeter(gn);
 
-      // send mic as base64 PCM16 via JSON frames
+      // Fallback capture (ScriptProcessor) → send base64 PCM16 frames
       const proc = ac.createScriptProcessor(4096, 1, 1);
       processorRef.current = proc;
       gn.connect(proc);
       proc.connect(ac.destination);
-      proc.onaudioprocess = (evt) => {
+      proc.onaudioprocess = (ev) => {
         if (ws.readyState !== WebSocket.OPEN) return;
-        const input = evt.inputBuffer.getChannelData(0);
+        const input = ev.inputBuffer.getChannelData(0);
         const pcm16 = floatTo16BitPCM(input);
         const b64 = abToBase64(pcm16.buffer);
         ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
       };
-    } catch {
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const obj = JSON.parse(String(ev.data));
+        if (obj?.type === "audio.delta" && obj.audio) {
+          const ab = base64ToArrayBuffer(obj.audio);
+          playbackQueueRef.current.push(ab);
+          void drainPlayback();
+        }
+      } catch {
+        /* ignore non-JSON frames */
+      }
+    };
+
+    ws.onerror = () => {
       setStatus("error");
-      show("Mic permission or connection failed");
-    }
+      show("Connection error");
+    };
 
-    // success path — exit retry loop
-    return;
+    ws.onclose = () => {
+      setStatus("closed");
+      show("Call ended");
+      cleanupAudio();
+      wsRef.current = null;
+    };
+  } catch (e) {
+    setStatus("error");
+    show("Mic permission or connection failed");
   }
-
-  // if we get here, all attempts failed
-  setStatus("error");
-  show("Couldn’t reach call server. Try again in a few seconds.");
 }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
 
-
-      ws.onmessage = (ev) => {
-        try {
-          const obj = JSON.parse(String(ev.data));
-          // console.log("[WS MSG]", obj?.type, obj);
-          if (obj?.type === "audio.delta" && obj.audio) {
-            const ab = base64ToArrayBuffer(obj.audio);
-            playbackQueueRef.current.push(ab);
-            void drainPlayback();
-          }
-          if (obj?.type === "error") {
-            console.error("[WS ERROR]", obj.message || obj);
-            show("Server error (see console)");
-          }
-        } catch {
-          // ignore non-JSON frames
-        }
-      };
-
-      ws.onerror = (e) => {
-        console.log("[WS ERR]", e);
-        setStatus("error");
-        show("Connection error");
-      };
-
-      ws.onclose = (e) => {
-        console.log("[WS CLOSE]", e.code, e.reason || "");
-        stopPinger();
-        setStatus("closed");
-        show("Call ended");
-        cleanupAudio();
-        wsRef.current = null;
-      };
-    } catch (e) {
-      setStatus("error");
-      show("Mic permission or connection failed");
-    }
-  }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
 
   useEffect(() => {
     void connect();
