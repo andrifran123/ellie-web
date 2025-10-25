@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 
 type Status = "connecting" | "connected" | "closed" | "error";
 
-/** <<< CHANGE ME if you ever move servers >>> */
+/** Direct connection to Render backend (Vercel can't proxy WS upgrades) */
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
 
 export default function CallClient() {
@@ -165,80 +165,115 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-const connect = useCallback(async () => {
-  try {
-    // 1) Open WS first so we see success/failure immediately
-    const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
-    console.log("[WS dialing]", WS_URL);
+  const connect = useCallback(async () => {
+    try {
+      console.log("[WS] Connecting to:", WS_URL);
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+      ws.binaryType = "arraybuffer";
 
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-    ws.binaryType = "arraybuffer";
-
-    ws.onopen = async () => {
-      console.log("[WS OPEN]");
-      setStatus("connected");
-      show("Call connected");
-
-      // Required hello for the server
-      ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
-
-      // 2) After WS is open, bring up the mic + meter
-      const ac = await ensureAudio();
-      const stream = micStreamRef.current!;
-      const src = ac.createMediaStreamSource(stream);
-      micNodeRef.current = src;
-
-      const gn = ac.createGain();
-      gn.gain.value = gain;
-      gainRef.current = gn;
-      src.connect(gn);
-      startMeter(gn);
-
-      // Fallback capture (ScriptProcessor) → send base64 PCM16 frames
-      const proc = ac.createScriptProcessor(4096, 1, 1);
-      processorRef.current = proc;
-      gn.connect(proc);
-      proc.connect(ac.destination);
-      proc.onaudioprocess = (ev) => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        const input = ev.inputBuffer.getChannelData(0);
-        const pcm16 = floatTo16BitPCM(input);
-        const b64 = abToBase64(pcm16.buffer);
-        ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-      };
-    };
-
-    ws.onmessage = (ev) => {
-      try {
-        const obj = JSON.parse(String(ev.data));
-        if (obj?.type === "audio.delta" && obj.audio) {
-          const ab = base64ToArrayBuffer(obj.audio);
-          playbackQueueRef.current.push(ab);
-          void drainPlayback();
+      // Set timeout for connection
+      const connectionTimeout = setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          console.error("[WS] Connection timeout");
+          ws.close();
+          setStatus("error");
+          show("Connection timeout - server may be down");
         }
-      } catch {
-        /* ignore non-JSON frames */
-      }
-    };
+      }, 15000); // 15 second timeout
 
-    ws.onerror = () => {
+      ws.onopen = async () => {
+        clearTimeout(connectionTimeout);
+        console.log("[WS] OPEN");
+        setStatus("connected");
+        show("Call connected");
+
+        // Get user's language preference
+        const storedLang = localStorage.getItem("ellie_language") || "en";
+
+        // Send hello with language
+        ws.send(JSON.stringify({ 
+          type: "hello", 
+          userId: "default-user",
+          language: storedLang,
+          sampleRate: 16000 
+        }));
+
+        // Start audio capture
+        const ac = await ensureAudio();
+        const stream = micStreamRef.current!;
+        const src = ac.createMediaStreamSource(stream);
+        micNodeRef.current = src;
+
+        const gn = ac.createGain();
+        gn.gain.value = gain;
+        gainRef.current = gn;
+        src.connect(gn);
+        startMeter(gn);
+
+        // Capture + send PCM16 frames
+        const proc = ac.createScriptProcessor(4096, 1, 1);
+        processorRef.current = proc;
+        gn.connect(proc);
+        proc.connect(ac.destination);
+        proc.onaudioprocess = (ev) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const input = ev.inputBuffer.getChannelData(0);
+          const pcm16 = floatTo16BitPCM(input);
+          const b64 = abToBase64(pcm16.buffer);
+          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+        };
+
+        // Start ping interval
+        wsPingRef.current = window.setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ping" }));
+          }
+        }, 25000);
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const obj = JSON.parse(String(ev.data));
+          console.log("[WS] Message:", obj.type);
+          
+          if (obj?.type === "audio.delta" && obj.audio) {
+            const ab = base64ToArrayBuffer(obj.audio);
+            playbackQueueRef.current.push(ab);
+            void drainPlayback();
+          }
+          
+          if (obj?.type === "error") {
+            console.error("[WS] Server error:", obj.message);
+            show(`Error: ${obj.message || "Unknown error"}`);
+          }
+        } catch (e) {
+          console.error("[WS] Parse error:", e);
+        }
+      };
+
+      ws.onerror = (err) => {
+        clearTimeout(connectionTimeout);
+        console.error("[WS] Error:", err);
+        setStatus("error");
+        show("Connection error - check server logs");
+      };
+
+      ws.onclose = (ev) => {
+        clearTimeout(connectionTimeout);
+        stopPinger();
+        console.log("[WS] Closed:", ev.code, ev.reason);
+        setStatus("closed");
+        show("Call ended");
+        cleanupAudio();
+        wsRef.current = null;
+      };
+    } catch (e) {
+      console.error("[WS] Connect failed:", e);
       setStatus("error");
-      show("Connection error");
-    };
-
-    ws.onclose = () => {
-      setStatus("closed");
-      show("Call ended");
-      cleanupAudio();
-      wsRef.current = null;
-    };
-  } catch (e) {
-    setStatus("error");
-    show("Mic permission or connection failed");
-  }
-}, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
-
+      show("Connection failed - check console");
+    }
+  }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
 
   useEffect(() => {
     void connect();
@@ -314,7 +349,7 @@ const connect = useCallback(async () => {
 
       {/* Center Orb */}
       <main className="relative z-10 grid place-items-center px-6 pt-6">
-        <div className="relative w=[min(78vw,560px)] sm:w-[min(78vw,560px)] w-[min(78vw,560px)] aspect-square">
+        <div className="relative w-[min(78vw,560px)] aspect-square">
           {[0, 8, 16, 26].map((g, i) => (
             <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
           ))}
