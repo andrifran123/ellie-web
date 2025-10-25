@@ -167,24 +167,28 @@ export default function CallClient() {
 
   const connect = useCallback(async () => {
     try {
-      console.log("[WS] Connecting to:", WS_URL);
+      console.log("[WS] Attempting connection to:", WS_URL);
+      console.log("[WS] User language:", localStorage.getItem("ellie_language") || "en");
+      
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
 
+      console.log("[WS] WebSocket created, state:", ws.readyState);
+
       // Set timeout for connection
       const connectionTimeout = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
-          console.error("[WS] Connection timeout");
+          console.error("[WS] Connection timeout after 15s");
           ws.close();
           setStatus("error");
-          show("Connection timeout - server may be down");
+          show("Connection timeout - server may be sleeping");
         }
-      }, 15000); // 15 second timeout
+      }, 15000);
 
       ws.onopen = async () => {
         clearTimeout(connectionTimeout);
-        console.log("[WS] OPEN");
+        console.log("[WS] ✅ CONNECTION OPENED");
         setStatus("connected");
         show("Call connected");
 
