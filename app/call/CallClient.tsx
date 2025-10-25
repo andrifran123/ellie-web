@@ -166,54 +166,126 @@ export default function CallClient() {
   }, [cleanupAudio]);
 
   const connect = useCallback(async () => {
+  const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+  const WAKE_URL = "https://ellie-api-1.onrender.com/"; // any HTTP route wakes Render
+
+  // simple helper: sleep ms
+  const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+  // 1) Wake Render (cold start can take a few seconds)
+  try {
+    await fetch(WAKE_URL, { mode: "no-cors", cache: "no-store" });
+  } catch {}
+  // small grace period
+  await sleep(600);
+
+  // 2) Try to open the socket with retries (handles 1006 during warmup)
+  let attempt = 0;
+  const maxAttempts = 6;
+
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    console.log(`[WS dialing] ${WS_URL} (attempt ${attempt}/${maxAttempts})`);
+
+    // create WS
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+    ws.binaryType = "arraybuffer";
+
+    const opened = new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true);
+      ws.onerror = () => resolve(false);
+      // if server closes during handshake, treat as failure (1006)
+      ws.onclose = () => resolve(false);
+    });
+
+    const ok = await opened;
+    if (!ok) {
+      try { ws.close(); } catch {}
+      // back-off: 400ms, 800ms, 1200ms, ...
+      await sleep(400 * attempt);
+      continue;
+    }
+
+    // 3) We are OPEN — set up handlers and audio
+    console.log("[WS OPEN]");
+    setStatus("connected");
+    show("Call connected");
+
+    // mandatory hello so server keeps the socket open
+    ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
+
+    // incoming messages (audio deltas, errors)
+    ws.onmessage = (ev) => {
+      try {
+        const obj = JSON.parse(String(ev.data));
+        if (obj?.type === "audio.delta" && obj.audio) {
+          const ab = base64ToArrayBuffer(obj.audio);
+          playbackQueueRef.current.push(ab);
+          void drainPlayback();
+        } else if (obj?.type === "error") {
+          console.error("Server error:", obj.message || obj);
+          show("Server error (see console)");
+        }
+      } catch {
+        /* ignore non-JSON frames */
+      }
+    };
+
+    ws.onerror = () => {
+      console.log("[WS ERR]");
+      setStatus("error");
+      show("Connection error");
+    };
+
+    ws.onclose = () => {
+      console.log("[WS CLOSE]");
+      setStatus("closed");
+      show("Call ended");
+      cleanupAudio();
+      wsRef.current = null;
+    };
+
+    // 4) Now prep mic + meter (we do this AFTER WS is open)
     try {
-      // --- 1) Open the WebSocket first (easy to see in DevTools) ---
-      console.log("[WS dialing]", WS_URL);
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
-      ws.binaryType = "arraybuffer";
+      const ac = await ensureAudio();
+      const stream = micStreamRef.current!;
+      const src = ac.createMediaStreamSource(stream);
+      micNodeRef.current = src;
 
-      ws.onopen = async () => {
-        console.log("[WS OPEN]");
-        setStatus("connected");
-        show("Call connected");
+      const gn = ac.createGain();
+      gn.gain.value = gain;
+      gainRef.current = gn;
 
-        // server requires an initial hello
-        ws.send(JSON.stringify({ type: "hello", language: "en", sampleRate: 16000 }));
+      src.connect(gn);
+      startMeter(gn);
 
-        // small keepalive (prevents idle close 1006)
-        stopPinger();
-        wsPingRef.current = window.setInterval(() => {
-          try {
-            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
-          } catch {}
-        }, 20000);
-
-        // --- 2) After WS open, init mic pipeline ---
-        const ac = await ensureAudio();
-        const stream = micStreamRef.current!;
-        const src = ac.createMediaStreamSource(stream);
-        micNodeRef.current = src;
-
-        const gn = ac.createGain();
-        gn.gain.value = gain;
-        gainRef.current = gn;
-        src.connect(gn);
-        startMeter(gn);
-
-        // Simple ScriptProcessor: send base64 PCM16 as JSON
-        const proc = ac.createScriptProcessor(4096, 1, 1);
-        processorRef.current = proc;
-        gn.connect(proc);
-        proc.connect(ac.destination);
-        proc.onaudioprocess = (ev) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-          const input = ev.inputBuffer.getChannelData(0);
-          const pcm16 = floatTo16BitPCM(input);
-          const b64 = abToBase64(pcm16.buffer);
-          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-        };
+      // send mic as base64 PCM16 via JSON frames
+      const proc = ac.createScriptProcessor(4096, 1, 1);
+      processorRef.current = proc;
+      gn.connect(proc);
+      proc.connect(ac.destination);
+      proc.onaudioprocess = (evt) => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        const input = evt.inputBuffer.getChannelData(0);
+        const pcm16 = floatTo16BitPCM(input);
+        const b64 = abToBase64(pcm16.buffer);
+        ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
       };
+    } catch {
+      setStatus("error");
+      show("Mic permission or connection failed");
+    }
+
+    // success path — exit retry loop
+    return;
+  }
+
+  // if we get here, all attempts failed
+  setStatus("error");
+  show("Couldn’t reach call server. Try again in a few seconds.");
+}, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
+
 
       ws.onmessage = (ev) => {
         try {
