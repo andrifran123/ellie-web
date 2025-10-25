@@ -71,7 +71,7 @@ export default function CallClient() {
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
-      acRef.current = new AC({ sampleRate: 16000 }); // input path @16k
+acRef.current = new AC({ sampleRate: 24000 }); // ← CHANGE TO 24000
     }
     if (!micStreamRef.current) {
       micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -200,7 +200,7 @@ export default function CallClient() {
           type: "hello", 
           userId: "default-user",
           language: storedLang,
-          sampleRate: 16000 
+          sampleRate: 24000 
         }));
 
         // Start audio capture
