@@ -71,7 +71,7 @@ export default function CallClient() {
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
-acRef.current = new AC({ sampleRate: 24000 }); // ← CHANGE TO 24000
+acRef.current = new AC({ sampleRate: 24000 }); // â† CHANGE TO 24000
     }
     if (!micStreamRef.current) {
       micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -188,17 +188,29 @@ acRef.current = new AC({ sampleRate: 24000 }); // ← CHANGE TO 24000
 
       ws.onopen = async () => {
         clearTimeout(connectionTimeout);
-        console.log("[WS] ✅ CONNECTION OPENED");
+        console.log("[WS] âœ… CONNECTION OPENED");
         setStatus("connected");
         show("Call connected");
+
+        // Get real userId from backend
+        let realUserId = "default-user";
+        try {
+          const meRes = await fetch("/api/auth/me", { credentials: "include" });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            realUserId = meData.userId || "default-user";
+          }
+        } catch (e) {
+          console.error("[call] Failed to get userId:", e);
+        }
 
         // Get user's language preference
         const storedLang = localStorage.getItem("ellie_language") || "en";
 
-        // Send hello with language
+        // Send hello with language and REAL userId
         ws.send(JSON.stringify({ 
           type: "hello", 
-          userId: "default-user",
+          userId: realUserId,  // ✅ REAL USER ID!
           language: storedLang,
           sampleRate: 24000 
         }));
@@ -303,7 +315,7 @@ acRef.current = new AC({ sampleRate: 24000 }); // ← CHANGE TO 24000
     router.push("/chat");
   }, [router]);
 
-  // Keyboard M → mute
+  // Keyboard M â†’ mute
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
     window.addEventListener("keydown", onKey);
@@ -335,11 +347,11 @@ acRef.current = new AC({ sampleRate: 24000 }); // ← CHANGE TO 24000
       {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
-          <div className="size-8 grid place-items-center rounded-lg bg-white/10">📞</div>
+          <div className="size-8 grid place-items-center rounded-lg bg-white/10">ðŸ“ž</div>
           <div className="text-sm">
             <div className="font-semibold">Call</div>
             <div className={`text-xs ${status === "connected" ? "text-emerald-400" : "text-white/60"}`}>
-              {status === "connecting" && "Connecting…"}
+              {status === "connecting" && "Connectingâ€¦"}
               {status === "connected" && "Connected"}
               {status === "closed" && "Ended"}
               {status === "error" && "Error"}
