@@ -36,6 +36,8 @@ export default function CallClient() {
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
+  const [hasSpoken, setHasSpoken] = useState(false);
+  const speakingTimeoutRef = useRef<number | null>(null);
 
   // 📱 Logging with on-screen display
   const log = useCallback((msg: string) => {
@@ -317,6 +319,7 @@ export default function CallClient() {
       const speakingNow = boosted > 0.07;
       if (speakingNow) {
         setSpeaking(true);
+        setHasSpoken(true);
         if (calmTimer) window.clearTimeout(calmTimer);
         calmTimer = window.setTimeout(() => setSpeaking(false), 160);
       }
@@ -374,6 +377,32 @@ export default function CallClient() {
       setStatus("connecting");
       log("[Call] 📞 Starting call...");
       log(`[Call] Device: ${navigator.userAgent.slice(0, 100)}`);
+      
+      // iOS: Prevent screen lock/sleep during call
+      let wakeLock: any = null;
+      if ('wakeLock' in navigator) {
+        try {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+          log("[iOS] 🔓 Wake lock acquired");
+        } catch (e) {
+          log("[iOS] ⚠️ Wake lock not available");
+        }
+      }
+      
+      // iOS: Handle visibility changes to maintain connection
+      const handleVisibilityChange = () => {
+        if (document.hidden) {
+          log("[iOS] ⚠️ Page hidden - connection may suspend");
+        } else {
+          log("[iOS] ✅ Page visible");
+          // Try to resume AudioContext if suspended
+          if (acRef.current && acRef.current.state === 'suspended') {
+            log("[iOS] Resuming AudioContext after visibility change...");
+            acRef.current.resume();
+          }
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
       
       // Setup audio FIRST (ensures user interaction primes everything)
       const ac = await ensureAudio();
@@ -445,8 +474,16 @@ export default function CallClient() {
         // ⚠️ DO NOT connect to destination to avoid echo
         // proc.connect(ac.destination); // REMOVED for no echo
         
+        let audioChunksSent = 0;
+        let lastLogTime = Date.now();
+        
         proc.onaudioprocess = (ev) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
+          if (ws.readyState !== WebSocket.OPEN) {
+            if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+              log("[Audio] ⚠️ WebSocket not open, stopping audio processing");
+            }
+            return;
+          }
           
           let input = ev.inputBuffer.getChannelData(0);
           
@@ -458,16 +495,26 @@ export default function CallClient() {
           const pcm16 = floatTo16BitPCM(input);
           const b64 = abToBase64(pcm16.buffer);
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+          
+          audioChunksSent++;
+          const now = Date.now();
+          if (now - lastLogTime > 2000) { // Log every 2 seconds
+            log(`[Audio] 📤 Sent ${audioChunksSent} chunks (${Math.round(audioChunksSent / ((now - lastLogTime) / 1000) * 10) / 10} chunks/sec)`);
+            lastLogTime = now;
+          }
         };
         
         log("[Audio] ✅ Microphone pipeline ready");
 
-        // Start ping
+        // Start more aggressive ping for iOS stability (10s instead of 25s)
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
+            log("[WS] 📡 Ping sent");
+          } else {
+            log(`[WS] ⚠️ Connection state: ${ws.readyState}`);
           }
-        }, 25000);
+        }, 10000); // More frequent pings for iOS
       };
 
       ws.onmessage = (ev) => {
@@ -485,10 +532,15 @@ export default function CallClient() {
             
             void drainPlayback();
           }
-          
-          if (obj?.type === "error") {
+          else if (obj?.type === "pong") {
+            log("[WS] 🏓 Pong received");
+          }
+          else if (obj?.type === "error") {
             log(`[Server] ❌ Error: ${obj.message}`);
             show(`Error: ${obj.message || "Unknown error"}`);
+          }
+          else {
+            log(`[WS] 📨 Message type: ${obj?.type || 'unknown'}`);
           }
         } catch (e) {
           log(`[Parse] ❌ Error: ${e}`);
@@ -505,9 +557,28 @@ export default function CallClient() {
       ws.onclose = (ev) => {
         clearTimeout(connectionTimeout);
         stopPinger();
-        log(`[WS] ❌ Closed: ${ev.code}`);
+        
+        const closeReasons: { [key: number]: string } = {
+          1000: "Normal closure",
+          1001: "Going away",
+          1002: "Protocol error",
+          1003: "Unsupported data",
+          1005: "No status received",
+          1006: "Abnormal closure",
+          1007: "Invalid frame payload",
+          1008: "Policy violation",
+          1009: "Message too big",
+          1010: "Mandatory extension",
+          1011: "Internal server error",
+          1015: "TLS handshake failed"
+        };
+        
+        const reason = closeReasons[ev.code] || `Unknown (${ev.code})`;
+        log(`[WS] ❌ Closed: ${ev.code} - ${reason}`);
+        if (ev.reason) log(`[WS] Reason: ${ev.reason}`);
+        
         setStatus("closed");
-        show("Call ended");
+        show(`Call ended: ${reason}`);
         cleanupAudio();
         wsRef.current = null;
       };
@@ -621,6 +692,12 @@ export default function CallClient() {
 
             <h1 className="text-3xl font-bold mb-2">Ellie</h1>
             <p className="text-pink-200 mb-8">Voice Call Active</p>
+            
+            {!hasSpoken && status === "connected" && (
+              <p className="text-yellow-300 mb-4 text-sm animate-pulse">
+                💬 Tap to unmute and say "Hi Ellie!"
+              </p>
+            )}
 
             <div className="flex items-center gap-4">
               <button
