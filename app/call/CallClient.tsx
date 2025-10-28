@@ -28,23 +28,25 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // ✅ Back to HTMLAudioElement (what worked before!)
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const queueRef = useRef<string[]>([]);
+  // 🎵 HTMLAudioElement for iOS Bluetooth routing
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const audioQueueRef = useRef<Blob[]>([]);
   const playingRef = useRef(false);
+  const drainingRef = useRef(false);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
+  // 📱 Logging with on-screen display
   const log = useCallback((msg: string) => {
     console.log(msg);
-    setLogs(prev => [...prev.slice(-20), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
+    setLogs(prev => [...prev.slice(-25), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
   }, []);
 
-  // ✅ Resample audio to 24kHz
+  // ===== Audio Conversion Helpers =====
+  
   function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array<ArrayBuffer> {
     if (inputRate === 24000) {
-      // Create a copy to ensure consistent ArrayBuffer return type
       const output = new Float32Array(inputBuffer.length);
       output.set(inputBuffer);
       return output;
@@ -92,7 +94,6 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  // ✅ Convert PCM16 to WAV Blob (original method)
   function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
     const numChannels = 1;
     const bitsPerSample = 16;
@@ -130,39 +131,85 @@ export default function CallClient() {
     return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  // ✅ Original playback method
-  const playNext = useCallback(() => {
-    log(`[playNext] playing:${playingRef.current} queue:${queueRef.current.length}`);
-    
-    if (playingRef.current || queueRef.current.length === 0) {
+  // ===== Audio Playback Queue (Sequential for iOS) =====
+  
+  const drainPlayback = useCallback(async () => {
+    if (drainingRef.current) {
+      log("[Playback] Already draining, skip");
       return;
     }
     
-    const audio = audioRef.current;
+    if (audioQueueRef.current.length === 0) {
+      log("[Playback] Queue empty, nothing to play");
+      return;
+    }
+    
+    const audio = audioElementRef.current;
     if (!audio) {
-      log("[playNext] ❌ No audio element!");
+      log("[Playback] ❌ No audio element!");
       return;
     }
     
-    playingRef.current = true;
-    const url = queueRef.current.shift()!;
+    drainingRef.current = true;
+    log(`[Playback] 🔊 Starting drain, queue: ${audioQueueRef.current.length}`);
     
-    log(`[playNext] ▶️ Playing (${queueRef.current.length} left in queue)`);
-    
-    audio.src = url;
-    audio.play()
-      .then(() => {
-        log("[play] ✅ Started");
-      })
-      .catch(err => {
-        log(`[play] ❌ Error: ${err.name} - ${err.message}`);
-        URL.revokeObjectURL(url);
-        playingRef.current = false;
-        playNext();
-      });
+    try {
+      while (audioQueueRef.current.length > 0) {
+        const blob = audioQueueRef.current.shift()!;
+        const url = URL.createObjectURL(blob);
+        
+        log(`[Playback] ▶️ Playing chunk (${audioQueueRef.current.length} remaining)`);
+        
+        audio.src = url;
+        
+        // Wait for this chunk to finish
+        await new Promise<void>((resolve, reject) => {
+          const onEnded = () => {
+            log("[Playback] ✅ Chunk ended");
+            URL.revokeObjectURL(url);
+            cleanup();
+            resolve();
+          };
+          
+          const onError = (e: Event) => {
+            const target = e.target as HTMLAudioElement;
+            log(`[Playback] ❌ Error: ${target.error?.code} ${target.error?.message}`);
+            URL.revokeObjectURL(url);
+            cleanup();
+            reject(e);
+          };
+          
+          const cleanup = () => {
+            audio.removeEventListener('ended', onEnded);
+            audio.removeEventListener('error', onError);
+          };
+          
+          audio.addEventListener('ended', onEnded, { once: true });
+          audio.addEventListener('error', onError, { once: true });
+          
+          audio.play()
+            .then(() => log("[Playback] ✅ Play() started"))
+            .catch(err => {
+              log(`[Playback] ❌ Play failed: ${err.name}`);
+              reject(err);
+            });
+        });
+      }
+      
+      log("[Playback] ✅ Queue drained completely");
+    } catch (err: any) {
+      log(`[Playback] ❌ Drain error: ${err.message || err}`);
+    } finally {
+      drainingRef.current = false;
+    }
   }, [log]);
 
+  // ===== Audio Setup with iOS-specific handling =====
+  
   const ensureAudio = useCallback(async () => {
+    log("[Audio] 🎤 Setting up audio system...");
+    
+    // Create AudioContext
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
@@ -171,14 +218,51 @@ export default function CallClient() {
         latencyHint: 'interactive'
       });
       
-      if (acRef.current.state === 'suspended') {
-        await acRef.current.resume();
-      }
+      log(`[Audio] AudioContext created: state=${acRef.current.state}, sampleRate=${acRef.current.sampleRate}Hz`);
       
-      log(`[Audio] Context created, state: ${acRef.current.state}, sampleRate: ${acRef.current.sampleRate}`);
+      // iOS requires explicit resume after user gesture
+      if (acRef.current.state === 'suspended') {
+        log("[Audio] 🔓 Resuming suspended AudioContext...");
+        await acRef.current.resume();
+        log(`[Audio] ✅ Resumed: state=${acRef.current.state}`);
+      }
     }
     
+    // Create HTMLAudioElement for iOS Bluetooth routing
+    if (!audioElementRef.current) {
+      log("[Audio] 🔊 Creating HTMLAudioElement for iOS Bluetooth...");
+      const audio = new Audio();
+      audio.autoplay = false;
+      
+      // Important: Set iOS-specific attributes
+      audio.setAttribute('playsinline', 'true');
+      audio.setAttribute('webkit-playsinline', 'true');
+      
+      audioElementRef.current = audio;
+      
+      // Prime the audio element with a tiny silent audio file
+      // This helps iOS route audio to Bluetooth on first interaction
+      const silenceBlob = pcm16ToWavBlob(new Int16Array(1000), 24000); // 42ms of silence
+      const silenceUrl = URL.createObjectURL(silenceBlob);
+      audio.src = silenceUrl;
+      
+      try {
+        await audio.play();
+        audio.pause();
+        audio.currentTime = 0;
+        URL.revokeObjectURL(silenceUrl);
+        log("[Audio] ✅ Audio element primed for iOS");
+      } catch (e: any) {
+        log(`[Audio] ⚠️ Could not prime audio: ${e.name}`);
+      }
+      
+      log("[Audio] ✅ HTMLAudioElement ready");
+    }
+    
+    // Request microphone
     if (!micStreamRef.current) {
+      log("[Audio] 🎙️ Requesting microphone...");
+      
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -188,19 +272,25 @@ export default function CallClient() {
         } as MediaTrackConstraints
       };
       
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
-      log("[Audio] Microphone stream acquired");
-      
-      const audioTrack = micStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
+      try {
+        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        const audioTrack = micStreamRef.current.getAudioTracks()[0];
         const settings = audioTrack.getSettings();
-        log(`[Audio] Mic settings - sampleRate: ${settings.sampleRate}, echoCancellation: ${settings.echoCancellation}`);
+        log(`[Audio] ✅ Microphone granted: sampleRate=${settings.sampleRate}Hz`);
+        
+      } catch (err: any) {
+        log(`[Audio] ❌ Microphone denied: ${err.message}`);
+        throw err;
       }
     }
     
+    log("[Audio] ✅ Audio setup complete");
     return acRef.current!;
   }, [log]);
 
+  // ===== Visual Meter =====
+  
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -239,6 +329,8 @@ export default function CallClient() {
     };
   }, []);
 
+  // ===== Cleanup =====
+  
   const stopPinger = () => {
     if (wsPingRef.current) {
       window.clearInterval(wsPingRef.current);
@@ -247,16 +339,23 @@ export default function CallClient() {
   };
 
   const cleanupAudio = useCallback(() => {
+    log("[Audio] 🧹 Cleaning up...");
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
     
-    queueRef.current.forEach(url => URL.revokeObjectURL(url));
-    queueRef.current = [];
-    playingRef.current = false;
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current.src = '';
+    }
     
-    log("[Audio] Cleanup complete");
+    audioQueueRef.current.forEach(blob => URL.revokeObjectURL(URL.createObjectURL(blob)));
+    audioQueueRef.current = [];
+    playingRef.current = false;
+    drainingRef.current = false;
+    
+    log("[Audio] ✅ Cleanup complete");
   }, [log]);
 
   const cleanupAll = useCallback(() => {
@@ -265,38 +364,26 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
+  // ===== WebSocket Connection =====
+  
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
-      log("[Call] Starting...");
+      log("[Call] 📞 Starting call...");
+      log(`[Call] Device: ${navigator.userAgent.slice(0, 100)}`);
       
-      // ✅ Create HTMLAudioElement (original method)
-      log("[Audio] Creating element...");
-      const audio = new Audio();
-      audioRef.current = audio;
+      // Setup audio FIRST (ensures user interaction primes everything)
+      const ac = await ensureAudio();
       
-      audio.addEventListener('ended', () => {
-        log("[Audio] Ended");
-        playingRef.current = false;
-        URL.revokeObjectURL(audio.src);
-        playNext();
-      });
-      
-      audio.addEventListener('error', (e) => {
-        const target = e.target as HTMLAudioElement;
-        log(`[Audio] Error: ${target.error?.code} ${target.error?.message}`);
-        playingRef.current = false;
-        playNext();
-      });
-      
-      log("[Audio] Element created");
-      
+      // Now establish WebSocket
+      log(`[WS] Connecting to ${WS_URL}...`);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
 
       const connectionTimeout = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
+          log("[WS] ⏱️ Connection timeout");
           ws.close();
           setStatus("error");
           show("Connection timeout");
@@ -307,14 +394,16 @@ export default function CallClient() {
         clearTimeout(connectionTimeout);
         setStatus("connected");
         show("Connected!");
-        log("[WS] Connected");
+        log("[WS] ✅ Connected");
 
+        // Get user ID
         let realUserId = "default-user";
         try {
           const meRes = await fetch("/api/auth/me", { credentials: "include" });
           if (meRes.ok) {
             const meData = await meRes.json();
             realUserId = meData.userId || "default-user";
+            log(`[Auth] User: ${realUserId}`);
           }
         } catch (e) {
           log(`[Auth] Error: ${e}`);
@@ -328,8 +417,10 @@ export default function CallClient() {
           language: storedLang,
           sampleRate: 24000 
         }));
+        
+        log("[WS] Sent hello message");
 
-        const ac = await ensureAudio();
+        // Setup microphone capture pipeline
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
         micNodeRef.current = src;
@@ -340,22 +431,23 @@ export default function CallClient() {
         src.connect(gn);
         startMeter(gn);
 
+        // Audio processor for sending
+        const contextSampleRate = ac.sampleRate;
+        log(`[Audio] Processing at ${contextSampleRate}Hz → 24000Hz`);
+        
         const proc = ac.createScriptProcessor(4096, 1, 1);
         processorRef.current = proc;
         gn.connect(proc);
         
-        // ✅ DO NOT connect to destination (no echo!)
-        // proc.connect(ac.destination); // REMOVED
-        
-        const contextSampleRate = ac.sampleRate;
-        log(`[Audio] Processing at ${contextSampleRate} Hz, will resample to 24000 Hz`);
+        // ⚠️ DO NOT connect to destination to avoid echo
+        // proc.connect(ac.destination); // REMOVED for no echo
         
         proc.onaudioprocess = (ev) => {
           if (ws.readyState !== WebSocket.OPEN) return;
           
           let input = ev.inputBuffer.getChannelData(0);
           
-          // ✅ Resample if needed
+          // Resample if needed
           if (contextSampleRate !== 24000) {
             input = resampleTo24k(input, contextSampleRate);
           }
@@ -364,9 +456,10 @@ export default function CallClient() {
           const b64 = abToBase64(pcm16.buffer);
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
         };
+        
+        log("[Audio] ✅ Microphone pipeline ready");
 
-        log("[Audio] Microphone pipeline connected (resampling enabled, no echo)");
-
+        // Start ping
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -379,31 +472,29 @@ export default function CallClient() {
           const obj = JSON.parse(String(ev.data));
           
           if (obj?.type === "audio.delta" && obj.audio) {
-            log("[WS] Audio delta received");
+            log("[WS] 🔊 Audio chunk received");
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
-            
-            // ✅ Use original WAV blob method
             const wavBlob = pcm16ToWavBlob(pcm16, 24000);
-            const url = URL.createObjectURL(wavBlob);
             
-            queueRef.current.push(url);
-            log(`[Queue] Added (total: ${queueRef.current.length})`);
-            playNext();
+            audioQueueRef.current.push(wavBlob);
+            log(`[Queue] Added (total: ${audioQueueRef.current.length})`);
+            
+            void drainPlayback();
           }
           
           if (obj?.type === "error") {
-            log(`[Server] Error: ${obj.message}`);
+            log(`[Server] ❌ Error: ${obj.message}`);
             show(`Error: ${obj.message || "Unknown error"}`);
           }
         } catch (e) {
-          log(`[Parse] Error: ${e}`);
+          log(`[Parse] ❌ Error: ${e}`);
         }
       };
 
       ws.onerror = (err) => {
         clearTimeout(connectionTimeout);
-        log(`[WS] Error: ${err}`);
+        log(`[WS] ❌ Error: ${err}`);
         setStatus("error");
         show("Connection error");
       };
@@ -411,18 +502,18 @@ export default function CallClient() {
       ws.onclose = (ev) => {
         clearTimeout(connectionTimeout);
         stopPinger();
-        log(`[WS] Closed: ${ev.code}`);
+        log(`[WS] ❌ Closed: ${ev.code}`);
         setStatus("closed");
         show("Call ended");
         cleanupAudio();
         wsRef.current = null;
       };
-    } catch (e) {
-      log(`[Start] Failed: ${e}`);
+    } catch (e: any) {
+      log(`[Start] ❌ Failed: ${e.message || e}`);
       setStatus("error");
       show("Failed to start call");
     }
-  }, [ensureAudio, gain, show, startMeter, playNext, cleanupAudio, log]);
+  }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio, log]);
 
   useEffect(() => {
     return () => cleanupAll();
@@ -439,14 +530,17 @@ export default function CallClient() {
     const next = !muted;
     s.getAudioTracks().forEach((t) => (t.enabled = !next));
     setMuted(next);
-    log(`[Mic] ${next ? 'Muted' : 'Unmuted'}`);
+    log(`[Mic] ${next ? '🔇 Muted' : '🎤 Unmuted'}`);
   }, [muted, log]);
 
   const hangUp = useCallback(() => {
+    log("[Call] 📴 Hanging up...");
     try { wsRef.current?.close(); } catch {}
     setStatus("ready");
-  }, []);
+  }, [log]);
 
+  // ===== Render =====
+  
   const vibes = Math.min(100, level * 100);
   const outerScale = 1 + vibes * 0.006;
   const glow = speaking ? 30 + vibes * 0.4 : 15;
@@ -455,14 +549,16 @@ export default function CallClient() {
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-rose-900 text-white px-4 overflow-hidden">
       <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10 pointer-events-none" />
 
+      {/* Debug Logs */}
       {logs.length > 0 && (
-        <div className="absolute top-20 left-4 right-4 bg-black/90 text-green-400 p-2 rounded text-xs font-mono max-h-48 overflow-y-auto z-50">
+        <div className="absolute top-20 left-4 right-4 bg-black/90 text-green-400 p-2 rounded text-xs font-mono max-h-48 overflow-y-auto z-50 border border-green-600/30">
           {logs.map((log, i) => (
             <div key={i}>{log}</div>
           ))}
         </div>
       )}
 
+      {/* Status Indicator */}
       <div className="absolute top-6 right-6 flex items-center gap-2 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-full">
         <div className={`w-2 h-2 rounded-full ${
           status === "connected" ? "bg-green-400 animate-pulse" :
@@ -482,10 +578,10 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-2 text-center max-w-sm">
-              Original playback + Resampling + No echo
+              iOS Bluetooth + Resampling + Debug
             </p>
             <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
-              The version that should work!
+              Fixed for iPhone with Bluetooth headsets
             </p>
             
             <button
