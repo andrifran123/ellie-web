@@ -31,8 +31,9 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // playback pipeline (for server audio.delta)
-  const playbackQueueRef = useRef<ArrayBuffer[]>([]);
+  // 🆕 HTMLAudioElement for iOS Bluetooth playback
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const audioQueueRef = useRef<Blob[]>([]);
   const playingRef = useRef(false);
 
   // visual meter state
@@ -67,6 +68,46 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
+  // 🆕 Convert PCM16 to WAV blob (so HTMLAudioElement can play it)
+  function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    const blockAlign = numChannels * (bitsPerSample / 8);
+    const dataSize = pcm16.length * 2;
+    
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    
+    // WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+    
+    // PCM data
+    for (let i = 0; i < pcm16.length; i++) {
+      view.setInt16(44 + i * 2, pcm16[i], true);
+    }
+    
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
+
   const ensureAudio = useCallback(async () => {
     console.log("[iOS Audio] Starting audio setup...");
     
@@ -74,7 +115,6 @@ export default function CallClient() {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       
-      // CRITICAL: Use 'playback' latency hint to force iOS telephony mode
       acRef.current = new AC({ 
         sampleRate: 24000, 
         latencyHint: 'interactive'
@@ -82,7 +122,6 @@ export default function CallClient() {
       
       console.log("[iOS Audio] AudioContext created, state:", acRef.current.state);
       
-      // CRITICAL: iOS requires explicit resume
       if (acRef.current.state === 'suspended') {
         console.log("[iOS Audio] Resuming suspended AudioContext...");
         await acRef.current.resume();
@@ -90,31 +129,43 @@ export default function CallClient() {
       }
     }
     
+    // 🆕 Create HTMLAudioElement for iOS Bluetooth playback
+    if (!audioElementRef.current) {
+      console.log("[iOS Audio] Creating HTMLAudioElement for Bluetooth routing...");
+      const audio = new Audio();
+      audio.autoplay = false;
+      audioElementRef.current = audio;
+      
+      audio.onended = () => {
+        console.log("[iOS Audio] Audio chunk ended, playing next...");
+        void drainPlayback();
+      };
+      
+      audio.onerror = (e) => {
+        console.error("[iOS Audio] HTMLAudioElement error:", e);
+        playingRef.current = false;
+        void drainPlayback();
+      };
+      
+      console.log("[iOS Audio] ✅ HTMLAudioElement created for Bluetooth routing");
+    }
+    
     if (!micStreamRef.current) {
       console.log("[iOS Audio] Requesting microphone with iOS telephony constraints...");
       
-      // ULTRA-AGGRESSIVE iOS constraints for Bluetooth routing
       const constraints = {
         audio: {
-          // Core telephony flags
-          echoCancellation: true,      // 🔑 CRITICAL for iOS call mode
-          noiseSuppression: true,       // Better audio quality
-          autoGainControl: true,        // Consistent volume
-          
-          // iOS-specific routing hints
-          channelCount: 1,              // Mono = phone call
-          sampleRate: { ideal: 24000 }, // Match server
-          
-          // Additional iOS hints
-          latency: { ideal: 0.01 },     // Low latency = real-time
-          sampleSize: { ideal: 16 },    // 16-bit PCM
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+          sampleRate: { ideal: 24000 },
         } as MediaTrackConstraints
       };
       
       try {
         micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
         
-        // Log the actual constraints iOS applied
         const audioTrack = micStreamRef.current.getAudioTracks()[0];
         const settings = audioTrack.getSettings();
         console.log("[iOS Audio] ✅ Microphone granted with settings:", {
@@ -124,18 +175,6 @@ export default function CallClient() {
           channelCount: settings.channelCount,
           sampleRate: settings.sampleRate,
         });
-        
-        // CRITICAL: Force iOS to recognize this as a call by playing silent audio
-        // This "warms up" the audio session
-        const ac = acRef.current!;
-        const oscillator = ac.createOscillator();
-        const gainNode = ac.createGain();
-        gainNode.gain.value = 0; // Silent
-        oscillator.connect(gainNode);
-        gainNode.connect(ac.destination);
-        oscillator.start();
-        oscillator.stop(ac.currentTime + 0.1);
-        console.log("[iOS Audio] 🔊 Played silent audio to activate iOS audio session");
         
       } catch (err) {
         console.error("[iOS Audio] ❌ Failed to get microphone:", err);
@@ -147,7 +186,7 @@ export default function CallClient() {
     return acRef.current!;
   }, []);
 
-  // visual RMS meter loop (runs regardless of WS state)
+  // visual RMS meter loop
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -186,35 +225,47 @@ export default function CallClient() {
     };
   }, []);
 
-  // play server PCM16 (base64) chunks as they arrive
+  // 🆕 Play using HTMLAudioElement (routes to Bluetooth on iOS!)
   const drainPlayback = useCallback(async () => {
     if (playingRef.current) return;
+    if (audioQueueRef.current.length === 0) return;
+    
     playingRef.current = true;
+    const audio = audioElementRef.current!;
+    
     try {
-      const ac = acRef.current!;
-      
-      // CRITICAL: Ensure AudioContext is running for playback
-      if (ac.state === 'suspended') {
-        console.log("[iOS Audio] Resuming AudioContext for playback...");
-        await ac.resume();
-      }
-      
-      while (playbackQueueRef.current.length) {
-        const buf = playbackQueueRef.current.shift()!;
-        const pcm16 = new Int16Array(buf);
-        const f32 = new Float32Array(pcm16.length);
-        for (let i = 0; i < pcm16.length; i++) f32[i] = Math.max(-1, Math.min(1, pcm16[i] / 0x8000));
-        const sampleRate = 24000; // server output
-        const audioBuf = ac.createBuffer(1, f32.length, sampleRate);
-        audioBuf.copyToChannel(f32, 0);
-        const src = ac.createBufferSource();
-        src.buffer = audioBuf;
-        src.connect(ac.destination);
-        await new Promise<void>((resolve) => {
-          src.onended = () => resolve();
-          src.start();
+      while (audioQueueRef.current.length > 0) {
+        const blob = audioQueueRef.current.shift()!;
+        const url = URL.createObjectURL(blob);
+        
+        audio.src = url;
+        
+        await new Promise<void>((resolve, reject) => {
+          const onEnded = () => {
+            URL.revokeObjectURL(url);
+            cleanup();
+            resolve();
+          };
+          
+          const onError = (e: Event) => {
+            URL.revokeObjectURL(url);
+            cleanup();
+            reject(e);
+          };
+          
+          const cleanup = () => {
+            audio.removeEventListener('ended', onEnded);
+            audio.removeEventListener('error', onError);
+          };
+          
+          audio.addEventListener('ended', onEnded, { once: true });
+          audio.addEventListener('error', onError, { once: true });
+          
+          audio.play().catch(reject);
         });
       }
+    } catch (err) {
+      console.error("[iOS Audio] Playback error:", err);
     } finally {
       playingRef.current = false;
     }
@@ -233,6 +284,10 @@ export default function CallClient() {
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current.src = '';
+    }
   }, []);
 
   const cleanupAll = useCallback(() => {
@@ -244,16 +299,12 @@ export default function CallClient() {
   const connect = useCallback(async () => {
     try {
       console.log("[WS] Attempting connection to:", WS_URL);
-      console.log("[WS] User language:", localStorage.getItem("ellie_language") || "en");
-      console.log("[iOS Audio] User agent:", navigator.userAgent);
+      console.log("[iOS Audio] Device:", navigator.userAgent);
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
 
-      console.log("[WS] WebSocket created, state:", ws.readyState);
-
-      // Set timeout for connection
       const connectionTimeout = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
           console.error("[WS] Connection timeout after 15s");
@@ -269,7 +320,6 @@ export default function CallClient() {
         setStatus("connected");
         show("Call connected");
 
-        // Get real userId from backend
         let realUserId = "default-user";
         try {
           const meRes = await fetch("/api/auth/me", { credentials: "include" });
@@ -281,10 +331,8 @@ export default function CallClient() {
           console.error("[call] Failed to get userId:", e);
         }
 
-        // Get user's language preference
         const storedLang = localStorage.getItem("ellie_language") || "en";
 
-        // Send hello with language and REAL userId
         ws.send(JSON.stringify({ 
           type: "hello", 
           userId: realUserId,
@@ -317,7 +365,6 @@ export default function CallClient() {
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
         };
 
-        // Start ping interval
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -328,11 +375,16 @@ export default function CallClient() {
       ws.onmessage = (ev) => {
         try {
           const obj = JSON.parse(String(ev.data));
-          console.log("[WS] Message:", obj.type);
           
           if (obj?.type === "audio.delta" && obj.audio) {
+            // 🆕 Convert PCM16 to WAV and add to queue
             const ab = base64ToArrayBuffer(obj.audio);
-            playbackQueueRef.current.push(ab);
+            const pcm16 = new Int16Array(ab);
+            const wavBlob = pcm16ToWavBlob(pcm16, 24000);
+            
+            audioQueueRef.current.push(wavBlob);
+            console.log("[iOS Audio] Added audio chunk to queue, queue length:", audioQueueRef.current.length);
+            
             void drainPlayback();
           }
           
@@ -373,7 +425,6 @@ export default function CallClient() {
     return () => cleanupAll();
   }, [connect, cleanupAll]);
 
-  // live gain update + persist
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
     if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
@@ -392,7 +443,7 @@ export default function CallClient() {
     router.push("/chat");
   }, [router]);
 
-  // Render
+  // Render (keeping your existing UI)
   const vibes = Math.min(100, level * 100);
   const outerScale = 1 + vibes * 0.006;
   const glow = speaking ? 30 + vibes * 0.4 : 15;
@@ -401,7 +452,6 @@ export default function CallClient() {
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-rose-900 text-white px-4 overflow-hidden">
       <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10 pointer-events-none" />
 
-      {/* Status indicator */}
       <div className="absolute top-6 right-6 flex items-center gap-2 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-full">
         <div className={`w-2 h-2 rounded-full ${
           status === "connected" ? "bg-green-400 animate-pulse" :
@@ -411,9 +461,7 @@ export default function CallClient() {
         <span className="text-sm capitalize">{status}</span>
       </div>
 
-      {/* Main call interface */}
       <div className="relative z-10 flex flex-col items-center">
-        {/* Visual meter / avatar */}
         <motion.div
           className="relative mb-8"
           animate={{ scale: outerScale }}
@@ -436,11 +484,9 @@ export default function CallClient() {
           </div>
         </motion.div>
 
-        {/* Call name */}
         <h1 className="text-3xl font-bold mb-2">Ellie</h1>
         <p className="text-pink-200 mb-8">Voice Call</p>
 
-        {/* Controls */}
         <div className="flex items-center gap-4">
           <button
             onClick={toggleMute}
@@ -471,7 +517,6 @@ export default function CallClient() {
           </button>
         </div>
 
-        {/* Gain slider */}
         <div className="mt-8 w-64">
           <label className="block text-sm text-pink-200 mb-2">Microphone Gain</label>
           <input
@@ -487,7 +532,6 @@ export default function CallClient() {
         </div>
       </div>
 
-      {/* Toast notifications */}
       <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2">
         {toasts.map((t) => (
           <div
