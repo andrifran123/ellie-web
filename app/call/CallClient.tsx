@@ -44,14 +44,13 @@ export default function CallClient() {
   // Web Audio playback chain for Ellie’s voice
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
-  const lookaheadPaddingSec = 0.02; // keep a tiny headroom when starting
+  const lookaheadPaddingSec = 0.02; // tiny headroom when starting
 
   // Optional “keepalive” oscillator to keep the audio route warm on iOS
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
-  const [hasSpoken, setHasSpoken] = useState(false);
 
   // ---------- logging ----------
   const log = useCallback((msg: string) => {
@@ -79,7 +78,7 @@ export default function CallClient() {
     return out;
   }
 
-  function floatTo16BitPCM(float32: Float32Array) {
+  function floatTo16BitPCM(float32: Float32Array): Int16Array {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
       const s = Math.max(-1, Math.min(1, float32[i]));
@@ -88,15 +87,13 @@ export default function CallClient() {
     return out;
   }
 
-  function abToBase64(buf: ArrayBuffer) {
+  function abToBase64(buf: ArrayBuffer): string {
     const bytes = new Uint8Array(buf);
     const chunk = 0x8000;
     let binary = "";
     for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(
-        null,
-        bytes.subarray(i, i + chunk) as unknown as number[]
-      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as any);
     }
     return btoa(binary);
   }
@@ -192,7 +189,7 @@ export default function CallClient() {
         audio.addEventListener("ended", onEnd, { once: true });
       });
       log("[Audio] ✅ Beep played — Bluetooth route should be established");
-    } catch (e) {
+    } catch {
       URL.revokeObjectURL(url);
       log("[Audio] ⚠️ Could not play beep (will continue)");
     }
@@ -221,7 +218,6 @@ export default function CallClient() {
       const speakingNow = boosted > 0.07;
       if (speakingNow) {
         setSpeaking(true);
-        setHasSpoken(true);
         if (calmTimer) window.clearTimeout(calmTimer);
         calmTimer = window.setTimeout(() => setSpeaking(false), 160);
       }
@@ -414,7 +410,9 @@ export default function CallClient() {
             const me = await meRes.json();
             realUserId = me.userId || "default-user";
           }
-        } catch {}
+        } catch {
+          // ignore
+        }
 
         const storedLang = localStorage.getItem("ellie_language") || "en";
         ws.send(
@@ -488,7 +486,7 @@ export default function CallClient() {
 
           if (obj?.type === "audio.delta" && obj.audio) {
             // Incoming PCM16 mono @ 24k (from server’s realtime pipe)
-            const ab = base64ToArrayBuffer(obj.audio); // from server’s audio.delta :contentReference[oaicite:1]{index=1}
+            const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
             const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
             schedulePlayback(audioBuffer); // tight, gapless scheduling
@@ -500,8 +498,8 @@ export default function CallClient() {
           } else {
             // other messages ignored
           }
-        } catch (e) {
-          log(`[WS] Parse error: ${e}`);
+        } catch (err) {
+          log(`[WS] Parse error: ${err}`);
         }
       };
 
