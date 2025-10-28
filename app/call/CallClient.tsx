@@ -290,8 +290,8 @@ export default function CallClient() {
       log("[Audio] 🔔 Playing beep...");
       try {
         // Ensure audio context is resumed (iOS requirement)
-        if (ac.state === 'suspended') {
-          await ac.resume();
+        if (acRef.current && acRef.current.state === 'suspended') {
+          await acRef.current.resume();
           log("[Audio] ✅ AudioContext resumed");
         }
         
