@@ -42,8 +42,13 @@ export default function CallClient() {
   }, []);
 
   // ✅ Resample audio to 24kHz
-  function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
-    if (inputRate === 24000) return inputBuffer;
+  function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array<ArrayBuffer> {
+    if (inputRate === 24000) {
+      // Create a copy to ensure consistent ArrayBuffer return type
+      const output = new Float32Array(inputBuffer.length);
+      output.set(inputBuffer);
+      return output;
+    }
     
     const ratio = 24000 / inputRate;
     const outputLength = Math.floor(inputBuffer.length * ratio);
