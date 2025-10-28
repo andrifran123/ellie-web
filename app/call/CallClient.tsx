@@ -28,9 +28,6 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // ✅ THE REAL FIX: MediaStreamDestination for iOS to recognize as call output
-  const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const playbackSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const playbackQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
@@ -82,7 +79,6 @@ export default function CallClient() {
     return audioBuffer;
   }
 
-  // ✅ Play audio through MediaStream (iOS recognizes this as call output)
   const playNextBuffer = useCallback(() => {
     log(`[playNext] playing:${isPlayingRef.current} queue:${playbackQueueRef.current.length}`);
     
@@ -91,10 +87,8 @@ export default function CallClient() {
     }
     
     const ac = acRef.current;
-    const destination = destinationRef.current;
-    
-    if (!ac || !destination) {
-      log("[playNext] ❌ No audio context or destination!");
+    if (!ac) {
+      log("[playNext] ❌ No audio context!");
       return;
     }
     
@@ -107,9 +101,8 @@ export default function CallClient() {
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
       
-      // ✅ CRITICAL: Connect to MediaStreamDestination (not ac.destination)
-      // This creates a MediaStream that iOS recognizes as call output
-      source.connect(destination);
+      // ✅ CRITICAL: Direct connection to destination for iOS Bluetooth routing
+      source.connect(ac.destination);
       
       source.onended = () => {
         log("[Audio] Ended");
@@ -165,26 +158,6 @@ export default function CallClient() {
       if (audioTrack) {
         const settings = audioTrack.getSettings();
         log(`[Audio] Mic settings - sampleRate: ${settings.sampleRate}, echoCancellation: ${settings.echoCancellation}`);
-      }
-    }
-    
-    // ✅ CRITICAL: Create MediaStreamDestination for output
-    if (!destinationRef.current) {
-      destinationRef.current = acRef.current.createMediaStreamDestination();
-      log("[Audio] MediaStreamDestination created");
-      
-      // ✅ Create HTMLAudioElement and connect it to the MediaStream
-      if (!audioElementRef.current) {
-        const audio = new Audio();
-        audio.autoplay = true;
-        audio.srcObject = destinationRef.current.stream;
-        audioElementRef.current = audio;
-        log("[Audio] Audio element connected to MediaStream");
-        
-        // Play the audio element to activate the stream
-        audio.play().catch(err => {
-          log(`[Audio] Autoplay blocked: ${err.message}`);
-        });
       }
     }
     
@@ -250,21 +223,6 @@ export default function CallClient() {
       }
     } catch {}
     
-    try {
-      if (audioElementRef.current) {
-        audioElementRef.current.pause();
-        audioElementRef.current.srcObject = null;
-        audioElementRef.current = null;
-      }
-    } catch {}
-    
-    try {
-      if (destinationRef.current) {
-        destinationRef.current.disconnect();
-        destinationRef.current = null;
-      }
-    } catch {}
-    
     playbackQueueRef.current = [];
     isPlayingRef.current = false;
     
@@ -320,7 +278,6 @@ export default function CallClient() {
           sampleRate: 24000 
         }));
 
-        // Initialize audio session (creates MediaStreamDestination)
         const ac = await ensureAudio();
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
@@ -335,7 +292,12 @@ export default function CallClient() {
         const proc = ac.createScriptProcessor(4096, 1, 1);
         processorRef.current = proc;
         gn.connect(proc);
-        proc.connect(ac.destination);
+        
+        // ✅ CRITICAL FIX: DO NOT connect processor to destination!
+        // This was causing echo and confusing iOS about audio routing
+        // The processor only needs to capture data, not play it
+        // proc.connect(ac.destination); // ❌ REMOVED THIS LINE
+        
         proc.onaudioprocess = (ev) => {
           if (ws.readyState !== WebSocket.OPEN) return;
           const input = ev.inputBuffer.getChannelData(0);
@@ -344,7 +306,7 @@ export default function CallClient() {
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
         };
 
-        log("[Audio] Microphone pipeline connected");
+        log("[Audio] Microphone pipeline connected (NOT to destination - no echo)");
 
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -458,10 +420,10 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-2 text-center max-w-sm">
-              Auto Bluetooth Routing
+              Fixed: Mic won't echo through speakers
             </p>
             <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
-              Uses MediaStream for iOS compatibility
+              Proper audio routing for iOS Bluetooth
             </p>
             
             <button
