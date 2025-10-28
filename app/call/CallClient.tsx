@@ -68,30 +68,82 @@ export default function CallClient() {
   }
 
   const ensureAudio = useCallback(async () => {
+    console.log("[iOS Audio] Starting audio setup...");
+    
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
-      acRef.current = new AC({ sampleRate: 24000, latencyHint: 'interactive' });
       
-      // iOS requires AudioContext to be resumed after user interaction
+      // CRITICAL: Use 'playback' latency hint to force iOS telephony mode
+      acRef.current = new AC({ 
+        sampleRate: 24000, 
+        latencyHint: 'interactive'
+      });
+      
+      console.log("[iOS Audio] AudioContext created, state:", acRef.current.state);
+      
+      // CRITICAL: iOS requires explicit resume
       if (acRef.current.state === 'suspended') {
+        console.log("[iOS Audio] Resuming suspended AudioContext...");
         await acRef.current.resume();
+        console.log("[iOS Audio] AudioContext resumed, state:", acRef.current.state);
       }
     }
+    
     if (!micStreamRef.current) {
-      // iOS-specific audio constraints for proper headphone/bluetooth routing
+      console.log("[iOS Audio] Requesting microphone with iOS telephony constraints...");
+      
+      // ULTRA-AGGRESSIVE iOS constraints for Bluetooth routing
       const constraints = {
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          // These help iOS route to headphones/bluetooth properly
-          channelCount: 1,
-          sampleRate: { ideal: 24000 },
-        }
+          // Core telephony flags
+          echoCancellation: true,      // 🔑 CRITICAL for iOS call mode
+          noiseSuppression: true,       // Better audio quality
+          autoGainControl: true,        // Consistent volume
+          
+          // iOS-specific routing hints
+          channelCount: 1,              // Mono = phone call
+          sampleRate: { ideal: 24000 }, // Match server
+          
+          // Additional iOS hints
+          latency: { ideal: 0.01 },     // Low latency = real-time
+          sampleSize: { ideal: 16 },    // 16-bit PCM
+        } as MediaTrackConstraints
       };
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      try {
+        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        // Log the actual constraints iOS applied
+        const audioTrack = micStreamRef.current.getAudioTracks()[0];
+        const settings = audioTrack.getSettings();
+        console.log("[iOS Audio] ✅ Microphone granted with settings:", {
+          echoCancellation: settings.echoCancellation,
+          noiseSuppression: settings.noiseSuppression,
+          autoGainControl: settings.autoGainControl,
+          channelCount: settings.channelCount,
+          sampleRate: settings.sampleRate,
+        });
+        
+        // CRITICAL: Force iOS to recognize this as a call by playing silent audio
+        // This "warms up" the audio session
+        const ac = acRef.current!;
+        const oscillator = ac.createOscillator();
+        const gainNode = ac.createGain();
+        gainNode.gain.value = 0; // Silent
+        oscillator.connect(gainNode);
+        gainNode.connect(ac.destination);
+        oscillator.start();
+        oscillator.stop(ac.currentTime + 0.1);
+        console.log("[iOS Audio] 🔊 Played silent audio to activate iOS audio session");
+        
+      } catch (err) {
+        console.error("[iOS Audio] ❌ Failed to get microphone:", err);
+        throw err;
+      }
     }
+    
+    console.log("[iOS Audio] ✅ Audio setup complete");
     return acRef.current!;
   }, []);
 
@@ -140,6 +192,13 @@ export default function CallClient() {
     playingRef.current = true;
     try {
       const ac = acRef.current!;
+      
+      // CRITICAL: Ensure AudioContext is running for playback
+      if (ac.state === 'suspended') {
+        console.log("[iOS Audio] Resuming AudioContext for playback...");
+        await ac.resume();
+      }
+      
       while (playbackQueueRef.current.length) {
         const buf = playbackQueueRef.current.shift()!;
         const pcm16 = new Int16Array(buf);
@@ -169,6 +228,7 @@ export default function CallClient() {
   };
 
   const cleanupAudio = useCallback(() => {
+    console.log("[iOS Audio] Cleaning up audio...");
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
@@ -185,6 +245,7 @@ export default function CallClient() {
     try {
       console.log("[WS] Attempting connection to:", WS_URL);
       console.log("[WS] User language:", localStorage.getItem("ellie_language") || "en");
+      console.log("[iOS Audio] User agent:", navigator.userAgent);
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -204,7 +265,7 @@ export default function CallClient() {
 
       ws.onopen = async () => {
         clearTimeout(connectionTimeout);
-        console.log("[WS] Ã¢Å“â€¦ CONNECTION OPENED");
+        console.log("[WS] ✅ CONNECTION OPENED");
         setStatus("connected");
         show("Call connected");
 
@@ -226,7 +287,7 @@ export default function CallClient() {
         // Send hello with language and REAL userId
         ws.send(JSON.stringify({ 
           type: "hello", 
-          userId: realUserId,  // âœ… REAL USER ID!
+          userId: realUserId,
           language: storedLang,
           sampleRate: 24000 
         }));
@@ -331,211 +392,112 @@ export default function CallClient() {
     router.push("/chat");
   }, [router]);
 
-  // Keyboard M Ã¢â€ â€™ mute
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleMute]);
+  // Render
+  const vibes = Math.min(100, level * 100);
+  const outerScale = 1 + vibes * 0.006;
+  const glow = speaking ? 30 + vibes * 0.4 : 15;
 
-  /* ===================== UI ===================== */
   return (
-    <div className="relative min-h-screen w-full overflow-hidden text-white">
-      <Starfield />
-      <div
-        aria-hidden
-        className="absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(1600px circle at 70% 65%, #130b2d 0%, #0b0722 55%, #070616 85%)",
-        }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.06]"
-        style={{
-          background:
-            "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
-          mixBlendMode: "screen",
-        }}
-      />
+    <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-rose-900 text-white px-4 overflow-hidden">
+      <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10 pointer-events-none" />
 
-      {/* Top bar */}
-      <header className="relative z-10 flex items-center justify-between px-6 pt-5">
-        <div className="flex items-center gap-2">
-          <div className="size-8 grid place-items-center rounded-lg bg-white/10">Ã°Å¸â€œÅ¾</div>
-          <div className="text-sm">
-            <div className="font-semibold">Call</div>
-            <div className={`text-xs ${status === "connected" ? "text-emerald-400" : "text-white/60"}`}>
-              {status === "connecting" && "ConnectingÃ¢â‚¬Â¦"}
-              {status === "connected" && "Connected"}
-              {status === "closed" && "Ended"}
-              {status === "error" && "Error"}
-            </div>
-          </div>
-        </div>
-        <div className="text-xs text-white/60">
-          Press <span className="px-1 rounded bg-white/10">M</span> to mute / unmute
-        </div>
-      </header>
+      {/* Status indicator */}
+      <div className="absolute top-6 right-6 flex items-center gap-2 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-full">
+        <div className={`w-2 h-2 rounded-full ${
+          status === "connected" ? "bg-green-400 animate-pulse" :
+          status === "connecting" ? "bg-yellow-400 animate-pulse" :
+          status === "error" ? "bg-red-400" : "bg-gray-400"
+        }`} />
+        <span className="text-sm capitalize">{status}</span>
+      </div>
 
-      {/* Center Orb */}
-      <main className="relative z-10 grid place-items-center px-6 pt-6">
-        <div className="relative w-[min(78vw,560px)] aspect-square">
-          {[0, 8, 16, 26].map((g, i) => (
-            <div key={i} className="absolute -z-10 rounded-full ring-1 ring-white/6" style={{ inset: g }} />
-          ))}
-          <div
-            className="absolute -inset-6 rounded-full blur-3xl"
+      {/* Main call interface */}
+      <div className="relative z-10 flex flex-col items-center">
+        {/* Visual meter / avatar */}
+        <motion.div
+          className="relative mb-8"
+          animate={{ scale: outerScale }}
+          transition={{ type: "spring", stiffness: 300, damping: 20 }}
+        >
+          <div 
+            className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center relative"
             style={{
-              background:
-                "radial-gradient(60% 60% at 50% 50%, rgba(150,120,255,0.28), transparent 70%)",
+              boxShadow: `0 0 ${glow}px rgba(236, 72, 153, 0.8), 0 0 ${glow * 1.5}px rgba(168, 85, 247, 0.5)`
             }}
-          />
-          <EnergyOrb level={level} speaking={speaking} />
-        </div>
-      </main>
+          >
+            <span className="text-6xl">💜</span>
+            {speaking && (
+              <motion.div
+                className="absolute inset-0 rounded-full border-4 border-pink-300"
+                animate={{ scale: [1, 1.1, 1], opacity: [0.8, 0, 0.8] }}
+                transition={{ duration: 1, repeat: Infinity }}
+              />
+            )}
+          </div>
+        </motion.div>
 
-      {/* Controls */}
-      <footer className="relative z-10 px-6 pb-8 pt-6 grid place-items-center">
-        <div className="w-full max-w-xl flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur shadow-[0_10px_50px_rgba(120,80,255,0.15)]">
+        {/* Call name */}
+        <h1 className="text-3xl font-bold mb-2">Ellie</h1>
+        <p className="text-pink-200 mb-8">Voice Call</p>
+
+        {/* Controls */}
+        <div className="flex items-center gap-4">
           <button
             onClick={toggleMute}
-            className={`h-11 px-4 rounded-xl font-medium transition ${
-              muted ? "bg-rose-500 text-white" : "bg-white text-black"
-            }`}
-            title="Mute (M)"
+            className={`p-4 rounded-full ${
+              muted ? "bg-red-500 hover:bg-red-600" : "bg-white/20 hover:bg-white/30"
+            } backdrop-blur-sm transition-colors`}
+            title={muted ? "Unmute" : "Mute"}
           >
-            {muted ? "Unmute" : "Mute"}
+            {muted ? (
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M13.477 14.89A6 6 0 015.11 6.524l8.367 8.368zm1.414-1.414L6.524 5.11a6 6 0 018.367 8.367zM18 10a8 8 0 11-16 0 8 8 0 0116 0z" clipRule="evenodd" />
+              </svg>
+            ) : (
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+              </svg>
+            )}
           </button>
+
           <button
             onClick={hangUp}
-            className="h-11 px-4 rounded-xl font-semibold bg-rose-600 text-white hover:bg-rose-500 transition"
+            className="p-4 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
             title="Hang up"
           >
-            Hang up
+            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+              <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+            </svg>
           </button>
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs text-white/70 w-12">Gain</span>
-            <input
-              type="range"
-              min={0.2}
-              max={3}
-              step={0.05}
-              value={gain}
-              onChange={(e) => setGain(Number(e.target.value))}
-              className="w-40 accent-white"
-            />
-          </div>
         </div>
-      </footer>
 
-      {/* toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2" aria-live="polite" aria-relevant="additions">
+        {/* Gain slider */}
+        <div className="mt-8 w-64">
+          <label className="block text-sm text-pink-200 mb-2">Microphone Gain</label>
+          <input
+            type="range"
+            min="0.2"
+            max="3"
+            step="0.1"
+            value={gain}
+            onChange={(e) => setGain(Number(e.target.value))}
+            className="w-full accent-pink-500"
+          />
+          <div className="text-xs text-pink-200 text-center mt-1">{gain.toFixed(1)}x</div>
+        </div>
+      </div>
+
+      {/* Toast notifications */}
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2">
         {toasts.map((t) => (
-          <div key={t.id} className="glass rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15">
-            {t.text}
+          <div
+            key={t.id}
+            className="bg-black/80 backdrop-blur-sm text-white px-4 py-2 rounded-lg shadow-lg"
+          >
+            {t.message}
           </div>
         ))}
       </div>
     </div>
   );
-}
-
-/* ------------- Visuals ------------- */
-
-function EnergyOrb({ level, speaking }: { level: number; speaking: boolean }) {
-  const scale = 1 + Math.min(0.35, level * 0.8);
-  const glow = 0.25 + Math.min(0.75, level * 1.2);
-  return (
-    <motion.div
-      className="absolute inset-0 rounded-full grid place-items-center"
-      animate={{ scale }}
-      transition={{ type: "spring", stiffness: 120, damping: 18, mass: 0.6 }}
-    >
-      {/* core */}
-      <div
-        className="relative size-full rounded-full"
-        style={{
-          background:
-            "radial-gradient(60% 60% at 50% 50%, rgba(255,255,255,0.95), rgba(240,230,255,0.75) 34%, rgba(170,150,255,0.32) 70%, rgba(90,60,170,0.20) 100%)",
-          boxShadow: `0 0 140px rgba(130,110,255,${glow})`,
-        }}
-      >
-        {/* flowing sheen */}
-        <div
-          className="absolute inset-0 rounded-full mix-blend-screen opacity-70"
-          style={{
-            background:
-              "conic-gradient(from 210deg at 50% 50%, rgba(180,140,255,0.35), rgba(40,20,120,0.0) 35%, rgba(160,120,255,0.35))",
-            maskImage: "radial-gradient(55% 55% at 50% 50%, black 60%, transparent 75%)",
-          }}
-        />
-        {/* scan ring */}
-        <motion.div
-          className="absolute inset-2 rounded-full border-2 border-white/10"
-          animate={{ rotate: 360 }}
-          transition={{ ease: "linear", duration: 14, repeat: Infinity }}
-          style={{ boxShadow: "0 0 18px rgba(180,150,255,0.12) inset" }}
-        />
-        {/* speaking pulses */}
-        {speaking && (
-          <>
-            <PulseRing delay={0} />
-            <PulseRing delay={0.35} />
-            <PulseRing delay={0.7} />
-          </>
-        )}
-      </div>
-    </motion.div>
-  );
-}
-
-function PulseRing({ delay }: { delay: number }) {
-  return (
-    <motion.span
-      className="absolute inset-0 rounded-full border-2 border-indigo-300/60"
-      initial={{ opacity: 0.0, scale: 1.0 }}
-      animate={{ opacity: [0.35, 0.0], scale: [1.05, 1.45] }}
-      transition={{ duration: 1.4, delay, repeat: Infinity, ease: "easeOut" }}
-    />
-  );
-}
-
-function Starfield() {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-  useEffect(() => {
-    const c = ref.current!;
-    const ctx = c.getContext("2d")!;
-    let w = (c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
-    let h = (c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
-    const stars = Array.from({ length: Math.floor((w * h) / 25000) }, () => ({
-      x: Math.random() * w,
-      y: Math.random() * h,
-      z: 0.2 + Math.random() * 0.8,
-      s: 0.6 + Math.random() * 1.2,
-    }));
-
-    const draw = () => {
-      ctx.clearRect(0, 0, w, h);
-      for (const st of stars) {
-        st.x += 0.02 * st.z;
-        if (st.x > w) st.x = 0;
-        ctx.globalAlpha = 0.15 * st.z;
-        ctx.fillStyle = "#c9b6ff";
-        ctx.fillRect(st.x, st.y, st.s, st.s);
-      }
-      requestAnimationFrame(draw);
-    };
-    draw();
-
-    const onResize = () => {
-      w = (c.width = window.innerWidth * Math.min(2, window.devicePixelRatio || 1));
-      h = (c.height = window.innerHeight * Math.min(2, window.devicePixelRatio || 1));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  return <canvas ref={ref} className="absolute inset-0 z-0 opacity-[0.35]" />;
 }
