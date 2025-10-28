@@ -197,8 +197,9 @@ export default function CallClient() {
       }
       
       log("[Playback] ✅ Queue drained completely");
-    } catch (err: any) {
-      log(`[Playback] ❌ Drain error: ${err.message || err}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`[Playback] ❌ Drain error: ${message}`);
     } finally {
       drainingRef.current = false;
     }
@@ -252,8 +253,9 @@ export default function CallClient() {
         audio.currentTime = 0;
         URL.revokeObjectURL(silenceUrl);
         log("[Audio] ✅ Audio element primed for iOS");
-      } catch (e: any) {
-        log(`[Audio] ⚠️ Could not prime audio: ${e.name}`);
+      } catch (e) {
+        const errorName = e instanceof Error ? e.name : 'Unknown';
+        log(`[Audio] ⚠️ Could not prime audio: ${errorName}`);
       }
       
       log("[Audio] ✅ HTMLAudioElement ready");
@@ -279,8 +281,9 @@ export default function CallClient() {
         const settings = audioTrack.getSettings();
         log(`[Audio] ✅ Microphone granted: sampleRate=${settings.sampleRate}Hz`);
         
-      } catch (err: any) {
-        log(`[Audio] ❌ Microphone denied: ${err.message}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`[Audio] ❌ Microphone denied: ${message}`);
         throw err;
       }
     }
@@ -508,8 +511,9 @@ export default function CallClient() {
         cleanupAudio();
         wsRef.current = null;
       };
-    } catch (e: any) {
-      log(`[Start] ❌ Failed: ${e.message || e}`);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log(`[Start] ❌ Failed: ${message}`);
       setStatus("error");
       show("Failed to start call");
     }
