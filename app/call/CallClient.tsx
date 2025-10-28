@@ -494,7 +494,7 @@ export default function CallClient() {
             key={t.id}
             className="bg-black/80 backdrop-blur-sm text-white px-4 py-2 rounded-lg shadow-lg"
           >
-            {t.message}
+            {t.text}
           </div>
         ))}
       </div>
