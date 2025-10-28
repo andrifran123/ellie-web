@@ -5,27 +5,23 @@ import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
 import { motion } from "framer-motion";
 
-type Status = "connecting" | "connected" | "closed" | "error";
+type Status = "ready" | "connecting" | "connected" | "closed" | "error";
 
-/** Direct connection to Render backend (Vercel can't proxy WS upgrades) */
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
-
-// 🆕 Optimized batching parameters
-const BATCH_SIZE = 5; // Accumulate 5 chunks before playing (~0.85s)
-const BATCH_TIMEOUT_MS = 300; // Or play after 300ms if no more chunks
+const BATCH_SIZE = 5;
+const BATCH_TIMEOUT_MS = 300;
 
 export default function CallClient() {
   const router = useRouter();
   const { toasts, show } = useToasts();
 
-  const [status, setStatus] = useState<Status>("connecting");
+  const [status, setStatus] = useState<Status>("ready"); // 🆕 Start in "ready" state
   const [muted, setMuted] = useState(false);
   const [gain, setGain] = useState<number>(() => {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
   });
 
-  // audio + socket refs
   const wsRef = useRef<WebSocket | null>(null);
   const wsPingRef = useRef<number | null>(null);
   const acRef = useRef<AudioContext | null>(null);
@@ -35,18 +31,16 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // 🆕 Optimized batching for smooth playback
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
-  const batchBufferRef = useRef<Int16Array[]>([]); // Accumulate PCM16 chunks
+  const batchBufferRef = useRef<Int16Array[]>([]);
   const batchTimerRef = useRef<number | null>(null);
   const audioQueueRef = useRef<Blob[]>([]);
   const playingRef = useRef(false);
+  const audioSessionActivatedRef = useRef(false); // 🆕 Track if session is activated
 
-  // visual meter state
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
-  // ===== helpers =====
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -74,7 +68,6 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  // 🆕 Combine multiple PCM16 chunks into one
   function combinePCM16Chunks(chunks: Int16Array[]): Int16Array {
     const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
     const combined = new Int16Array(totalLength);
@@ -86,7 +79,6 @@ export default function CallClient() {
     return combined;
   }
 
-  // Convert PCM16 to WAV blob
   function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
     const numChannels = 1;
     const bitsPerSample = 16;
@@ -124,26 +116,71 @@ export default function CallClient() {
     return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  // 🆕 Flush accumulated batch to play queue
-  const flushBatch = useCallback(() => {
-    if (batchBufferRef.current.length === 0) return;
+  // 🆕 Activate audio session with USER GESTURE
+  const activateAudioSession = useCallback(async () => {
+    if (audioSessionActivatedRef.current) return;
     
-    console.log(`[Playback] Flushing batch of ${batchBufferRef.current.length} chunks`);
+    console.log("[iOS Audio] 🔊 ACTIVATING audio session with user gesture...");
     
-    // Combine all accumulated chunks into one
-    const combined = combinePCM16Chunks(batchBufferRef.current);
-    const wavBlob = pcm16ToWavBlob(combined, 24000);
-    
-    audioQueueRef.current.push(wavBlob);
-    batchBufferRef.current = [];
-    
-    // Clear batch timer
-    if (batchTimerRef.current) {
-      window.clearTimeout(batchTimerRef.current);
-      batchTimerRef.current = null;
+    try {
+      // Create HTMLAudioElement
+      if (!audioElementRef.current) {
+        const audio = new Audio();
+        audioElementRef.current = audio;
+        
+        audio.onended = () => {
+          void drainPlayback();
+        };
+        
+        audio.onerror = (e) => {
+          console.error("[iOS Audio] Playback error:", e);
+          playingRef.current = false;
+          void drainPlayback();
+        };
+      }
+      
+      // 🆕 CRITICAL: Play an AUDIBLE beep to activate iOS audio session
+      // This MUST be from user gesture to work
+      const audio = audioElementRef.current;
+      
+      // Create a short 440Hz beep (0.2 seconds)
+      const sampleRate = 24000;
+      const duration = 0.2;
+      const numSamples = Math.floor(sampleRate * duration);
+      const beepPCM = new Int16Array(numSamples);
+      
+      for (let i = 0; i < numSamples; i++) {
+        // 440Hz sine wave (A note)
+        const t = i / sampleRate;
+        const value = Math.sin(2 * Math.PI * 440 * t);
+        // Fade in/out to avoid clicks
+        const envelope = Math.min(i / 1000, (numSamples - i) / 1000, 1);
+        beepPCM[i] = Math.floor(value * envelope * 8000); // Quieter beep
+      }
+      
+      const beepBlob = pcm16ToWavBlob(beepPCM, sampleRate);
+      const beepUrl = URL.createObjectURL(beepBlob);
+      
+      audio.src = beepUrl;
+      await audio.play();
+      
+      console.log("[iOS Audio] ✅ Audio session activated with beep!");
+      
+      // Wait for beep to finish
+      await new Promise<void>((resolve) => {
+        audio.onended = () => {
+          URL.revokeObjectURL(beepUrl);
+          resolve();
+        };
+      });
+      
+      audioSessionActivatedRef.current = true;
+      console.log("[iOS Audio] ✅ iOS audio session now active for Bluetooth routing");
+      
+    } catch (err) {
+      console.error("[iOS Audio] ❌ Failed to activate audio session:", err);
+      throw err;
     }
-    
-    void drainPlayback();
   }, []);
 
   const ensureAudio = useCallback(async () => {
@@ -161,29 +198,8 @@ export default function CallClient() {
       console.log("[iOS Audio] AudioContext created, state:", acRef.current.state);
       
       if (acRef.current.state === 'suspended') {
-        console.log("[iOS Audio] Resuming suspended AudioContext...");
         await acRef.current.resume();
       }
-    }
-    
-    // Create HTMLAudioElement for iOS Bluetooth playback
-    if (!audioElementRef.current) {
-      console.log("[iOS Audio] Creating HTMLAudioElement for Bluetooth routing...");
-      const audio = new Audio();
-      audio.autoplay = false;
-      audioElementRef.current = audio;
-      
-      audio.onended = () => {
-        void drainPlayback();
-      };
-      
-      audio.onerror = (e) => {
-        console.error("[iOS Audio] Playback error:", e);
-        playingRef.current = false;
-        void drainPlayback();
-      };
-      
-      console.log("[iOS Audio] ✅ HTMLAudioElement created");
     }
     
     if (!micStreamRef.current) {
@@ -210,6 +226,25 @@ export default function CallClient() {
     
     console.log("[iOS Audio] ✅ Audio setup complete");
     return acRef.current!;
+  }, []);
+
+  const flushBatch = useCallback(() => {
+    if (batchBufferRef.current.length === 0) return;
+    
+    console.log(`[Playback] Flushing batch of ${batchBufferRef.current.length} chunks`);
+    
+    const combined = combinePCM16Chunks(batchBufferRef.current);
+    const wavBlob = pcm16ToWavBlob(combined, 24000);
+    
+    audioQueueRef.current.push(wavBlob);
+    batchBufferRef.current = [];
+    
+    if (batchTimerRef.current) {
+      window.clearTimeout(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
+    
+    void drainPlayback();
   }, []);
 
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
@@ -250,7 +285,6 @@ export default function CallClient() {
     };
   }, []);
 
-  // Play using HTMLAudioElement (smoother batched playback)
   const drainPlayback = useCallback(async () => {
     if (playingRef.current) return;
     if (audioQueueRef.current.length === 0) return;
@@ -306,7 +340,6 @@ export default function CallClient() {
   const cleanupAudio = useCallback(() => {
     console.log("[iOS Audio] Cleaning up...");
     
-    // Clear batch timer
     if (batchTimerRef.current) {
       window.clearTimeout(batchTimerRef.current);
       batchTimerRef.current = null;
@@ -324,6 +357,7 @@ export default function CallClient() {
     
     batchBufferRef.current = [];
     audioQueueRef.current = [];
+    audioSessionActivatedRef.current = false;
   }, []);
 
   const cleanupAll = useCallback(() => {
@@ -332,8 +366,16 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-  const connect = useCallback(async () => {
+  // 🆕 User-initiated start call
+  const startCall = useCallback(async () => {
     try {
+      setStatus("connecting");
+      console.log("[Call] 🎯 Starting call with user gesture...");
+      
+      // 🆕 STEP 1: Activate audio session with user gesture (plays beep)
+      await activateAudioSession();
+      
+      // STEP 2: Set up WebSocket
       console.log("[WS] Connecting to:", WS_URL);
       
       const ws = new WebSocket(WS_URL);
@@ -353,7 +395,7 @@ export default function CallClient() {
         clearTimeout(connectionTimeout);
         console.log("[WS] ✅ Connected");
         setStatus("connected");
-        show("Call connected");
+        show("Call connected - Bluetooth active!");
 
         let realUserId = "default-user";
         try {
@@ -410,17 +452,14 @@ export default function CallClient() {
           const obj = JSON.parse(String(ev.data));
           
           if (obj?.type === "audio.delta" && obj.audio) {
-            // 🆕 Add to batch buffer instead of playing immediately
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
             
             batchBufferRef.current.push(pcm16);
             
-            // Flush batch if we've accumulated enough chunks
             if (batchBufferRef.current.length >= BATCH_SIZE) {
               flushBatch();
             } else {
-              // Or set timer to flush after timeout
               if (batchTimerRef.current) {
                 window.clearTimeout(batchTimerRef.current);
               }
@@ -456,16 +495,15 @@ export default function CallClient() {
         wsRef.current = null;
       };
     } catch (e) {
-      console.error("[WS] Connect failed:", e);
+      console.error("[Call] Start failed:", e);
       setStatus("error");
-      show("Connection failed");
+      show("Failed to start call");
     }
-  }, [ensureAudio, gain, show, startMeter, flushBatch, cleanupAudio]);
+  }, [activateAudioSession, ensureAudio, gain, show, startMeter, flushBatch, cleanupAudio]);
 
   useEffect(() => {
-    void connect();
     return () => cleanupAll();
-  }, [connect, cleanupAll]);
+  }, [cleanupAll]);
 
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
@@ -482,8 +520,8 @@ export default function CallClient() {
 
   const hangUp = useCallback(() => {
     try { wsRef.current?.close(); } catch {}
-    router.push("/chat");
-  }, [router]);
+    setStatus("ready");
+  }, []);
 
   const vibes = Math.min(100, level * 100);
   const outerScale = 1 + vibes * 0.006;
@@ -497,80 +535,106 @@ export default function CallClient() {
         <div className={`w-2 h-2 rounded-full ${
           status === "connected" ? "bg-green-400 animate-pulse" :
           status === "connecting" ? "bg-yellow-400 animate-pulse" :
+          status === "ready" ? "bg-blue-400" :
           status === "error" ? "bg-red-400" : "bg-gray-400"
         }`} />
         <span className="text-sm capitalize">{status}</span>
       </div>
 
       <div className="relative z-10 flex flex-col items-center">
-        <motion.div
-          className="relative mb-8"
-          animate={{ scale: outerScale }}
-          transition={{ type: "spring", stiffness: 300, damping: 20 }}
-        >
-          <div 
-            className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center relative"
-            style={{
-              boxShadow: `0 0 ${glow}px rgba(236, 72, 153, 0.8), 0 0 ${glow * 1.5}px rgba(168, 85, 247, 0.5)`
-            }}
-          >
-            <span className="text-6xl">💜</span>
-            {speaking && (
-              <motion.div
-                className="absolute inset-0 rounded-full border-4 border-pink-300"
-                animate={{ scale: [1, 1.1, 1], opacity: [0.8, 0, 0.8] }}
-                transition={{ duration: 1, repeat: Infinity }}
+        {status === "ready" ? (
+          // 🆕 Show big "Start Call" button when ready
+          <>
+            <div className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center mb-8">
+              <span className="text-6xl">💜</span>
+            </div>
+            
+            <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
+            <p className="text-pink-200 mb-8 text-center max-w-sm">
+              Tap "Start Call" to begin.<br/>
+              <span className="text-sm">You'll hear a brief beep to activate Bluetooth.</span>
+            </p>
+            
+            <button
+              onClick={startCall}
+              className="px-8 py-4 rounded-full bg-green-500 hover:bg-green-600 text-white font-bold text-lg shadow-lg transition-all transform hover:scale-105"
+            >
+              🎧 Start Call
+            </button>
+          </>
+        ) : (
+          // Show call interface when connected
+          <>
+            <motion.div
+              className="relative mb-8"
+              animate={{ scale: outerScale }}
+              transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            >
+              <div 
+                className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center relative"
+                style={{
+                  boxShadow: `0 0 ${glow}px rgba(236, 72, 153, 0.8), 0 0 ${glow * 1.5}px rgba(168, 85, 247, 0.5)`
+                }}
+              >
+                <span className="text-6xl">💜</span>
+                {speaking && (
+                  <motion.div
+                    className="absolute inset-0 rounded-full border-4 border-pink-300"
+                    animate={{ scale: [1, 1.1, 1], opacity: [0.8, 0, 0.8] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                  />
+                )}
+              </div>
+            </motion.div>
+
+            <h1 className="text-3xl font-bold mb-2">Ellie</h1>
+            <p className="text-pink-200 mb-8">Voice Call Active</p>
+
+            <div className="flex items-center gap-4">
+              <button
+                onClick={toggleMute}
+                className={`p-4 rounded-full ${
+                  muted ? "bg-red-500 hover:bg-red-600" : "bg-white/20 hover:bg-white/30"
+                } backdrop-blur-sm transition-colors`}
+                title={muted ? "Unmute" : "Mute"}
+              >
+                {muted ? (
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M13.477 14.89A6 6 0 015.11 6.524l8.367 8.368zm1.414-1.414L6.524 5.11a6 6 0 018.367 8.367zM18 10a8 8 0 11-16 0 8 8 0 0116 0z" clipRule="evenodd" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </button>
+
+              <button
+                onClick={hangUp}
+                className="p-4 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
+                title="Hang up"
+              >
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                  <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="mt-8 w-64">
+              <label className="block text-sm text-pink-200 mb-2">Microphone Gain</label>
+              <input
+                type="range"
+                min="0.2"
+                max="3"
+                step="0.1"
+                value={gain}
+                onChange={(e) => setGain(Number(e.target.value))}
+                className="w-full accent-pink-500"
               />
-            )}
-          </div>
-        </motion.div>
-
-        <h1 className="text-3xl font-bold mb-2">Ellie</h1>
-        <p className="text-pink-200 mb-8">Voice Call</p>
-
-        <div className="flex items-center gap-4">
-          <button
-            onClick={toggleMute}
-            className={`p-4 rounded-full ${
-              muted ? "bg-red-500 hover:bg-red-600" : "bg-white/20 hover:bg-white/30"
-            } backdrop-blur-sm transition-colors`}
-            title={muted ? "Unmute" : "Mute"}
-          >
-            {muted ? (
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M13.477 14.89A6 6 0 015.11 6.524l8.367 8.368zm1.414-1.414L6.524 5.11a6 6 0 018.367 8.367zM18 10a8 8 0 11-16 0 8 8 0 0116 0z" clipRule="evenodd" />
-              </svg>
-            ) : (
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-              </svg>
-            )}
-          </button>
-
-          <button
-            onClick={hangUp}
-            className="p-4 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
-            title="Hang up"
-          >
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="mt-8 w-64">
-          <label className="block text-sm text-pink-200 mb-2">Microphone Gain</label>
-          <input
-            type="range"
-            min="0.2"
-            max="3"
-            step="0.1"
-            value={gain}
-            onChange={(e) => setGain(Number(e.target.value))}
-            className="w-full accent-pink-500"
-          />
-          <div className="text-xs text-pink-200 text-center mt-1">{gain.toFixed(1)}x</div>
-        </div>
+              <div className="text-xs text-pink-200 text-center mt-1">{gain.toFixed(1)}x</div>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2">
@@ -583,6 +647,13 @@ export default function CallClient() {
           </div>
         ))}
       </div>
+      
+      {status === "ready" && (
+        <div className="absolute bottom-8 text-center text-pink-200 text-sm max-w-md px-4">
+          <p className="mb-2">🎧 Make sure your Bluetooth headphones are connected</p>
+          <p>You'll hear a brief activation beep when you start the call</p>
+        </div>
+      )}
     </div>
   );
 }
