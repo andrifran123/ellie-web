@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useToasts } from "../(providers)/toast";
 import { motion } from "framer-motion";
 
@@ -12,10 +11,9 @@ const BATCH_SIZE = 5;
 const BATCH_TIMEOUT_MS = 300;
 
 export default function CallClient() {
-  const router = useRouter();
   const { toasts, show } = useToasts();
 
-  const [status, setStatus] = useState<Status>("ready"); // 🆕 Start in "ready" state
+  const [status, setStatus] = useState<Status>("ready");
   const [muted, setMuted] = useState(false);
   const [gain, setGain] = useState<number>(() => {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
@@ -36,7 +34,7 @@ export default function CallClient() {
   const batchTimerRef = useRef<number | null>(null);
   const audioQueueRef = useRef<Blob[]>([]);
   const playingRef = useRef(false);
-  const audioSessionActivatedRef = useRef(false); // 🆕 Track if session is activated
+  const audioSessionActivatedRef = useRef(false);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
@@ -116,14 +114,57 @@ export default function CallClient() {
     return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  // 🆕 Activate audio session with USER GESTURE
+  const drainPlayback = useCallback(async () => {
+    if (playingRef.current) return;
+    if (audioQueueRef.current.length === 0) return;
+    
+    playingRef.current = true;
+    const audio = audioElementRef.current!;
+    
+    try {
+      while (audioQueueRef.current.length > 0) {
+        const blob = audioQueueRef.current.shift()!;
+        const url = URL.createObjectURL(blob);
+        
+        audio.src = url;
+        
+        await new Promise<void>((resolve, reject) => {
+          const onEnded = () => {
+            URL.revokeObjectURL(url);
+            cleanup();
+            resolve();
+          };
+          
+          const onError = (e: Event) => {
+            URL.revokeObjectURL(url);
+            cleanup();
+            reject(e);
+          };
+          
+          const cleanup = () => {
+            audio.removeEventListener('ended', onEnded);
+            audio.removeEventListener('error', onError);
+          };
+          
+          audio.addEventListener('ended', onEnded, { once: true });
+          audio.addEventListener('error', onError, { once: true });
+          
+          audio.play().catch(reject);
+        });
+      }
+    } catch (err) {
+      console.error("[Playback] Error:", err);
+    } finally {
+      playingRef.current = false;
+    }
+  }, []);
+
   const activateAudioSession = useCallback(async () => {
     if (audioSessionActivatedRef.current) return;
     
     console.log("[iOS Audio] 🔊 ACTIVATING audio session with user gesture...");
     
     try {
-      // Create HTMLAudioElement
       if (!audioElementRef.current) {
         const audio = new Audio();
         audioElementRef.current = audio;
@@ -139,23 +180,18 @@ export default function CallClient() {
         };
       }
       
-      // 🆕 CRITICAL: Play an AUDIBLE beep to activate iOS audio session
-      // This MUST be from user gesture to work
       const audio = audioElementRef.current;
       
-      // Create a short 440Hz beep (0.2 seconds)
       const sampleRate = 24000;
       const duration = 0.2;
       const numSamples = Math.floor(sampleRate * duration);
       const beepPCM = new Int16Array(numSamples);
       
       for (let i = 0; i < numSamples; i++) {
-        // 440Hz sine wave (A note)
         const t = i / sampleRate;
         const value = Math.sin(2 * Math.PI * 440 * t);
-        // Fade in/out to avoid clicks
         const envelope = Math.min(i / 1000, (numSamples - i) / 1000, 1);
-        beepPCM[i] = Math.floor(value * envelope * 8000); // Quieter beep
+        beepPCM[i] = Math.floor(value * envelope * 8000);
       }
       
       const beepBlob = pcm16ToWavBlob(beepPCM, sampleRate);
@@ -166,7 +202,6 @@ export default function CallClient() {
       
       console.log("[iOS Audio] ✅ Audio session activated with beep!");
       
-      // Wait for beep to finish
       await new Promise<void>((resolve) => {
         audio.onended = () => {
           URL.revokeObjectURL(beepUrl);
@@ -181,7 +216,7 @@ export default function CallClient() {
       console.error("[iOS Audio] ❌ Failed to activate audio session:", err);
       throw err;
     }
-  }, []);
+  }, [drainPlayback]);
 
   const ensureAudio = useCallback(async () => {
     console.log("[iOS Audio] Starting audio setup...");
@@ -245,7 +280,7 @@ export default function CallClient() {
     }
     
     void drainPlayback();
-  }, []);
+  }, [drainPlayback]);
 
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
@@ -285,51 +320,6 @@ export default function CallClient() {
     };
   }, []);
 
-  const drainPlayback = useCallback(async () => {
-    if (playingRef.current) return;
-    if (audioQueueRef.current.length === 0) return;
-    
-    playingRef.current = true;
-    const audio = audioElementRef.current!;
-    
-    try {
-      while (audioQueueRef.current.length > 0) {
-        const blob = audioQueueRef.current.shift()!;
-        const url = URL.createObjectURL(blob);
-        
-        audio.src = url;
-        
-        await new Promise<void>((resolve, reject) => {
-          const onEnded = () => {
-            URL.revokeObjectURL(url);
-            cleanup();
-            resolve();
-          };
-          
-          const onError = (e: Event) => {
-            URL.revokeObjectURL(url);
-            cleanup();
-            reject(e);
-          };
-          
-          const cleanup = () => {
-            audio.removeEventListener('ended', onEnded);
-            audio.removeEventListener('error', onError);
-          };
-          
-          audio.addEventListener('ended', onEnded, { once: true });
-          audio.addEventListener('error', onError, { once: true });
-          
-          audio.play().catch(reject);
-        });
-      }
-    } catch (err) {
-      console.error("[Playback] Error:", err);
-    } finally {
-      playingRef.current = false;
-    }
-  }, []);
-
   const stopPinger = () => {
     if (wsPingRef.current) {
       window.clearInterval(wsPingRef.current);
@@ -366,16 +356,13 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-  // 🆕 User-initiated start call
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
       console.log("[Call] 🎯 Starting call with user gesture...");
       
-      // 🆕 STEP 1: Activate audio session with user gesture (plays beep)
       await activateAudioSession();
       
-      // STEP 2: Set up WebSocket
       console.log("[WS] Connecting to:", WS_URL);
       
       const ws = new WebSocket(WS_URL);
@@ -543,7 +530,6 @@ export default function CallClient() {
 
       <div className="relative z-10 flex flex-col items-center">
         {status === "ready" ? (
-          // 🆕 Show big "Start Call" button when ready
           <>
             <div className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center mb-8">
               <span className="text-6xl">💜</span>
@@ -551,8 +537,8 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-8 text-center max-w-sm">
-              Tap "Start Call" to begin.<br/>
-              <span className="text-sm">You'll hear a brief beep to activate Bluetooth.</span>
+              Tap &quot;Start Call&quot; to begin.<br/>
+              <span className="text-sm">You&apos;ll hear a brief beep to activate Bluetooth.</span>
             </p>
             
             <button
@@ -563,7 +549,6 @@ export default function CallClient() {
             </button>
           </>
         ) : (
-          // Show call interface when connected
           <>
             <motion.div
               className="relative mb-8"
@@ -651,7 +636,7 @@ export default function CallClient() {
       {status === "ready" && (
         <div className="absolute bottom-8 text-center text-pink-200 text-sm max-w-md px-4">
           <p className="mb-2">🎧 Make sure your Bluetooth headphones are connected</p>
-          <p>You'll hear a brief activation beep when you start the call</p>
+          <p>You&apos;ll hear a brief activation beep when you start the call</p>
         </div>
       )}
     </div>
