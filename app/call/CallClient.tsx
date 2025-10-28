@@ -8,8 +8,14 @@ type Status = "ready" | "connecting" | "connected" | "closed" | "error";
 
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
 
+/**
+ * CallClient
+ * - Keeps initial iOS Bluetooth routing beep via <audio> element
+ * - Streams Ellie TTS with low-latency Web Audio scheduling (no per-chunk HTMLAudio.play())
+ * - Schedules AudioBuffer chunks back-to-back to remove gaps/lag on iPhone
+ */
 export default function CallClient() {
-  const { toasts, show } = useToasts();
+  const { show } = useToasts();
 
   const [status, setStatus] = useState<Status>("ready");
   const [muted, setMuted] = useState(false);
@@ -19,52 +25,58 @@ export default function CallClient() {
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
   });
 
+  // --- Core refs
   const wsRef = useRef<WebSocket | null>(null);
   const wsPingRef = useRef<number | null>(null);
+
   const acRef = useRef<AudioContext | null>(null);
+
+  // mic capture
   const micStreamRef = useRef<MediaStream | null>(null);
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // 🎵 HTMLAudioElement for iOS Bluetooth routing
+  // iOS BT priming
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
-  const audioQueueRef = useRef<Blob[]>([]);
-  const playingRef = useRef(false);
+
+  // Web Audio playback chain for Ellie’s voice
+  const speakGainRef = useRef<GainNode | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+  const lookaheadPaddingSec = 0.02; // keep a tiny headroom when starting
+
+  // Optional “keepalive” oscillator to keep the audio route warm on iOS
+  const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [hasSpoken, setHasSpoken] = useState(false);
 
-  // 📱 Logging with on-screen display
+  // ---------- logging ----------
   const log = useCallback((msg: string) => {
     console.log(msg);
-    setLogs(prev => [...prev.slice(-25), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
+    setLogs((prev) => [...prev.slice(-25), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
   }, []);
 
-  // ===== Audio Conversion Helpers =====
-  
-  function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array<ArrayBuffer> {
+  // ---------- helpers ----------
+  function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
     if (inputRate === 24000) {
       const output = new Float32Array(inputBuffer.length);
       output.set(inputBuffer);
       return output;
     }
-    
     const ratio = 24000 / inputRate;
-    const outputLength = Math.floor(inputBuffer.length * ratio);
-    const output = new Float32Array(outputLength);
-    
-    for (let i = 0; i < outputLength; i++) {
+    const outLen = Math.floor(inputBuffer.length * ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
       const srcIndex = i / ratio;
-      const srcIndexFloor = Math.floor(srcIndex);
-      const srcIndexCeil = Math.min(srcIndexFloor + 1, inputBuffer.length - 1);
-      const t = srcIndex - srcIndexFloor;
-      output[i] = inputBuffer[srcIndexFloor] * (1 - t) + inputBuffer[srcIndexCeil] * t;
+      const i0 = Math.floor(srcIndex);
+      const i1 = Math.min(i0 + 1, inputBuffer.length - 1);
+      const t = srcIndex - i0;
+      out[i] = inputBuffer[i0] * (1 - t) + inputBuffer[i1] * t;
     }
-    
-    return output;
+    return out;
   }
 
   function floatTo16BitPCM(float32: Float32Array) {
@@ -81,7 +93,10 @@ export default function CallClient() {
     const chunk = 0x8000;
     let binary = "";
     for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as unknown as number[]);
+      binary += String.fromCharCode.apply(
+        null,
+        bytes.subarray(i, i + chunk) as unknown as number[]
+      );
     }
     return btoa(binary);
   }
@@ -94,26 +109,59 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
+  // Convert PCM16 mono @ 24k into an AudioBuffer for Web Audio
+  function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate = 24000): AudioBuffer {
+    const ac = acRef.current!;
+    const float = new Float32Array(pcm16.length);
+    for (let i = 0; i < pcm16.length; i++) {
+      float[i] = Math.max(-1, Math.min(1, pcm16[i] / 32768));
+    }
+    const buffer = ac.createBuffer(1, float.length, sampleRate);
+    buffer.copyToChannel(float, 0);
+    return buffer;
+  }
+
+  // ---------- iOS Bluetooth priming beep ----------
+  const playBluetoothBeepOnce = useCallback(async () => {
+    if (!audioElementRef.current) {
+      const audio = new Audio();
+      audio.autoplay = false;
+      audio.setAttribute("playsinline", "true");
+      audio.setAttribute("webkit-playsinline", "true");
+      audioElementRef.current = audio;
+    }
+    const audio = audioElementRef.current;
+
+    // generate a short WAV beep (audible to really trigger iOS routing)
+    const sampleRate = 24000;
+    const duration = 0.3;
+    const samples = Math.floor(sampleRate * duration);
+    const beepData = new Int16Array(samples);
+    for (let i = 0; i < samples; i++) {
+      const t = i / sampleRate;
+      let env = 1;
+      const fadeIn = samples * 0.2;
+      const fadeOutStart = samples * 0.8;
+      if (i < fadeIn) env = i / fadeIn;
+      else if (i > fadeOutStart) env = (samples - i) / (samples - fadeOutStart);
+      const amplitude = 0.5 * env;
+      beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
+    }
+    // make a WAV header
     const numChannels = 1;
     const bitsPerSample = 16;
     const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
     const blockAlign = numChannels * (bitsPerSample / 8);
-    const dataSize = pcm16.length * 2;
-    
+    const dataSize = beepData.length * 2;
     const buffer = new ArrayBuffer(44 + dataSize);
     const view = new DataView(buffer);
-    
-    const writeString = (offset: number, string: string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
-      }
+    const wstr = (o: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
     };
-    
-    writeString(0, 'RIFF');
+    wstr(0, "RIFF");
     view.setUint32(4, 36 + dataSize, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
+    wstr(8, "WAVE");
+    wstr(12, "fmt ");
     view.setUint32(16, 16, true);
     view.setUint16(20, 1, true);
     view.setUint16(22, numChannels, true);
@@ -121,242 +169,36 @@ export default function CallClient() {
     view.setUint32(28, byteRate, true);
     view.setUint16(32, blockAlign, true);
     view.setUint16(34, bitsPerSample, true);
-    writeString(36, 'data');
+    wstr(36, "data");
     view.setUint32(40, dataSize, true);
-    
-    for (let i = 0; i < pcm16.length; i++) {
-      view.setInt16(44 + i * 2, pcm16[i], true);
+    for (let i = 0; i < beepData.length; i++) {
+      view.setInt16(44 + i * 2, beepData[i], true);
     }
-    
-    return new Blob([buffer], { type: 'audio/wav' });
-  }
 
-  // ===== Audio Playback Queue (Sequential for iOS) =====
-  
-  // 🔊 FIXED: Play audio with proper waiting to prevent AbortError
-  const playAudioChunk = useCallback(async (blob: Blob) => {
-    const audio = audioElementRef.current;
-    if (!audio) {
-      log("[Playback] ❌ No audio element!");
-      playingRef.current = false;
-      return;
-    }
-    
-    const url = URL.createObjectURL(blob);
-    log(`[Playback] ▶️ Playing chunk`);
-    
+    const url = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+    audio.src = url;
+    audio.volume = 0.7;
     try {
-      // Set source and wait a moment for it to load
-      audio.src = url;
-      await new Promise(resolve => setTimeout(resolve, 50)); // Give audio element time to load
-      
-      // Now play
+      if (acRef.current && acRef.current.state === "suspended") {
+        await acRef.current.resume();
+      }
       await audio.play();
-      log("[Playback] ✅ Play() started");
-      
-      // Wait for chunk to end
       await new Promise<void>((resolve) => {
-        const onEnded = () => {
-          log("[Playback] ✅ Chunk ended");
+        const onEnd = () => {
+          audio.removeEventListener("ended", onEnd);
           URL.revokeObjectURL(url);
-          audio.removeEventListener('ended', onEnded);
-          audio.removeEventListener('error', onError);
           resolve();
         };
-        
-        const onError = (e: Event) => {
-          const target = e.target as HTMLAudioElement;
-          log(`[Playback] ❌ Error: ${target.error?.code} ${target.error?.message}`);
-          URL.revokeObjectURL(url);
-          audio.removeEventListener('ended', onEnded);
-          audio.removeEventListener('error', onError);
-          resolve(); // Resolve anyway to continue
-        };
-        
-        audio.addEventListener('ended', onEnded, { once: true });
-        audio.addEventListener('error', onError, { once: true });
+        audio.addEventListener("ended", onEnd, { once: true });
       });
-      
-      // Small delay between chunks to prevent overlap
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
-    } catch (err) {
-      const errName = err instanceof Error ? err.name : 'Unknown';
-      log(`[Playback] ❌ Play failed: ${errName}`);
+      log("[Audio] ✅ Beep played — Bluetooth route should be established");
+    } catch (e) {
       URL.revokeObjectURL(url);
-      
-      // If AbortError, wait a bit before trying next
-      if (err instanceof Error && err.name === 'AbortError') {
-        log("[Playback] ⚠️ AbortError - waiting before next chunk");
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
-    }
-    
-    // Try next chunk if available
-    if (audioQueueRef.current.length > 0) {
-      const nextBlob = audioQueueRef.current.shift()!;
-      await playAudioChunk(nextBlob);
-    } else {
-      playingRef.current = false;
-      log("[Playback] ✅ Queue empty, playback complete");
+      log("[Audio] ⚠️ Could not play beep (will continue)");
     }
   }, [log]);
-  
-  // Trigger playback when chunks arrive
-  const drainPlayback = useCallback(() => {
-    if (playingRef.current) {
-      return; // Already playing
-    }
-    
-    if (audioQueueRef.current.length === 0) {
-      return; // Nothing to play
-    }
-    
-    playingRef.current = true;
-    const blob = audioQueueRef.current.shift()!;
-    log(`[Playback] 🔊 Starting playback (${audioQueueRef.current.length} in queue)`);
-    
-    // Start async playback (it will handle the queue recursively)
-    void playAudioChunk(blob);
-  }, [playAudioChunk, log]);
 
-  // ===== Audio Setup with iOS-specific handling =====
-  
-  const ensureAudio = useCallback(async () => {
-    log("[Audio] 🎤 Setting up audio system...");
-    
-    // Create AudioContext
-    if (!acRef.current) {
-      const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
-      const AC = window.AudioContext || AnyWin.webkitAudioContext;
-      
-      acRef.current = new AC({ 
-        latencyHint: 'interactive'
-      });
-      
-      log(`[Audio] AudioContext created: state=${acRef.current.state}, sampleRate=${acRef.current.sampleRate}Hz`);
-      
-      // iOS requires explicit resume after user gesture
-      if (acRef.current.state === 'suspended') {
-        log("[Audio] 🔓 Resuming suspended AudioContext...");
-        await acRef.current.resume();
-        log(`[Audio] ✅ Resumed: state=${acRef.current.state}`);
-      }
-    }
-    
-    // Create HTMLAudioElement for iOS Bluetooth routing
-    if (!audioElementRef.current) {
-      log("[Audio] 🔊 Creating HTMLAudioElement for iOS Bluetooth...");
-      const audio = new Audio();
-      audio.autoplay = false;
-      
-      // Important: Set iOS-specific attributes
-      audio.setAttribute('playsinline', 'true');
-      audio.setAttribute('webkit-playsinline', 'true');
-      
-      audioElementRef.current = audio;
-      
-      // 🔧 iOS BLUETOOTH FIX: Play an AUDIBLE beep to establish Bluetooth routing
-      // Silent audio doesn't work - iOS needs to hear actual audio to route to Bluetooth
-      log("[Audio] 🔔 Creating Bluetooth routing beep...");
-      
-      // Create a longer, louder beep (300ms) to ensure iOS hears it
-      const sampleRate = 24000;
-      const duration = 0.3; // 300ms - longer to ensure iOS catches it
-      const samples = Math.floor(sampleRate * duration);
-      const beepData = new Int16Array(samples);
-      
-      // Generate 440Hz sine wave (A note) with fade in/out
-      for (let i = 0; i < samples; i++) {
-        const t = i / sampleRate;
-        // Fade in first 20%, steady middle 60%, fade out last 20%
-        let envelope = 1.0;
-        const fadeInSamples = samples * 0.2;
-        const fadeOutStart = samples * 0.8;
-        if (i < fadeInSamples) {
-          envelope = i / fadeInSamples;
-        } else if (i > fadeOutStart) {
-          envelope = (samples - i) / (samples - fadeOutStart);
-        }
-        const amplitude = 0.5 * envelope; // Louder amplitude
-        beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
-      }
-      
-      const beepBlob = pcm16ToWavBlob(beepData, sampleRate);
-      const beepUrl = URL.createObjectURL(beepBlob);
-      audio.src = beepUrl;
-      audio.volume = 0.7; // Louder volume to ensure iOS routes to Bluetooth
-      
-      log("[Audio] 🔔 Playing beep...");
-      try {
-        // Ensure audio context is resumed (iOS requirement)
-        if (acRef.current && acRef.current.state === 'suspended') {
-          await acRef.current.resume();
-          log("[Audio] ✅ AudioContext resumed");
-        }
-        
-        await audio.play();
-        log("[Audio] ✅ Beep started playing");
-        
-        // Wait for beep to finish with timeout
-        await Promise.race([
-          new Promise(resolve => {
-            audio.addEventListener('ended', () => {
-              log("[Audio] ✅ Beep ended - Bluetooth route established!");
-              URL.revokeObjectURL(beepUrl);
-              resolve(undefined);
-            }, { once: true });
-          }),
-          new Promise(resolve => setTimeout(() => {
-            log("[Audio] ⚠️ Beep timeout - continuing anyway");
-            URL.revokeObjectURL(beepUrl);
-            resolve(undefined);
-          }, 1000))
-        ]);
-        
-        log("[Audio] ✅ Bluetooth routing complete");
-      } catch (e) {
-        const errorName = e instanceof Error ? e.name : 'Unknown';
-        log(`[Audio] ⚠️ Could not play beep: ${errorName}`);
-        URL.revokeObjectURL(beepUrl);
-      }
-      
-      log("[Audio] ✅ HTMLAudioElement ready for Bluetooth");
-    }
-    
-    // Request microphone
-    if (!micStreamRef.current) {
-      log("[Audio] 🎙️ Requesting microphone...");
-      
-      const constraints = {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        } as MediaTrackConstraints
-      };
-      
-      try {
-        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
-        
-        const audioTrack = micStreamRef.current.getAudioTracks()[0];
-        const settings = audioTrack.getSettings();
-        log(`[Audio] ✅ Microphone granted: sampleRate=${settings.sampleRate}Hz`);
-        
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log(`[Audio] ❌ Microphone denied: ${message}`);
-        throw err;
-      }
-    }
-    
-    log("[Audio] ✅ Audio setup complete");
-    return acRef.current!;
-  }, [log]);
-
-  // ===== Visual Meter =====
-  
+  // ---------- Visual meter ----------
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -373,7 +215,6 @@ export default function CallClient() {
       let sum = 0;
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
-
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
       setLevel((prev) => prev * 0.65 + boosted * 0.35);
 
@@ -390,14 +231,17 @@ export default function CallClient() {
 
     return () => {
       cancelAnimationFrame(raf);
-      try { nodeAfterGain.disconnect(analyser); } catch {}
-      try { analyser.disconnect(); } catch {}
+      try {
+        nodeAfterGain.disconnect(analyser);
+      } catch {}
+      try {
+        analyser.disconnect();
+      } catch {}
       analyserRef.current = null;
     };
   }, []);
 
-  // ===== Cleanup =====
-  
+  // ---------- cleanup ----------
   const stopPinger = () => {
     if (wsPingRef.current) {
       window.clearInterval(wsPingRef.current);
@@ -406,70 +250,143 @@ export default function CallClient() {
   };
 
   const cleanupAudio = useCallback(() => {
-    log("[Audio] 🧹 Cleaning up...");
-    try { processorRef.current?.disconnect(); } catch {}
-    try { gainRef.current?.disconnect(); } catch {}
-    try { micNodeRef.current?.disconnect(); } catch {}
-    try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
-    
-    if (audioElementRef.current) {
-      audioElementRef.current.pause();
-      audioElementRef.current.src = '';
-    }
-    
-    audioQueueRef.current.forEach(blob => URL.revokeObjectURL(URL.createObjectURL(blob)));
-    audioQueueRef.current = [];
-    playingRef.current = false;
-    
+    log("[Audio] 🧹 Cleaning up…");
+    try {
+      processorRef.current?.disconnect();
+    } catch {}
+    try {
+      gainRef.current?.disconnect();
+    } catch {}
+    try {
+      micNodeRef.current?.disconnect();
+    } catch {}
+    try {
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
+
+    try {
+      routeKeepaliveRef.current?.stop();
+    } catch {}
+    try {
+      routeKeepaliveRef.current?.disconnect();
+    } catch {}
+    routeKeepaliveRef.current = null;
+
+    nextPlayTimeRef.current = 0;
+
     log("[Audio] ✅ Cleanup complete");
   }, [log]);
 
   const cleanupAll = useCallback(() => {
     stopPinger();
-    try { wsRef.current?.close(); } catch {}
+    try {
+      wsRef.current?.close();
+    } catch {}
     cleanupAudio();
   }, [cleanupAudio]);
 
-  // ===== WebSocket Connection =====
-  
+  // ---------- ensure audio & mic ----------
+  const ensureAudio = useCallback(async () => {
+    log("[Audio] 🎤 Initializing audio…");
+    if (!acRef.current) {
+      const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
+      const AC = window.AudioContext || AnyWin.webkitAudioContext;
+      acRef.current = new AC({ latencyHint: "interactive" });
+      log(`[Audio] AudioContext: state=${acRef.current.state}, rate=${acRef.current.sampleRate}Hz`);
+      if (acRef.current.state === "suspended") {
+        await acRef.current.resume();
+      }
+    }
+
+    // output gain for Ellie’s voice
+    if (!speakGainRef.current) {
+      speakGainRef.current = acRef.current.createGain();
+      speakGainRef.current.gain.value = 1.0;
+      speakGainRef.current.connect(acRef.current.destination);
+    }
+
+    // Optional: tiny inaudible keepalive tone to hold BT route during pauses
+    if (!routeKeepaliveRef.current) {
+      const osc = acRef.current.createOscillator();
+      const g = acRef.current.createGain();
+      g.gain.value = 0.0001; // essentially inaudible
+      osc.frequency.value = 20; // sub-audible
+      osc.connect(g).connect(acRef.current.destination);
+      osc.start();
+      routeKeepaliveRef.current = osc;
+    }
+
+    // iOS BT priming beep
+    await playBluetoothBeepOnce();
+
+    if (!micStreamRef.current) {
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        } as MediaTrackConstraints,
+      };
+      try {
+        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
+        const track = micStreamRef.current.getAudioTracks()[0];
+        const st = track.getSettings();
+        log(`[Audio] ✅ Mic granted: ${st.sampleRate || "unknown"} Hz`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`[Audio] ❌ Mic error: ${message}`);
+        throw err;
+      }
+    }
+
+    log("[Audio] ✅ Audio ready");
+    return acRef.current!;
+  }, [log, playBluetoothBeepOnce]);
+
+  // ---------- WebSocket + pipelines ----------
+  // Schedule one received AudioBuffer for playback with tight timing.
+  const schedulePlayback = useCallback((buffer: AudioBuffer) => {
+    const ac = acRef.current!;
+    const speakGain = speakGainRef.current!;
+    // Start after currentTime (with tiny padding) or append after the queued tail
+    const startTime = Math.max(ac.currentTime + lookaheadPaddingSec, nextPlayTimeRef.current);
+    const src = ac.createBufferSource();
+    src.buffer = buffer;
+    src.connect(speakGain);
+    src.start(startTime);
+    nextPlayTimeRef.current = startTime + buffer.duration;
+  }, []);
+
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
-      log("[Call] 📞 Starting call...");
-      log(`[Call] Device: ${navigator.userAgent.slice(0, 100)}`);
-      
-      // iOS: Prevent screen lock/sleep during call
-      if ('wakeLock' in navigator) {
+      log("[Call] 📞 Starting call…");
+      log(`[Call] Device: ${navigator.userAgent.slice(0, 120)}`);
+
+      // iOS try wake lock (best effort)
+      if ("wakeLock" in navigator) {
         try {
-          // WakeLock API is experimental - use type assertion
           const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
-          await nav.wakeLock?.request('screen');
-          log("[iOS] 🔓 Wake lock acquired");
+          await nav.wakeLock?.request("screen");
+          log("[iOS] 🔓 Wake lock");
         } catch {
           log("[iOS] ⚠️ Wake lock not available");
         }
       }
-      
-      // iOS: Handle visibility changes to maintain connection
-      const handleVisibilityChange = () => {
-        if (document.hidden) {
-          log("[iOS] ⚠️ Page hidden - connection may suspend");
-        } else {
-          log("[iOS] ✅ Page visible");
-          // Try to resume AudioContext if suspended
-          if (acRef.current && acRef.current.state === 'suspended') {
-            log("[iOS] Resuming AudioContext after visibility change...");
-            acRef.current.resume();
-          }
+
+      // visibility handler
+      const onVis = () => {
+        if (!document.hidden && acRef.current?.state === "suspended") {
+          acRef.current.resume();
         }
       };
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      
-      // Setup audio FIRST (ensures user interaction primes everything)
+      document.addEventListener("visibilitychange", onVis);
+
       const ac = await ensureAudio();
-      
-      // Now establish WebSocket
-      log(`[WS] Connecting to ${WS_URL}...`);
+
+      // WebSocket
+      log(`[WS] Connecting to ${WS_URL}…`);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
@@ -489,31 +406,28 @@ export default function CallClient() {
         show("Connected!");
         log("[WS] ✅ Connected");
 
-        // Get user ID
+        // identify user
         let realUserId = "default-user";
         try {
           const meRes = await fetch("/api/auth/me", { credentials: "include" });
           if (meRes.ok) {
-            const meData = await meRes.json();
-            realUserId = meData.userId || "default-user";
-            log(`[Auth] User: ${realUserId}`);
+            const me = await meRes.json();
+            realUserId = me.userId || "default-user";
           }
-        } catch (e) {
-          log(`[Auth] Error: ${e}`);
-        }
+        } catch {}
 
         const storedLang = localStorage.getItem("ellie_language") || "en";
+        ws.send(
+          JSON.stringify({
+            type: "hello",
+            userId: realUserId,
+            language: storedLang,
+            sampleRate: 24000,
+          })
+        );
+        log("[WS] ➡️ Sent hello");
 
-        ws.send(JSON.stringify({ 
-          type: "hello", 
-          userId: realUserId,
-          language: storedLang,
-          sampleRate: 24000 
-        }));
-        
-        log("[WS] Sent hello message");
-
-        // Setup microphone capture pipeline
+        // mic capture pipeline
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
         micNodeRef.current = src;
@@ -524,115 +438,70 @@ export default function CallClient() {
         src.connect(gn);
         startMeter(gn);
 
-        // Audio processor for sending
+        // NOTE: ScriptProcessor is used here to match your existing code path
         const contextSampleRate = ac.sampleRate;
-        log(`[Audio] Processing at ${contextSampleRate}Hz → 24000Hz`);
-        
         const proc = ac.createScriptProcessor(4096, 1, 1);
         processorRef.current = proc;
         gn.connect(proc);
-        
-        // 🔧 iOS FIX: ScriptProcessorNode.onaudioprocess won't fire unless connected to destination!
-        // Solution: Connect through a MUTED gain node (volume=0) to prevent echo
+
+        // Important for iOS: connect a muted node to destination so onaudioprocess fires
         const mutedGain = ac.createGain();
-        mutedGain.gain.value = 0; // Volume = 0, no echo!
+        mutedGain.gain.value = 0;
         proc.connect(mutedGain);
         mutedGain.connect(ac.destination);
-        log("[Audio] ✅ Processor connected via muted gain (no echo)");
-        
+
         let audioChunksSent = 0;
-        let processorCallCount = 0;
-        let lastLogTime = Date.now();
-        let lastProcessorCheckTime = Date.now();
-        
-        log("[Audio] 🎙️ Audio processor created, waiting for audio...");
-        
+        let lastLogTime = performance.now();
+
         proc.onaudioprocess = (ev) => {
-          processorCallCount++;
-          
-          // Log processor activity every 5 seconds
-          const now = Date.now();
-          if (now - lastProcessorCheckTime > 5000) {
-            log(`[Audio] 🔄 Processor active (${processorCallCount} callbacks)`);
-            lastProcessorCheckTime = now;
-            processorCallCount = 0;
-          }
-          
-          if (ws.readyState !== WebSocket.OPEN) {
-            if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-              log("[Audio] ⚠️ WebSocket not open, stopping audio processing");
-            }
-            return;
-          }
-          
+          if (ws.readyState !== WebSocket.OPEN) return;
+
           let input = ev.inputBuffer.getChannelData(0);
-          
-          // Calculate audio level for diagnostics
-          let sum = 0;
-          for (let i = 0; i < input.length; i++) {
-            sum += input[i] * input[i];
-          }
-          const rms = Math.sqrt(sum / input.length);
-          
-          // Resample if needed
           if (contextSampleRate !== 24000) {
             input = resampleTo24k(input, contextSampleRate);
           }
-          
+
           const pcm16 = floatTo16BitPCM(input);
           const b64 = abToBase64(pcm16.buffer);
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-          
           audioChunksSent++;
+
+          const now = performance.now();
           if (now - lastLogTime > 2000) {
-            const chunksPerSec = Math.round(audioChunksSent / ((now - lastLogTime) / 1000) * 10) / 10;
-            const avgLevel = Math.round(rms * 1000) / 1000;
-            log(`[Audio] 📤 Sent ${audioChunksSent} chunks (${chunksPerSec}/sec, level=${avgLevel})`);
+            log(`[Audio] 📤 Sent ${audioChunksSent} chunks`);
             lastLogTime = now;
             audioChunksSent = 0;
           }
         };
-        
-        log("[Audio] ✅ Microphone pipeline ready");
 
-        // Start more aggressive ping for iOS stability (10s instead of 25s)
+        // keepalive pings
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
-            log("[WS] 📡 Ping sent");
-          } else {
-            log(`[WS] ⚠️ Connection state: ${ws.readyState}`);
           }
-        }, 10000); // More frequent pings for iOS
+        }, 10000);
       };
 
       ws.onmessage = (ev) => {
         try {
           const obj = JSON.parse(String(ev.data));
-          
+
           if (obj?.type === "audio.delta" && obj.audio) {
-            log("[WS] 🔊 Audio chunk received");
-            const ab = base64ToArrayBuffer(obj.audio);
+            // Incoming PCM16 mono @ 24k (from server’s realtime pipe)
+            const ab = base64ToArrayBuffer(obj.audio); // from server’s audio.delta :contentReference[oaicite:1]{index=1}
             const pcm16 = new Int16Array(ab);
-            const wavBlob = pcm16ToWavBlob(pcm16, 24000);
-            
-            audioQueueRef.current.push(wavBlob);
-            log(`[Queue] Added (total: ${audioQueueRef.current.length})`);
-            
-            void drainPlayback();
-          }
-          else if (obj?.type === "pong") {
-            log("[WS] 🏓 Pong received");
-          }
-          else if (obj?.type === "error") {
-            log(`[Server] ❌ Error: ${obj.message}`);
+            const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
+            schedulePlayback(audioBuffer); // tight, gapless scheduling
+          } else if (obj?.type === "pong") {
+            // noop
+          } else if (obj?.type === "error") {
             show(`Error: ${obj.message || "Unknown error"}`);
-          }
-          else {
-            log(`[WS] 📨 Message type: ${obj?.type || 'unknown'}`);
+            log(`[Server] ❌ ${obj.message}`);
+          } else {
+            // other messages ignored
           }
         } catch (e) {
-          log(`[Parse] ❌ Error: ${e}`);
+          log(`[WS] Parse error: ${e}`);
         }
       };
 
@@ -646,30 +515,10 @@ export default function CallClient() {
       ws.onclose = (ev) => {
         clearTimeout(connectionTimeout);
         stopPinger();
-        
-        const closeReasons: { [key: number]: string } = {
-          1000: "Normal closure",
-          1001: "Going away",
-          1002: "Protocol error",
-          1003: "Unsupported data",
-          1005: "No status received",
-          1006: "Abnormal closure",
-          1007: "Invalid frame payload",
-          1008: "Policy violation",
-          1009: "Message too big",
-          1010: "Mandatory extension",
-          1011: "Internal server error",
-          1015: "TLS handshake failed"
-        };
-        
-        const reason = closeReasons[ev.code] || `Unknown (${ev.code})`;
-        log(`[WS] ❌ Closed: ${ev.code} - ${reason}`);
-        if (ev.reason) log(`[WS] Reason: ${ev.reason}`);
-        
         setStatus("closed");
-        show(`Call ended: ${reason}`);
         cleanupAudio();
         wsRef.current = null;
+        log(`[WS] 🔚 Closed: ${ev.code}`);
       };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -677,8 +526,9 @@ export default function CallClient() {
       setStatus("error");
       show("Failed to start call");
     }
-  }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio, log]);
+  }, [cleanupAudio, ensureAudio, log, schedulePlayback, show, startMeter, gain]);
 
+  // ---------- UI helpers ----------
   useEffect(() => {
     return () => cleanupAll();
   }, [cleanupAll]);
@@ -694,157 +544,82 @@ export default function CallClient() {
     const next = !muted;
     s.getAudioTracks().forEach((t) => (t.enabled = !next));
     setMuted(next);
-    log(`[Mic] ${next ? '🔇 Muted' : '🎤 Unmuted'}`);
+    log(`[Mic] ${next ? "🔇 Muted" : "🎤 Unmuted"}`);
   }, [muted, log]);
 
   const hangUp = useCallback(() => {
-    log("[Call] 📴 Hanging up...");
-    try { wsRef.current?.close(); } catch {}
+    log("[Call] 📴 Hanging up…");
+    try {
+      wsRef.current?.close();
+    } catch {}
     setStatus("ready");
   }, [log]);
 
-  // ===== Render =====
-  
+  // ---------- render ----------
   const vibes = Math.min(100, level * 100);
   const outerScale = 1 + vibes * 0.006;
   const glow = speaking ? 30 + vibes * 0.4 : 15;
 
   return (
-    <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-rose-900 text-white px-4 overflow-hidden">
-      <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10 pointer-events-none" />
+    <div className="flex flex-col items-center gap-4 p-4">
+      <motion.div
+        animate={{ scale: outerScale, boxShadow: `0 0 ${glow}px rgba(255, 99, 132, 0.5)` }}
+        transition={{ type: "spring", stiffness: 120, damping: 12 }}
+        className="w-28 h-28 rounded-full bg-pink-500/80"
+      />
+      <div className="text-sm text-gray-600">
+        {status === "ready" && "Ready"}
+        {status === "connecting" && "Connecting…"}
+        {status === "connected" && "Connected"}
+        {status === "closed" && "Call ended"}
+        {status === "error" && "Error"}
+      </div>
 
-      {/* Debug Logs */}
-      {logs.length > 0 && (
-        <div className="absolute top-20 left-4 right-4 bg-black/90 text-green-400 p-2 rounded text-xs font-mono max-h-48 overflow-y-auto z-50 border border-green-600/30">
-          {logs.map((log, i) => (
-            <div key={i}>{log}</div>
+      <div className="flex gap-2">
+        <button
+          className="px-3 py-2 rounded bg-green-600 text-white disabled:opacity-50"
+          onClick={startCall}
+          disabled={status === "connecting" || status === "connected"}
+        >
+          Start
+        </button>
+        <button
+          className="px-3 py-2 rounded bg-red-600 text-white disabled:opacity-50"
+          onClick={hangUp}
+          disabled={status !== "connected" && status !== "connecting"}
+        >
+          Hang up
+        </button>
+        <button
+          className="px-3 py-2 rounded bg-gray-800 text-white disabled:opacity-50"
+          onClick={toggleMute}
+          disabled={status !== "connected"}
+        >
+          {muted ? "Unmute" : "Mute"}
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-sm">Mic gain</label>
+        <input
+          type="range"
+          min={0.2}
+          max={3}
+          step={0.05}
+          value={gain}
+          onChange={(e) => setGain(Number(e.target.value))}
+        />
+        <span className="text-sm tabular-nums">{gain.toFixed(2)}×</span>
+      </div>
+
+      <details className="w-full max-w-xl">
+        <summary className="cursor-pointer text-sm text-gray-700">Logs</summary>
+        <div className="mt-2 max-h-64 overflow-auto rounded border p-2 text-xs font-mono bg-white">
+          {logs.map((l, i) => (
+            <div key={i}>{l}</div>
           ))}
         </div>
-      )}
-
-      {/* Status Indicator */}
-      <div className="absolute top-6 right-6 flex items-center gap-2 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-full">
-        <div className={`w-2 h-2 rounded-full ${
-          status === "connected" ? "bg-green-400 animate-pulse" :
-          status === "connecting" ? "bg-yellow-400 animate-pulse" :
-          status === "ready" ? "bg-blue-400" :
-          status === "error" ? "bg-red-400" : "bg-gray-400"
-        }`} />
-        <span className="text-sm capitalize">{status}</span>
-      </div>
-
-      <div className="relative z-10 flex flex-col items-center">
-        {status === "ready" ? (
-          <>
-            <div className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center mb-8">
-              <span className="text-6xl">💜</span>
-            </div>
-            
-            <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
-            <p className="text-pink-200 mb-2 text-center max-w-sm">
-              iOS Bluetooth + Resampling + Debug
-            </p>
-            <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
-              Fixed for iPhone with Bluetooth headsets
-            </p>
-            
-            <button
-              onClick={startCall}
-              className="px-8 py-4 rounded-full bg-green-500 hover:bg-green-600 text-white font-bold text-lg shadow-lg transition-all transform hover:scale-105"
-            >
-              Start Call
-            </button>
-          </>
-        ) : (
-          <>
-            <motion.div
-              className="relative mb-8"
-              animate={{ scale: outerScale }}
-              transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            >
-              <div 
-                className="w-48 h-48 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center relative"
-                style={{
-                  boxShadow: `0 0 ${glow}px rgba(236, 72, 153, 0.8), 0 0 ${glow * 1.5}px rgba(168, 85, 247, 0.5)`
-                }}
-              >
-                <span className="text-6xl">💜</span>
-                {speaking && (
-                  <motion.div
-                    className="absolute inset-0 rounded-full border-4 border-pink-300"
-                    animate={{ scale: [1, 1.1, 1], opacity: [0.8, 0, 0.8] }}
-                    transition={{ duration: 1, repeat: Infinity }}
-                  />
-                )}
-              </div>
-            </motion.div>
-
-            <h1 className="text-3xl font-bold mb-2">Ellie</h1>
-            <p className="text-pink-200 mb-8">Voice Call Active</p>
-            
-            {!hasSpoken && status === "connected" && (
-              <p className="text-yellow-300 mb-4 text-sm animate-pulse">
-                💬 Tap to unmute and say &ldquo;Hi Ellie!&rdquo;
-              </p>
-            )}
-
-            <div className="flex items-center gap-4">
-              <button
-                onClick={toggleMute}
-                className={`p-4 rounded-full ${
-                  muted ? "bg-red-500 hover:bg-red-600" : "bg-white/20 hover:bg-white/30"
-                } backdrop-blur-sm transition-colors`}
-                title={muted ? "Unmute" : "Mute"}
-              >
-                {muted ? (
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M13.477 14.89A6 6 0 015.11 6.524l8.367 8.368zm1.414-1.414L6.524 5.11a6 6 0 018.367 8.367zM18 10a8 8 0 11-16 0 8 8 0 0116 0z" clipRule="evenodd" />
-                  </svg>
-                ) : (
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
-                  </svg>
-                )}
-              </button>
-
-              <button
-                onClick={hangUp}
-                className="p-4 rounded-full bg-red-500 hover:bg-red-600 transition-colors"
-                title="Hang up"
-              >
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="mt-8 w-64">
-              <label className="block text-sm text-pink-200 mb-2">Microphone Gain</label>
-              <input
-                type="range"
-                min="0.2"
-                max="3"
-                step="0.1"
-                value={gain}
-                onChange={(e) => setGain(Number(e.target.value))}
-                className="w-full accent-pink-500"
-              />
-              <div className="text-xs text-pink-200 text-center mt-1">{gain.toFixed(1)}x</div>
-            </div>
-          </>
-        )}
-      </div>
-
-      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className="bg-black/80 backdrop-blur-sm text-white px-4 py-2 rounded-lg shadow-lg"
-          >
-            {t.text}
-          </div>
-        ))}
-      </div>
+      </details>
     </div>
   );
 }
