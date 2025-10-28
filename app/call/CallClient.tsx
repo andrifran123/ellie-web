@@ -27,14 +27,41 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // 🆕 Single reusable Audio element for continuous playback
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
-  const audioQueueRef = useRef<Blob[]>([]);
+  // 🆕 CRITICAL: Create Audio element at mount, keep it alive forever
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const queueRef = useRef<string[]>([]); // URLs to play
   const playingRef = useRef(false);
-  const nextAudioReadyRef = useRef<(() => void) | null>(null);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
+
+  // 🆕 Create audio element ONCE on component mount
+  useEffect(() => {
+    console.log("[iOS] Creating persistent Audio element...");
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audioRef.current = audio;
+    
+    audio.onended = () => {
+      console.log("[iOS] Audio chunk ended, playing next...");
+      playNext();
+    };
+    
+    audio.onerror = (e) => {
+      console.error("[iOS] Audio error:", e);
+      playingRef.current = false;
+      playNext();
+    };
+    
+    console.log("[iOS] ✅ Persistent Audio element ready");
+    
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+    };
+  }, []);
 
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
@@ -100,123 +127,29 @@ export default function CallClient() {
     return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  // 🆕 Continuous playback with NO GAPS
-  const drainPlayback = useCallback(async () => {
-    if (playingRef.current) {
-      // Already playing, will continue automatically
+  const playNext = useCallback(() => {
+    if (playingRef.current) return;
+    if (queueRef.current.length === 0) {
+      playingRef.current = false;
       return;
     }
-    if (audioQueueRef.current.length === 0) return;
     
     playingRef.current = true;
-    const audio = audioElementRef.current!;
+    const url = queueRef.current.shift()!;
+    const audio = audioRef.current!;
     
-    const playNext = async () => {
-      if (audioQueueRef.current.length === 0) {
-        playingRef.current = false;
-        return;
-      }
-      
-      const blob = audioQueueRef.current.shift()!;
-      const url = URL.createObjectURL(blob);
-      
-      audio.src = url;
-      
-      try {
-        await audio.play();
-        
-        // 🆕 Wait for this chunk to finish, then play next immediately
-        await new Promise<void>((resolve) => {
-          const onEnded = () => {
-            URL.revokeObjectURL(url);
-            resolve();
-          };
-          audio.addEventListener('ended', onEnded, { once: true });
-        });
-        
-        // 🆕 Immediately play next chunk (no gap!)
-        await playNext();
-        
-      } catch (err) {
-        console.error("[Playback] Error:", err);
-        URL.revokeObjectURL(url);
-        playingRef.current = false;
-      }
-    };
+    audio.src = url;
+    audio.play().catch(err => {
+      console.error("[iOS] Play error:", err);
+      URL.revokeObjectURL(url);
+      playingRef.current = false;
+      playNext();
+    });
     
-    await playNext();
-  }, []);
-
-  // 🆕 LOUDER, LONGER activation beep for iOS
-  const activateAudioSession = useCallback(async () => {
-    console.log("[iOS Audio] 🔊 ACTIVATING audio session with LOUD beep...");
-    
-    try {
-      if (!audioElementRef.current) {
-        const audio = new Audio();
-        audioElementRef.current = audio;
-        console.log("[iOS Audio] ✅ Created reusable Audio element");
-      }
-      
-      const audio = audioElementRef.current;
-      
-      // 🆕 Create a LOUDER, LONGER beep (1 second, 440Hz + 880Hz harmony)
-      const sampleRate = 24000;
-      const duration = 1.0; // 1 full second
-      const numSamples = Math.floor(sampleRate * duration);
-      const beepPCM = new Int16Array(numSamples);
-      
-      for (let i = 0; i < numSamples; i++) {
-        const t = i / sampleRate;
-        // Two tones for richer sound
-        const tone1 = Math.sin(2 * Math.PI * 440 * t); // A4
-        const tone2 = Math.sin(2 * Math.PI * 880 * t); // A5
-        const value = (tone1 * 0.6 + tone2 * 0.4); // Mix tones
-        
-        // Envelope: fade in, sustain, fade out
-        let envelope = 1;
-        const fadeInSamples = sampleRate * 0.1; // 100ms fade in
-        const fadeOutSamples = sampleRate * 0.2; // 200ms fade out
-        const fadeOutStart = numSamples - fadeOutSamples;
-        
-        if (i < fadeInSamples) {
-          envelope = i / fadeInSamples;
-        } else if (i > fadeOutStart) {
-          envelope = (numSamples - i) / fadeOutSamples;
-        }
-        
-        beepPCM[i] = Math.floor(value * envelope * 16000); // LOUDER (was 8000)
-      }
-      
-      const beepBlob = pcm16ToWavBlob(beepPCM, sampleRate);
-      const beepUrl = URL.createObjectURL(beepBlob);
-      
-      console.log("[iOS Audio] 🔊 Playing 1-second activation beep...");
-      
-      audio.src = beepUrl;
-      await audio.play();
-      
-      // Wait for beep to finish
-      await new Promise<void>((resolve) => {
-        const onEnded = () => {
-          URL.revokeObjectURL(beepUrl);
-          resolve();
-        };
-        audio.addEventListener('ended', onEnded, { once: true });
-      });
-      
-      console.log("[iOS Audio] ✅ Activation beep complete!");
-      console.log("[iOS Audio] ✅ iOS audio session NOW ACTIVE for Bluetooth");
-      
-    } catch (err) {
-      console.error("[iOS Audio] ❌ Failed to activate audio session:", err);
-      throw err;
-    }
+    // Note: onended handler will call playNext() when done
   }, []);
 
   const ensureAudio = useCallback(async () => {
-    console.log("[iOS Audio] Starting audio setup...");
-    
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
@@ -242,13 +175,7 @@ export default function CallClient() {
         } as MediaTrackConstraints
       };
       
-      try {
-        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
-        console.log("[iOS Audio] ✅ Microphone granted");
-      } catch (err) {
-        console.error("[iOS Audio] ❌ Failed to get microphone:", err);
-        throw err;
-      }
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
     }
     
     return acRef.current!;
@@ -300,19 +227,15 @@ export default function CallClient() {
   };
 
   const cleanupAudio = useCallback(() => {
-    console.log("[iOS Audio] Cleaning up...");
-    
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
     
-    if (audioElementRef.current) {
-      audioElementRef.current.pause();
-      audioElementRef.current.src = '';
-    }
-    
-    audioQueueRef.current = [];
+    // Clear queue but don't destroy audio element
+    queueRef.current.forEach(url => URL.revokeObjectURL(url));
+    queueRef.current = [];
+    playingRef.current = false;
   }, []);
 
   const cleanupAll = useCallback(() => {
@@ -324,12 +247,43 @@ export default function CallClient() {
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
-      console.log("[Call] 🎯 Starting call...");
+      console.log("[Call] Starting...");
       
-      // 🆕 STEP 1: Play loud activation beep
-      await activateAudioSession();
+      // 🆕 CRITICAL: Play audio FIRST to set iOS routing
+      console.log("[iOS] Playing initial tone to establish Bluetooth routing...");
+      const audio = audioRef.current!;
       
-      console.log("[WS] Connecting to:", WS_URL);
+      // Create a short pleasant tone
+      const sampleRate = 24000;
+      const duration = 0.3;
+      const numSamples = Math.floor(sampleRate * duration);
+      const tonePCM = new Int16Array(numSamples);
+      
+      for (let i = 0; i < numSamples; i++) {
+        const t = i / sampleRate;
+        const value = Math.sin(2 * Math.PI * 440 * t);
+        const envelope = Math.min(i / 2000, (numSamples - i) / 2000, 1);
+        tonePCM[i] = Math.floor(value * envelope * 12000);
+      }
+      
+      const toneBlob = pcm16ToWavBlob(tonePCM, sampleRate);
+      const toneUrl = URL.createObjectURL(toneBlob);
+      
+      audio.src = toneUrl;
+      await audio.play();
+      
+      // Wait for tone to finish
+      await new Promise(resolve => {
+        audio.onended = () => {
+          URL.revokeObjectURL(toneUrl);
+          resolve(null);
+        };
+      });
+      
+      console.log("[iOS] ✅ Initial tone played - Bluetooth routing should be set");
+      
+      // 🆕 NOW get microphone (iOS will keep the Bluetooth routing we just set)
+      console.log("[WS] Connecting...");
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -345,9 +299,8 @@ export default function CallClient() {
 
       ws.onopen = async () => {
         clearTimeout(connectionTimeout);
-        console.log("[WS] ✅ Connected");
         setStatus("connected");
-        show("Connected! Bluetooth should be active.");
+        show("Connected!");
 
         let realUserId = "default-user";
         try {
@@ -357,7 +310,7 @@ export default function CallClient() {
             realUserId = meData.userId || "default-user";
           }
         } catch (e) {
-          console.error("[call] Failed to get userId:", e);
+          console.error("Failed to get userId:", e);
         }
 
         const storedLang = localStorage.getItem("ellie_language") || "en";
@@ -404,27 +357,27 @@ export default function CallClient() {
           const obj = JSON.parse(String(ev.data));
           
           if (obj?.type === "audio.delta" && obj.audio) {
-            // 🆕 Add to queue and play immediately (no batching!)
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
             const wavBlob = pcm16ToWavBlob(pcm16, 24000);
+            const url = URL.createObjectURL(wavBlob);
             
-            audioQueueRef.current.push(wavBlob);
-            void drainPlayback(); // Start playing if not already
+            queueRef.current.push(url);
+            playNext();
           }
           
           if (obj?.type === "error") {
-            console.error("[WS] Server error:", obj.message);
+            console.error("Server error:", obj.message);
             show(`Error: ${obj.message || "Unknown error"}`);
           }
         } catch (e) {
-          console.error("[WS] Parse error:", e);
+          console.error("Parse error:", e);
         }
       };
 
       ws.onerror = (err) => {
         clearTimeout(connectionTimeout);
-        console.error("[WS] Error:", err);
+        console.error("WS Error:", err);
         setStatus("error");
         show("Connection error");
       };
@@ -432,18 +385,18 @@ export default function CallClient() {
       ws.onclose = (ev) => {
         clearTimeout(connectionTimeout);
         stopPinger();
-        console.log("[WS] Closed:", ev.code);
+        console.log("WS Closed:", ev.code);
         setStatus("closed");
         show("Call ended");
         cleanupAudio();
         wsRef.current = null;
       };
     } catch (e) {
-      console.error("[Call] Start failed:", e);
+      console.error("Start failed:", e);
       setStatus("error");
       show("Failed to start call");
     }
-  }, [activateAudioSession, ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
+  }, [ensureAudio, gain, show, startMeter, playNext, cleanupAudio]);
 
   useEffect(() => {
     return () => cleanupAll();
@@ -494,15 +447,14 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-8 text-center max-w-sm">
-              Connect your Bluetooth headphones first, then tap Start Call.<br/>
-              <span className="text-sm text-yellow-300">You&apos;ll hear a 1-second beep to activate Bluetooth.</span>
+              Make sure your Bluetooth headphones are connected, then tap Start Call.
             </p>
             
             <button
               onClick={startCall}
               className="px-8 py-4 rounded-full bg-green-500 hover:bg-green-600 text-white font-bold text-lg shadow-lg transition-all transform hover:scale-105"
             >
-              🎧 Start Call
+              Start Call
             </button>
           </>
         ) : (
@@ -589,14 +541,6 @@ export default function CallClient() {
           </div>
         ))}
       </div>
-      
-      {status === "ready" && (
-        <div className="absolute bottom-8 text-center text-pink-200 text-sm max-w-md px-4">
-          <p className="mb-2 text-yellow-300 font-semibold">⚠️ IMPORTANT: Connect Bluetooth FIRST</p>
-          <p>Make sure your Bluetooth headphones are connected before tapping Start Call.</p>
-          <p className="mt-2">The activation beep will be loud and clear (1 second).</p>
-        </div>
-      )}
     </div>
   );
 }
