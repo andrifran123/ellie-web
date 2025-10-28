@@ -13,7 +13,7 @@ export default function CallClient() {
 
   const [status, setStatus] = useState<Status>("ready");
   const [muted, setMuted] = useState(false);
-  const [logs, setLogs] = useState<string[]>([]); // 📱 Store logs to show on screen
+  const [logs, setLogs] = useState<string[]>([]);
   const [gain, setGain] = useState<number>(() => {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
@@ -28,16 +28,16 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // ✅ Web Audio API playback nodes
+  // ✅ THE REAL FIX: MediaStreamDestination for iOS to recognize as call output
+  const destinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const playbackSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const playbackGainRef = useRef<GainNode | null>(null); // Output gain control
   const playbackQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
-  // 📱 Custom log function that displays on screen
   const log = useCallback((msg: string) => {
     console.log(msg);
     setLogs(prev => [...prev.slice(-20), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
@@ -70,13 +70,11 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  // ✅ Convert PCM16 to AudioBuffer
   function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate: number): AudioBuffer {
     const ac = acRef.current!;
     const audioBuffer = ac.createBuffer(1, pcm16.length, sampleRate);
     const channelData = audioBuffer.getChannelData(0);
     
-    // Convert Int16 to Float32 (-1.0 to 1.0)
     for (let i = 0; i < pcm16.length; i++) {
       channelData[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
     }
@@ -84,7 +82,7 @@ export default function CallClient() {
     return audioBuffer;
   }
 
-  // ✅ Web Audio API playback with gain control
+  // ✅ Play audio through MediaStream (iOS recognizes this as call output)
   const playNextBuffer = useCallback(() => {
     log(`[playNext] playing:${isPlayingRef.current} queue:${playbackQueueRef.current.length}`);
     
@@ -93,8 +91,10 @@ export default function CallClient() {
     }
     
     const ac = acRef.current;
-    if (!ac) {
-      log("[playNext] ❌ No audio context!");
+    const destination = destinationRef.current;
+    
+    if (!ac || !destination) {
+      log("[playNext] ❌ No audio context or destination!");
       return;
     }
     
@@ -104,26 +104,18 @@ export default function CallClient() {
     log(`[playNext] ▶️ Playing (${playbackQueueRef.current.length} left in queue)`);
     
     try {
-      // Create a new source node for this buffer
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
       
-      // ✅ CRITICAL: Connect through gain node for volume control
-      // This ensures proper routing on iOS
-      if (!playbackGainRef.current) {
-        playbackGainRef.current = ac.createGain();
-        playbackGainRef.current.gain.value = 1.0;
-        playbackGainRef.current.connect(ac.destination);
-      }
+      // ✅ CRITICAL: Connect to MediaStreamDestination (not ac.destination)
+      // This creates a MediaStream that iOS recognizes as call output
+      source.connect(destination);
       
-      source.connect(playbackGainRef.current);
-      
-      // Handle playback end
       source.onended = () => {
         log("[Audio] Ended");
         isPlayingRef.current = false;
         playbackSourceRef.current = null;
-        playNextBuffer(); // Play next in queue
+        playNextBuffer();
       };
       
       playbackSourceRef.current = source;
@@ -143,10 +135,9 @@ export default function CallClient() {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       
-      // ✅ CRITICAL iOS FIX: Use 'playback' latencyHint for better routing
       acRef.current = new AC({ 
-        sampleRate: 24000, 
-        latencyHint: 'playback' // Changed from 'interactive' - better for iOS routing
+        sampleRate: 24000,
+        latencyHint: 'interactive'
       });
       
       if (acRef.current.state === 'suspended') {
@@ -157,7 +148,6 @@ export default function CallClient() {
     }
     
     if (!micStreamRef.current) {
-      // ✅ CRITICAL iOS FIX: Request with echoCancellation for voice call mode
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -171,11 +161,30 @@ export default function CallClient() {
       micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
       log("[Audio] Microphone stream acquired");
       
-      // ✅ iOS-specific: Log audio track settings
       const audioTrack = micStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
         const settings = audioTrack.getSettings();
         log(`[Audio] Mic settings - sampleRate: ${settings.sampleRate}, echoCancellation: ${settings.echoCancellation}`);
+      }
+    }
+    
+    // ✅ CRITICAL: Create MediaStreamDestination for output
+    if (!destinationRef.current) {
+      destinationRef.current = acRef.current.createMediaStreamDestination();
+      log("[Audio] MediaStreamDestination created");
+      
+      // ✅ Create HTMLAudioElement and connect it to the MediaStream
+      if (!audioElementRef.current) {
+        const audio = new Audio();
+        audio.autoplay = true;
+        audio.srcObject = destinationRef.current.stream;
+        audioElementRef.current = audio;
+        log("[Audio] Audio element connected to MediaStream");
+        
+        // Play the audio element to activate the stream
+        audio.play().catch(err => {
+          log(`[Audio] Autoplay blocked: ${err.message}`);
+        });
       }
     }
     
@@ -233,7 +242,6 @@ export default function CallClient() {
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
     
-    // Stop any playing audio buffer
     try { 
       if (playbackSourceRef.current) {
         playbackSourceRef.current.stop();
@@ -242,11 +250,18 @@ export default function CallClient() {
       }
     } catch {}
     
-    // Disconnect playback gain
     try {
-      if (playbackGainRef.current) {
-        playbackGainRef.current.disconnect();
-        playbackGainRef.current = null;
+      if (audioElementRef.current) {
+        audioElementRef.current.pause();
+        audioElementRef.current.srcObject = null;
+        audioElementRef.current = null;
+      }
+    } catch {}
+    
+    try {
+      if (destinationRef.current) {
+        destinationRef.current.disconnect();
+        destinationRef.current = null;
       }
     } catch {}
     
@@ -266,16 +281,6 @@ export default function CallClient() {
     try {
       setStatus("connecting");
       log("[Call] Starting...");
-      
-      // ✅ CRITICAL iOS FIX: Initialize audio context BEFORE WebSocket
-      // This ensures the audio session is set up properly
-      const ac = await ensureAudio();
-      
-      // ✅ Force resume audio context (iOS requirement)
-      if (ac.state === 'suspended') {
-        await ac.resume();
-        log(`[Audio] Context resumed, new state: ${ac.state}`);
-      }
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -315,7 +320,8 @@ export default function CallClient() {
           sampleRate: 24000 
         }));
 
-        // Set up microphone input
+        // Initialize audio session (creates MediaStreamDestination)
+        const ac = await ensureAudio();
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
         micNodeRef.current = src;
@@ -351,13 +357,10 @@ export default function CallClient() {
         try {
           const obj = JSON.parse(String(ev.data));
           
-          // Convert received audio to AudioBuffer and queue it
           if (obj?.type === "audio.delta" && obj.audio) {
             log("[WS] Audio delta received");
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
-            
-            // Convert to AudioBuffer
             const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
             
             playbackQueueRef.current.push(audioBuffer);
@@ -428,7 +431,6 @@ export default function CallClient() {
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-rose-900 text-white px-4 overflow-hidden">
       <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10 pointer-events-none" />
 
-      {/* 📱 ON-SCREEN DEBUG LOGS */}
       {logs.length > 0 && (
         <div className="absolute top-20 left-4 right-4 bg-black/90 text-green-400 p-2 rounded text-xs font-mono max-h-48 overflow-y-auto z-50">
           {logs.map((log, i) => (
@@ -456,10 +458,10 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-2 text-center max-w-sm">
-              Enhanced iOS Bluetooth Support
+              Auto Bluetooth Routing
             </p>
             <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
-              Tap to start - Audio context initialized on user gesture
+              Uses MediaStream for iOS compatibility
             </p>
             
             <button
