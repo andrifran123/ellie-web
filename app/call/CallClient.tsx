@@ -40,6 +40,27 @@ export default function CallClient() {
     setLogs(prev => [...prev.slice(-20), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
   }, []);
 
+  // ✅ Resample audio from any rate to 24000 Hz
+  function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
+    if (inputRate === 24000) return inputBuffer;
+    
+    const ratio = 24000 / inputRate;
+    const outputLength = Math.floor(inputBuffer.length * ratio);
+    const output = new Float32Array(outputLength);
+    
+    for (let i = 0; i < outputLength; i++) {
+      const srcIndex = i / ratio;
+      const srcIndexFloor = Math.floor(srcIndex);
+      const srcIndexCeil = Math.min(srcIndexFloor + 1, inputBuffer.length - 1);
+      const t = srcIndex - srcIndexFloor;
+      
+      // Linear interpolation
+      output[i] = inputBuffer[srcIndexFloor] * (1 - t) + inputBuffer[srcIndexCeil] * t;
+    }
+    
+    return output;
+  }
+
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
     for (let i = 0; i < float32.length; i++) {
@@ -100,8 +121,6 @@ export default function CallClient() {
     try {
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
-      
-      // ✅ CRITICAL: Direct connection to destination for iOS Bluetooth routing
       source.connect(ac.destination);
       
       source.onended = () => {
@@ -128,8 +147,8 @@ export default function CallClient() {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       
+      // ✅ Let the browser choose its native sample rate
       acRef.current = new AC({ 
-        sampleRate: 24000,
         latencyHint: 'interactive'
       });
       
@@ -147,7 +166,7 @@ export default function CallClient() {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-          sampleRate: { ideal: 24000 },
+          // ✅ Don't force sample rate, let browser choose
         } as MediaTrackConstraints
       };
       
@@ -293,20 +312,26 @@ export default function CallClient() {
         processorRef.current = proc;
         gn.connect(proc);
         
-        // ✅ CRITICAL FIX: DO NOT connect processor to destination!
-        // This was causing echo and confusing iOS about audio routing
-        // The processor only needs to capture data, not play it
-        // proc.connect(ac.destination); // ❌ REMOVED THIS LINE
+        // ✅ Get the actual sample rate from audio context
+        const contextSampleRate = ac.sampleRate;
+        log(`[Audio] Processing at ${contextSampleRate} Hz, will resample to 24000 Hz`);
         
         proc.onaudioprocess = (ev) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-          const input = ev.inputBuffer.getChannelData(0);
+          
+          let input = ev.inputBuffer.getChannelData(0);
+          
+          // ✅ Resample to 24000 Hz if needed
+          if (contextSampleRate !== 24000) {
+            input = resampleTo24k(input, contextSampleRate);
+          }
+          
           const pcm16 = floatTo16BitPCM(input);
           const b64 = abToBase64(pcm16.buffer);
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
         };
 
-        log("[Audio] Microphone pipeline connected (NOT to destination - no echo)");
+        log("[Audio] Microphone pipeline connected with resampling");
 
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -420,10 +445,10 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-2 text-center max-w-sm">
-              Fixed: Mic won&apos;t echo through speakers
+              Fixed: Sample rate conversion + No echo
             </p>
             <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
-              Proper audio routing for iOS Bluetooth
+              Automatically resamples mic to 24kHz for server
             </p>
             
             <button
