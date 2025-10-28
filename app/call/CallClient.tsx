@@ -37,7 +37,6 @@ export default function CallClient() {
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [hasSpoken, setHasSpoken] = useState(false);
-  const speakingTimeoutRef = useRef<number | null>(null);
 
   // 📱 Logging with on-screen display
   const log = useCallback((msg: string) => {
@@ -379,12 +378,17 @@ export default function CallClient() {
       log(`[Call] Device: ${navigator.userAgent.slice(0, 100)}`);
       
       // iOS: Prevent screen lock/sleep during call
-      let wakeLock: any = null;
       if ('wakeLock' in navigator) {
         try {
-          wakeLock = await (navigator as any).wakeLock.request('screen');
+          // WakeLock API is experimental, so we cast to access it
+          interface NavigatorWithWakeLock extends Navigator {
+            wakeLock: {
+              request: (type: 'screen') => Promise<unknown>;
+            };
+          }
+          await (navigator as NavigatorWithWakeLock).wakeLock.request('screen');
           log("[iOS] 🔓 Wake lock acquired");
-        } catch (e) {
+        } catch {
           log("[iOS] ⚠️ Wake lock not available");
         }
       }
@@ -695,7 +699,7 @@ export default function CallClient() {
             
             {!hasSpoken && status === "connected" && (
               <p className="text-yellow-300 mb-4 text-sm animate-pulse">
-                💬 Tap to unmute and say "Hi Ellie!"
+                💬 Tap to unmute and say &ldquo;Hi Ellie!&rdquo;
               </p>
             )}
 
