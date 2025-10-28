@@ -420,7 +420,7 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-2 text-center max-w-sm">
-              Fixed: Mic won't echo through speakers
+              Fixed: Mic won&apos;t echo through speakers
             </p>
             <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
               Proper audio routing for iOS Bluetooth
