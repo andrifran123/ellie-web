@@ -87,7 +87,8 @@ export default function CallClient() {
     return out;
   }
 
-  function abToBase64(buf: ArrayBuffer): string {
+  // Accept ArrayBufferLike to avoid TS complaints with TypedArray.buffer
+  function abToBase64(buf: ArrayBufferLike): string {
     const bytes = new Uint8Array(buf);
     const chunk = 0x8000;
     let binary = "";
@@ -452,29 +453,26 @@ export default function CallClient() {
         let lastLogTime = performance.now();
 
         proc.onaudioprocess = (ev) => {
-  if (ws.readyState !== WebSocket.OPEN) return;
+          if (ws.readyState !== WebSocket.OPEN) return;
 
-  const inputCh = ev.inputBuffer.getChannelData(0); // original Float32Array from WebAudio
-  // Avoid reassigning `inputCh` (its generic base buffer type causes TS grief on some builds).
-  // Instead, create a new Float32Array when not resampling, or resample into a fresh array.
-  const mono24k: Float32Array =
-    contextSampleRate !== 24000
-      ? resampleTo24k(inputCh, contextSampleRate)
-      : new Float32Array(inputCh); // copy to a plain Float32Array
+          const inputCh = ev.inputBuffer.getChannelData(0);
+          const mono24k: Float32Array =
+            contextSampleRate !== 24000
+              ? resampleTo24k(inputCh, contextSampleRate)
+              : new Float32Array(inputCh); // copy to plain Float32Array to avoid generic buffer typing issues
 
-  const pcm16 = floatTo16BitPCM(mono24k);
-  const b64 = abToBase64(pcm16.buffer);
-  ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-  audioChunksSent++;
+          const pcm16 = floatTo16BitPCM(mono24k);
+          const b64 = abToBase64(pcm16.buffer); // now accepts ArrayBufferLike
+          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+          audioChunksSent++;
 
-  const now = performance.now();
-  if (now - lastLogTime > 2000) {
-    log(`[Audio] 📤 Sent ${audioChunksSent} chunks`);
-    lastLogTime = now;
-    audioChunksSent = 0;
-  }
-};
-
+          const now = performance.now();
+          if (now - lastLogTime > 2000) {
+            log(`[Audio] 📤 Sent ${audioChunksSent} chunks`);
+            lastLogTime = now;
+            audioChunksSent = 0;
+          }
+        };
 
         // keepalive pings
         wsPingRef.current = window.setInterval(() => {
