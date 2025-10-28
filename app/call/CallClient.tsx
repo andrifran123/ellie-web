@@ -28,8 +28,9 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // ✅ NEW: Web Audio API playback nodes instead of HTMLAudioElement
+  // ✅ Web Audio API playback nodes
   const playbackSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const playbackGainRef = useRef<GainNode | null>(null); // Output gain control
   const playbackQueueRef = useRef<AudioBuffer[]>([]);
   const isPlayingRef = useRef(false);
 
@@ -69,7 +70,7 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  // ✅ NEW: Convert PCM16 to AudioBuffer (Web Audio API format)
+  // ✅ Convert PCM16 to AudioBuffer
   function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate: number): AudioBuffer {
     const ac = acRef.current!;
     const audioBuffer = ac.createBuffer(1, pcm16.length, sampleRate);
@@ -83,7 +84,7 @@ export default function CallClient() {
     return audioBuffer;
   }
 
-  // ✅ NEW: Web Audio API playback using AudioBufferSourceNode
+  // ✅ Web Audio API playback with gain control
   const playNextBuffer = useCallback(() => {
     log(`[playNext] playing:${isPlayingRef.current} queue:${playbackQueueRef.current.length}`);
     
@@ -107,8 +108,15 @@ export default function CallClient() {
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
       
-      // Connect directly to destination (speakers/Bluetooth)
-      source.connect(ac.destination);
+      // ✅ CRITICAL: Connect through gain node for volume control
+      // This ensures proper routing on iOS
+      if (!playbackGainRef.current) {
+        playbackGainRef.current = ac.createGain();
+        playbackGainRef.current.gain.value = 1.0;
+        playbackGainRef.current.connect(ac.destination);
+      }
+      
+      source.connect(playbackGainRef.current);
       
       // Handle playback end
       source.onended = () => {
@@ -135,19 +143,21 @@ export default function CallClient() {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       
+      // ✅ CRITICAL iOS FIX: Use 'playback' latencyHint for better routing
       acRef.current = new AC({ 
         sampleRate: 24000, 
-        latencyHint: 'interactive'
+        latencyHint: 'playback' // Changed from 'interactive' - better for iOS routing
       });
       
       if (acRef.current.state === 'suspended') {
         await acRef.current.resume();
       }
       
-      log(`[Audio] Context created, state: ${acRef.current.state}`);
+      log(`[Audio] Context created, state: ${acRef.current.state}, sampleRate: ${acRef.current.sampleRate}`);
     }
     
     if (!micStreamRef.current) {
+      // ✅ CRITICAL iOS FIX: Request with echoCancellation for voice call mode
       const constraints = {
         audio: {
           echoCancellation: true,
@@ -160,6 +170,13 @@ export default function CallClient() {
       
       micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
       log("[Audio] Microphone stream acquired");
+      
+      // ✅ iOS-specific: Log audio track settings
+      const audioTrack = micStreamRef.current.getAudioTracks()[0];
+      if (audioTrack) {
+        const settings = audioTrack.getSettings();
+        log(`[Audio] Mic settings - sampleRate: ${settings.sampleRate}, echoCancellation: ${settings.echoCancellation}`);
+      }
     }
     
     return acRef.current!;
@@ -216,12 +233,20 @@ export default function CallClient() {
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
     
-    // ✅ NEW: Stop any playing audio buffer
+    // Stop any playing audio buffer
     try { 
       if (playbackSourceRef.current) {
         playbackSourceRef.current.stop();
         playbackSourceRef.current.disconnect();
         playbackSourceRef.current = null;
+      }
+    } catch {}
+    
+    // Disconnect playback gain
+    try {
+      if (playbackGainRef.current) {
+        playbackGainRef.current.disconnect();
+        playbackGainRef.current = null;
       }
     } catch {}
     
@@ -241,6 +266,16 @@ export default function CallClient() {
     try {
       setStatus("connecting");
       log("[Call] Starting...");
+      
+      // ✅ CRITICAL iOS FIX: Initialize audio context BEFORE WebSocket
+      // This ensures the audio session is set up properly
+      const ac = await ensureAudio();
+      
+      // ✅ Force resume audio context (iOS requirement)
+      if (ac.state === 'suspended') {
+        await ac.resume();
+        log(`[Audio] Context resumed, new state: ${ac.state}`);
+      }
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -280,7 +315,7 @@ export default function CallClient() {
           sampleRate: 24000 
         }));
 
-        const ac = await ensureAudio();
+        // Set up microphone input
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
         micNodeRef.current = src;
@@ -303,6 +338,8 @@ export default function CallClient() {
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
         };
 
+        log("[Audio] Microphone pipeline connected");
+
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -314,13 +351,13 @@ export default function CallClient() {
         try {
           const obj = JSON.parse(String(ev.data));
           
-          // ✅ NEW: Convert received audio to AudioBuffer and queue it
+          // Convert received audio to AudioBuffer and queue it
           if (obj?.type === "audio.delta" && obj.audio) {
             log("[WS] Audio delta received");
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
             
-            // Convert to AudioBuffer instead of Blob
+            // Convert to AudioBuffer
             const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
             
             playbackQueueRef.current.push(audioBuffer);
@@ -375,7 +412,8 @@ export default function CallClient() {
     const next = !muted;
     s.getAudioTracks().forEach((t) => (t.enabled = !next));
     setMuted(next);
-  }, [muted]);
+    log(`[Mic] ${next ? 'Muted' : 'Unmuted'}`);
+  }, [muted, log]);
 
   const hangUp = useCallback(() => {
     try { wsRef.current?.close(); } catch {}
@@ -417,15 +455,18 @@ export default function CallClient() {
             </div>
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
-            <p className="text-pink-200 mb-8 text-center max-w-sm">
-              Using Web Audio API for iOS Safari Bluetooth fix
+            <p className="text-pink-200 mb-2 text-center max-w-sm">
+              Enhanced iOS Bluetooth Support
+            </p>
+            <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
+              Tap to start - Audio context initialized on user gesture
             </p>
             
             <button
               onClick={startCall}
               className="px-8 py-4 rounded-full bg-green-500 hover:bg-green-600 text-white font-bold text-lg shadow-lg transition-all transform hover:scale-105"
             >
-              Start Call (Web Audio)
+              Start Call
             </button>
           </>
         ) : (
