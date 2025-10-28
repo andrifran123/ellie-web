@@ -471,8 +471,13 @@ export default function CallClient() {
         processorRef.current = proc;
         gn.connect(proc);
         
-        // ⚠️ DO NOT connect to destination to avoid echo
-        // proc.connect(ac.destination); // REMOVED for no echo
+        // 🔧 iOS FIX: ScriptProcessorNode.onaudioprocess won't fire unless connected to destination!
+        // Solution: Connect through a MUTED gain node (volume=0) to prevent echo
+        const mutedGain = ac.createGain();
+        mutedGain.gain.value = 0; // Volume = 0, no echo!
+        proc.connect(mutedGain);
+        mutedGain.connect(ac.destination);
+        log("[Audio] ✅ Processor connected via muted gain (no echo)");
         
         let audioChunksSent = 0;
         let processorCallCount = 0;
