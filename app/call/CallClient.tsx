@@ -13,6 +13,7 @@ export default function CallClient() {
 
   const [status, setStatus] = useState<Status>("ready");
   const [muted, setMuted] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]); // 📱 Store logs to show on screen
   const [gain, setGain] = useState<number>(() => {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
@@ -33,6 +34,12 @@ export default function CallClient() {
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
+
+  // 📱 Custom log function that displays on screen
+  const log = useCallback((msg: string) => {
+    console.log(msg);
+    setLogs(prev => [...prev.slice(-20), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
+  }, []);
 
   function floatTo16BitPCM(float32: Float32Array) {
     const out = new Int16Array(float32.length);
@@ -99,41 +106,35 @@ export default function CallClient() {
   }
 
   const playNext = useCallback(() => {
-    console.log("[Audio] playNext called, playing:", playingRef.current, "queue:", queueRef.current.length);
+    log(`[playNext] playing:${playingRef.current} queue:${queueRef.current.length}`);
     
-    if (playingRef.current) {
-      console.log("[Audio] Already playing, skip");
-      return;
-    }
-    
-    if (queueRef.current.length === 0) {
-      console.log("[Audio] Queue empty");
+    if (playingRef.current || queueRef.current.length === 0) {
       return;
     }
     
     const audio = audioRef.current;
     if (!audio) {
-      console.error("[Audio] No audio element!");
+      log("[playNext] ❌ No audio element!");
       return;
     }
     
     playingRef.current = true;
     const url = queueRef.current.shift()!;
     
-    console.log("[Audio] ▶️ PLAYING chunk, remaining in queue:", queueRef.current.length);
+    log(`[playNext] ▶️ Playing (${queueRef.current.length} left in queue)`);
     
     audio.src = url;
     audio.play()
       .then(() => {
-        console.log("[Audio] ✅ Play started successfully");
+        log("[play] ✅ Started");
       })
       .catch(err => {
-        console.error("[Audio] ❌ Play error:", err);
+        log(`[play] ❌ Error: ${err.name} - ${err.message}`);
         URL.revokeObjectURL(url);
         playingRef.current = false;
         playNext();
       });
-  }, []);
+  }, [log]);
 
   const ensureAudio = useCallback(async () => {
     if (!acRef.current) {
@@ -232,35 +233,27 @@ export default function CallClient() {
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
-      console.log("[Call] 🎯 Starting call...");
+      log("[Call] Starting...");
       
-      // Create audio element from user gesture
-      console.log("[Audio] Creating audio element...");
+      log("[Audio] Creating element...");
       const audio = new Audio();
       audioRef.current = audio;
       
       audio.addEventListener('ended', () => {
-        console.log("[Audio] 🏁 Chunk ENDED");
+        log("[Audio] Ended");
         playingRef.current = false;
         URL.revokeObjectURL(audio.src);
         playNext();
       });
       
       audio.addEventListener('error', (e) => {
-        console.error("[Audio] ❌ ERROR:", e);
+        const target = e.target as HTMLAudioElement;
+        log(`[Audio] Error: ${target.error?.code} ${target.error?.message}`);
         playingRef.current = false;
         playNext();
       });
       
-      audio.addEventListener('play', () => {
-        console.log("[Audio] ▶️ PLAY event fired");
-      });
-      
-      audio.addEventListener('pause', () => {
-        console.log("[Audio] ⏸️ PAUSE event fired");
-      });
-      
-      console.log("[Audio] ✅ Audio element created with listeners");
+      log("[Audio] Element created");
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -278,7 +271,7 @@ export default function CallClient() {
         clearTimeout(connectionTimeout);
         setStatus("connected");
         show("Connected!");
-        console.log("[WebSocket] ✅ Connected");
+        log("[WS] Connected");
 
         let realUserId = "default-user";
         try {
@@ -288,7 +281,7 @@ export default function CallClient() {
             realUserId = meData.userId || "default-user";
           }
         } catch (e) {
-          console.error("Failed to get userId:", e);
+          log(`[Auth] Error: ${e}`);
         }
 
         const storedLang = localStorage.getItem("ellie_language") || "en";
@@ -335,30 +328,29 @@ export default function CallClient() {
           const obj = JSON.parse(String(ev.data));
           
           if (obj?.type === "audio.delta" && obj.audio) {
-            console.log("[WebSocket] 📥 Received audio delta");
+            log("[WS] Audio delta received");
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
-            console.log("[Audio] Converting to WAV, PCM16 length:", pcm16.length);
             const wavBlob = pcm16ToWavBlob(pcm16, 24000);
             const url = URL.createObjectURL(wavBlob);
             
             queueRef.current.push(url);
-            console.log("[Audio] ✅ Added to queue, total:", queueRef.current.length);
+            log(`[Queue] Added (total: ${queueRef.current.length})`);
             playNext();
           }
           
           if (obj?.type === "error") {
-            console.error("Server error:", obj.message);
+            log(`[Server] Error: ${obj.message}`);
             show(`Error: ${obj.message || "Unknown error"}`);
           }
         } catch (e) {
-          console.error("Parse error:", e);
+          log(`[Parse] Error: ${e}`);
         }
       };
 
       ws.onerror = (err) => {
         clearTimeout(connectionTimeout);
-        console.error("WS Error:", err);
+        log(`[WS] Error: ${err}`);
         setStatus("error");
         show("Connection error");
       };
@@ -366,18 +358,18 @@ export default function CallClient() {
       ws.onclose = (ev) => {
         clearTimeout(connectionTimeout);
         stopPinger();
-        console.log("WS Closed:", ev.code);
+        log(`[WS] Closed: ${ev.code}`);
         setStatus("closed");
         show("Call ended");
         cleanupAudio();
         wsRef.current = null;
       };
     } catch (e) {
-      console.error("Start failed:", e);
+      log(`[Start] Failed: ${e}`);
       setStatus("error");
       show("Failed to start call");
     }
-  }, [ensureAudio, gain, show, startMeter, playNext, cleanupAudio]);
+  }, [ensureAudio, gain, show, startMeter, playNext, cleanupAudio, log]);
 
   useEffect(() => {
     return () => cleanupAll();
@@ -409,6 +401,15 @@ export default function CallClient() {
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-pink-800 to-rose-900 text-white px-4 overflow-hidden">
       <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-10 pointer-events-none" />
 
+      {/* 📱 ON-SCREEN DEBUG LOGS */}
+      {logs.length > 0 && (
+        <div className="absolute top-20 left-4 right-4 bg-black/90 text-green-400 p-2 rounded text-xs font-mono max-h-48 overflow-y-auto z-50">
+          {logs.map((log, i) => (
+            <div key={i}>{log}</div>
+          ))}
+        </div>
+      )}
+
       <div className="absolute top-6 right-6 flex items-center gap-2 bg-black/30 backdrop-blur-sm px-4 py-2 rounded-full">
         <div className={`w-2 h-2 rounded-full ${
           status === "connected" ? "bg-green-400 animate-pulse" :
@@ -428,14 +429,14 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-8 text-center max-w-sm">
-              Tap Start Call to begin
+              Debug mode - logs will appear on screen
             </p>
             
             <button
               onClick={startCall}
               className="px-8 py-4 rounded-full bg-green-500 hover:bg-green-600 text-white font-bold text-lg shadow-lg transition-all transform hover:scale-105"
             >
-              Start Call
+              Start Call (Debug)
             </button>
           </>
         ) : (
