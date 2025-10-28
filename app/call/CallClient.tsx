@@ -475,9 +475,23 @@ export default function CallClient() {
         // proc.connect(ac.destination); // REMOVED for no echo
         
         let audioChunksSent = 0;
+        let processorCallCount = 0;
         let lastLogTime = Date.now();
+        let lastProcessorCheckTime = Date.now();
+        
+        log("[Audio] 🎙️ Audio processor created, waiting for audio...");
         
         proc.onaudioprocess = (ev) => {
+          processorCallCount++;
+          
+          // Log processor activity every 5 seconds
+          const now = Date.now();
+          if (now - lastProcessorCheckTime > 5000) {
+            log(`[Audio] 🔄 Processor active (${processorCallCount} callbacks)`);
+            lastProcessorCheckTime = now;
+            processorCallCount = 0;
+          }
+          
           if (ws.readyState !== WebSocket.OPEN) {
             if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
               log("[Audio] ⚠️ WebSocket not open, stopping audio processing");
@@ -486,6 +500,13 @@ export default function CallClient() {
           }
           
           let input = ev.inputBuffer.getChannelData(0);
+          
+          // Calculate audio level for diagnostics
+          let sum = 0;
+          for (let i = 0; i < input.length; i++) {
+            sum += input[i] * input[i];
+          }
+          const rms = Math.sqrt(sum / input.length);
           
           // Resample if needed
           if (contextSampleRate !== 24000) {
@@ -497,10 +518,12 @@ export default function CallClient() {
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
           
           audioChunksSent++;
-          const now = Date.now();
-          if (now - lastLogTime > 2000) { // Log every 2 seconds
-            log(`[Audio] 📤 Sent ${audioChunksSent} chunks (${Math.round(audioChunksSent / ((now - lastLogTime) / 1000) * 10) / 10} chunks/sec)`);
+          if (now - lastLogTime > 2000) {
+            const chunksPerSec = Math.round(audioChunksSent / ((now - lastLogTime) / 1000) * 10) / 10;
+            const avgLevel = Math.round(rms * 1000) / 1000;
+            log(`[Audio] 📤 Sent ${audioChunksSent} chunks (${chunksPerSec}/sec, level=${avgLevel})`);
             lastLogTime = now;
+            audioChunksSent = 0;
           }
         };
         
