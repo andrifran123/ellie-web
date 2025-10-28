@@ -122,8 +122,9 @@ export default function CallClient() {
       source.start(0);
       log("[play] ✅ Started");
       
-    } catch (err: any) {
-      log(`[play] ❌ Error: ${err.name} - ${err.message}`);
+    } catch (err) {
+      const error = err as Error;
+      log(`[play] ❌ Error: ${error.name} - ${error.message}`);
       isPlayingRef.current = false;
       playNextBuffer();
     }
