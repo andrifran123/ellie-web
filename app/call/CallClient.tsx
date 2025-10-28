@@ -10,6 +10,10 @@ type Status = "connecting" | "connected" | "closed" | "error";
 /** Direct connection to Render backend (Vercel can't proxy WS upgrades) */
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
 
+// 🆕 Optimized batching parameters
+const BATCH_SIZE = 5; // Accumulate 5 chunks before playing (~0.85s)
+const BATCH_TIMEOUT_MS = 300; // Or play after 300ms if no more chunks
+
 export default function CallClient() {
   const router = useRouter();
   const { toasts, show } = useToasts();
@@ -31,13 +35,15 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // 🆕 HTMLAudioElement for iOS Bluetooth playback
+  // 🆕 Optimized batching for smooth playback
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const batchBufferRef = useRef<Int16Array[]>([]); // Accumulate PCM16 chunks
+  const batchTimerRef = useRef<number | null>(null);
   const audioQueueRef = useRef<Blob[]>([]);
   const playingRef = useRef(false);
 
   // visual meter state
-  const [level, setLevel] = useState(0); // 0..1 RMS
+  const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
   // ===== helpers =====
@@ -68,7 +74,19 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  // 🆕 Convert PCM16 to WAV blob (so HTMLAudioElement can play it)
+  // 🆕 Combine multiple PCM16 chunks into one
+  function combinePCM16Chunks(chunks: Int16Array[]): Int16Array {
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const combined = new Int16Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return combined;
+  }
+
+  // Convert PCM16 to WAV blob
   function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
     const numChannels = 1;
     const bitsPerSample = 16;
@@ -79,7 +97,6 @@ export default function CallClient() {
     const buffer = new ArrayBuffer(44 + dataSize);
     const view = new DataView(buffer);
     
-    // WAV header
     const writeString = (offset: number, string: string) => {
       for (let i = 0; i < string.length; i++) {
         view.setUint8(offset + i, string.charCodeAt(i));
@@ -100,13 +117,34 @@ export default function CallClient() {
     writeString(36, 'data');
     view.setUint32(40, dataSize, true);
     
-    // PCM data
     for (let i = 0; i < pcm16.length; i++) {
       view.setInt16(44 + i * 2, pcm16[i], true);
     }
     
     return new Blob([buffer], { type: 'audio/wav' });
   }
+
+  // 🆕 Flush accumulated batch to play queue
+  const flushBatch = useCallback(() => {
+    if (batchBufferRef.current.length === 0) return;
+    
+    console.log(`[Playback] Flushing batch of ${batchBufferRef.current.length} chunks`);
+    
+    // Combine all accumulated chunks into one
+    const combined = combinePCM16Chunks(batchBufferRef.current);
+    const wavBlob = pcm16ToWavBlob(combined, 24000);
+    
+    audioQueueRef.current.push(wavBlob);
+    batchBufferRef.current = [];
+    
+    // Clear batch timer
+    if (batchTimerRef.current) {
+      window.clearTimeout(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
+    
+    void drainPlayback();
+  }, []);
 
   const ensureAudio = useCallback(async () => {
     console.log("[iOS Audio] Starting audio setup...");
@@ -125,11 +163,10 @@ export default function CallClient() {
       if (acRef.current.state === 'suspended') {
         console.log("[iOS Audio] Resuming suspended AudioContext...");
         await acRef.current.resume();
-        console.log("[iOS Audio] AudioContext resumed, state:", acRef.current.state);
       }
     }
     
-    // 🆕 Create HTMLAudioElement for iOS Bluetooth playback
+    // Create HTMLAudioElement for iOS Bluetooth playback
     if (!audioElementRef.current) {
       console.log("[iOS Audio] Creating HTMLAudioElement for Bluetooth routing...");
       const audio = new Audio();
@@ -137,21 +174,20 @@ export default function CallClient() {
       audioElementRef.current = audio;
       
       audio.onended = () => {
-        console.log("[iOS Audio] Audio chunk ended, playing next...");
         void drainPlayback();
       };
       
       audio.onerror = (e) => {
-        console.error("[iOS Audio] HTMLAudioElement error:", e);
+        console.error("[iOS Audio] Playback error:", e);
         playingRef.current = false;
         void drainPlayback();
       };
       
-      console.log("[iOS Audio] ✅ HTMLAudioElement created for Bluetooth routing");
+      console.log("[iOS Audio] ✅ HTMLAudioElement created");
     }
     
     if (!micStreamRef.current) {
-      console.log("[iOS Audio] Requesting microphone with iOS telephony constraints...");
+      console.log("[iOS Audio] Requesting microphone...");
       
       const constraints = {
         audio: {
@@ -165,17 +201,7 @@ export default function CallClient() {
       
       try {
         micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
-        
-        const audioTrack = micStreamRef.current.getAudioTracks()[0];
-        const settings = audioTrack.getSettings();
-        console.log("[iOS Audio] ✅ Microphone granted with settings:", {
-          echoCancellation: settings.echoCancellation,
-          noiseSuppression: settings.noiseSuppression,
-          autoGainControl: settings.autoGainControl,
-          channelCount: settings.channelCount,
-          sampleRate: settings.sampleRate,
-        });
-        
+        console.log("[iOS Audio] ✅ Microphone granted");
       } catch (err) {
         console.error("[iOS Audio] ❌ Failed to get microphone:", err);
         throw err;
@@ -186,7 +212,6 @@ export default function CallClient() {
     return acRef.current!;
   }, []);
 
-  // visual RMS meter loop
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -225,7 +250,7 @@ export default function CallClient() {
     };
   }, []);
 
-  // 🆕 Play using HTMLAudioElement (routes to Bluetooth on iOS!)
+  // Play using HTMLAudioElement (smoother batched playback)
   const drainPlayback = useCallback(async () => {
     if (playingRef.current) return;
     if (audioQueueRef.current.length === 0) return;
@@ -265,7 +290,7 @@ export default function CallClient() {
         });
       }
     } catch (err) {
-      console.error("[iOS Audio] Playback error:", err);
+      console.error("[Playback] Error:", err);
     } finally {
       playingRef.current = false;
     }
@@ -279,15 +304,26 @@ export default function CallClient() {
   };
 
   const cleanupAudio = useCallback(() => {
-    console.log("[iOS Audio] Cleaning up audio...");
+    console.log("[iOS Audio] Cleaning up...");
+    
+    // Clear batch timer
+    if (batchTimerRef.current) {
+      window.clearTimeout(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
+    
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+    
     if (audioElementRef.current) {
       audioElementRef.current.pause();
       audioElementRef.current.src = '';
     }
+    
+    batchBufferRef.current = [];
+    audioQueueRef.current = [];
   }, []);
 
   const cleanupAll = useCallback(() => {
@@ -298,8 +334,7 @@ export default function CallClient() {
 
   const connect = useCallback(async () => {
     try {
-      console.log("[WS] Attempting connection to:", WS_URL);
-      console.log("[iOS Audio] Device:", navigator.userAgent);
+      console.log("[WS] Connecting to:", WS_URL);
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -307,16 +342,16 @@ export default function CallClient() {
 
       const connectionTimeout = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
-          console.error("[WS] Connection timeout after 15s");
+          console.error("[WS] Connection timeout");
           ws.close();
           setStatus("error");
-          show("Connection timeout - server may be sleeping");
+          show("Connection timeout");
         }
       }, 15000);
 
       ws.onopen = async () => {
         clearTimeout(connectionTimeout);
-        console.log("[WS] ✅ CONNECTION OPENED");
+        console.log("[WS] ✅ Connected");
         setStatus("connected");
         show("Call connected");
 
@@ -340,7 +375,6 @@ export default function CallClient() {
           sampleRate: 24000 
         }));
 
-        // Start audio capture
         const ac = await ensureAudio();
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
@@ -352,7 +386,6 @@ export default function CallClient() {
         src.connect(gn);
         startMeter(gn);
 
-        // Capture + send PCM16 frames
         const proc = ac.createScriptProcessor(4096, 1, 1);
         processorRef.current = proc;
         gn.connect(proc);
@@ -377,15 +410,24 @@ export default function CallClient() {
           const obj = JSON.parse(String(ev.data));
           
           if (obj?.type === "audio.delta" && obj.audio) {
-            // 🆕 Convert PCM16 to WAV and add to queue
+            // 🆕 Add to batch buffer instead of playing immediately
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
-            const wavBlob = pcm16ToWavBlob(pcm16, 24000);
             
-            audioQueueRef.current.push(wavBlob);
-            console.log("[iOS Audio] Added audio chunk to queue, queue length:", audioQueueRef.current.length);
+            batchBufferRef.current.push(pcm16);
             
-            void drainPlayback();
+            // Flush batch if we've accumulated enough chunks
+            if (batchBufferRef.current.length >= BATCH_SIZE) {
+              flushBatch();
+            } else {
+              // Or set timer to flush after timeout
+              if (batchTimerRef.current) {
+                window.clearTimeout(batchTimerRef.current);
+              }
+              batchTimerRef.current = window.setTimeout(() => {
+                flushBatch();
+              }, BATCH_TIMEOUT_MS);
+            }
           }
           
           if (obj?.type === "error") {
@@ -401,13 +443,13 @@ export default function CallClient() {
         clearTimeout(connectionTimeout);
         console.error("[WS] Error:", err);
         setStatus("error");
-        show("Connection error - check server logs");
+        show("Connection error");
       };
 
       ws.onclose = (ev) => {
         clearTimeout(connectionTimeout);
         stopPinger();
-        console.log("[WS] Closed:", ev.code, ev.reason);
+        console.log("[WS] Closed:", ev.code);
         setStatus("closed");
         show("Call ended");
         cleanupAudio();
@@ -416,9 +458,9 @@ export default function CallClient() {
     } catch (e) {
       console.error("[WS] Connect failed:", e);
       setStatus("error");
-      show("Connection failed - check console");
+      show("Connection failed");
     }
-  }, [ensureAudio, gain, show, startMeter, drainPlayback, cleanupAudio]);
+  }, [ensureAudio, gain, show, startMeter, flushBatch, cleanupAudio]);
 
   useEffect(() => {
     void connect();
@@ -443,7 +485,6 @@ export default function CallClient() {
     router.push("/chat");
   }, [router]);
 
-  // Render (keeping your existing UI)
   const vibes = Math.min(100, level * 100);
   const outerScale = 1 + vibes * 0.006;
   const glow = speaking ? 30 + vibes * 0.4 : 15;
