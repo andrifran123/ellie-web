@@ -32,7 +32,6 @@ export default function CallClient() {
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const audioQueueRef = useRef<Blob[]>([]);
   const playingRef = useRef(false);
-  const drainingRef = useRef(false);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
@@ -134,77 +133,83 @@ export default function CallClient() {
 
   // ===== Audio Playback Queue (Sequential for iOS) =====
   
-  const drainPlayback = useCallback(async () => {
-    if (drainingRef.current) {
-      log("[Playback] Already draining, skip");
-      return;
-    }
-    
-    if (audioQueueRef.current.length === 0) {
-      log("[Playback] Queue empty, nothing to play");
-      return;
-    }
-    
+  // 🔊 FIXED: Play audio immediately (no waiting) to reduce lag
+  const playAudioChunk = useCallback((blob: Blob) => {
     const audio = audioElementRef.current;
     if (!audio) {
       log("[Playback] ❌ No audio element!");
       return;
     }
     
-    drainingRef.current = true;
-    log(`[Playback] 🔊 Starting drain, queue: ${audioQueueRef.current.length}`);
+    const url = URL.createObjectURL(blob);
+    log(`[Playback] ▶️ Playing chunk immediately`);
     
-    try {
-      while (audioQueueRef.current.length > 0) {
-        const blob = audioQueueRef.current.shift()!;
-        const url = URL.createObjectURL(blob);
-        
-        log(`[Playback] ▶️ Playing chunk (${audioQueueRef.current.length} remaining)`);
-        
-        audio.src = url;
-        
-        // Wait for this chunk to finish
-        await new Promise<void>((resolve, reject) => {
-          const onEnded = () => {
-            log("[Playback] ✅ Chunk ended");
-            URL.revokeObjectURL(url);
-            cleanup();
-            resolve();
-          };
-          
-          const onError = (e: Event) => {
-            const target = e.target as HTMLAudioElement;
-            log(`[Playback] ❌ Error: ${target.error?.code} ${target.error?.message}`);
-            URL.revokeObjectURL(url);
-            cleanup();
-            reject(e);
-          };
-          
-          const cleanup = () => {
-            audio.removeEventListener('ended', onEnded);
-            audio.removeEventListener('error', onError);
-          };
-          
-          audio.addEventListener('ended', onEnded, { once: true });
-          audio.addEventListener('error', onError, { once: true });
-          
-          audio.play()
-            .then(() => log("[Playback] ✅ Play() started"))
-            .catch(err => {
-              log(`[Playback] ❌ Play failed: ${err.name}`);
-              reject(err);
-            });
-        });
-      }
+    // Play immediately without waiting
+    audio.src = url;
+    
+    const onEnded = () => {
+      log("[Playback] ✅ Chunk ended");
+      URL.revokeObjectURL(url);
+      audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onError);
       
-      log("[Playback] ✅ Queue drained completely");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log(`[Playback] ❌ Drain error: ${message}`);
-    } finally {
-      drainingRef.current = false;
-    }
+      // Play next chunk if available
+      if (audioQueueRef.current.length > 0) {
+        const nextBlob = audioQueueRef.current.shift()!;
+        playAudioChunk(nextBlob);
+      }
+    };
+    
+    const onError = (e: Event) => {
+      const target = e.target as HTMLAudioElement;
+      log(`[Playback] ❌ Error: ${target.error?.code} ${target.error?.message}`);
+      URL.revokeObjectURL(url);
+      audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onError);
+      
+      // Try next chunk
+      if (audioQueueRef.current.length > 0) {
+        const nextBlob = audioQueueRef.current.shift()!;
+        playAudioChunk(nextBlob);
+      }
+    };
+    
+    audio.addEventListener('ended', onEnded, { once: true });
+    audio.addEventListener('error', onError, { once: true });
+    
+    audio.play()
+      .then(() => log("[Playback] ✅ Play() started"))
+      .catch(err => {
+        const errName = err instanceof Error ? err.name : 'Unknown';
+        log(`[Playback] ❌ Play failed: ${errName}`);
+      });
   }, [log]);
+  
+  // Trigger playback when chunks arrive
+  const drainPlayback = useCallback(() => {
+    if (playingRef.current) {
+      return; // Already playing
+    }
+    
+    if (audioQueueRef.current.length === 0) {
+      return; // Nothing to play
+    }
+    
+    playingRef.current = true;
+    const blob = audioQueueRef.current.shift()!;
+    log(`[Playback] 🔊 Starting playback (${audioQueueRef.current.length} in queue)`);
+    playAudioChunk(blob);
+    
+    // Reset playing flag when done
+    const audio = audioElementRef.current;
+    if (audio) {
+      const resetPlaying = () => {
+        playingRef.current = false;
+        audio.removeEventListener('ended', resetPlaying);
+      };
+      audio.addEventListener('ended', resetPlaying, { once: true });
+    }
+  }, [playAudioChunk, log]);
 
   // ===== Audio Setup with iOS-specific handling =====
   
@@ -242,24 +247,45 @@ export default function CallClient() {
       
       audioElementRef.current = audio;
       
-      // Prime the audio element with a tiny silent audio file
-      // This helps iOS route audio to Bluetooth on first interaction
-      const silenceBlob = pcm16ToWavBlob(new Int16Array(1000), 24000); // 42ms of silence
-      const silenceUrl = URL.createObjectURL(silenceBlob);
-      audio.src = silenceUrl;
+      // 🔧 iOS BLUETOOTH FIX: Play an AUDIBLE beep to establish Bluetooth routing
+      // Silent audio doesn't work - iOS needs to hear actual audio to route to Bluetooth
+      log("[Audio] 🔔 Playing audible beep to route to Bluetooth...");
+      
+      // Create a short 440Hz beep (100ms)
+      const sampleRate = 24000;
+      const duration = 0.1; // 100ms
+      const samples = Math.floor(sampleRate * duration);
+      const beepData = new Int16Array(samples);
+      
+      // Generate 440Hz sine wave (A note)
+      for (let i = 0; i < samples; i++) {
+        const t = i / sampleRate;
+        const amplitude = 0.3 * (1 - i / samples); // Fade out
+        beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
+      }
+      
+      const beepBlob = pcm16ToWavBlob(beepData, sampleRate);
+      const beepUrl = URL.createObjectURL(beepBlob);
+      audio.src = beepUrl;
+      audio.volume = 0.5; // Medium volume
       
       try {
         await audio.play();
-        audio.pause();
-        audio.currentTime = 0;
-        URL.revokeObjectURL(silenceUrl);
-        log("[Audio] ✅ Audio element primed for iOS");
+        log("[Audio] ✅ Beep played - Bluetooth route established!");
+        // Wait for beep to finish
+        await new Promise(resolve => {
+          audio.addEventListener('ended', () => {
+            URL.revokeObjectURL(beepUrl);
+            resolve(undefined);
+          }, { once: true });
+        });
       } catch (e) {
         const errorName = e instanceof Error ? e.name : 'Unknown';
-        log(`[Audio] ⚠️ Could not prime audio: ${errorName}`);
+        log(`[Audio] ⚠️ Could not play beep: ${errorName}`);
+        URL.revokeObjectURL(beepUrl);
       }
       
-      log("[Audio] ✅ HTMLAudioElement ready");
+      log("[Audio] ✅ HTMLAudioElement ready for Bluetooth");
     }
     
     // Request microphone
@@ -358,7 +384,6 @@ export default function CallClient() {
     audioQueueRef.current.forEach(blob => URL.revokeObjectURL(URL.createObjectURL(blob)));
     audioQueueRef.current = [];
     playingRef.current = false;
-    drainingRef.current = false;
     
     log("[Audio] ✅ Cleanup complete");
   }, [log]);
