@@ -28,9 +28,10 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  const playbackSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const playbackQueueRef = useRef<AudioBuffer[]>([]);
-  const isPlayingRef = useRef(false);
+  // ✅ Back to HTMLAudioElement (what worked before!)
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const queueRef = useRef<string[]>([]);
+  const playingRef = useRef(false);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
@@ -40,7 +41,7 @@ export default function CallClient() {
     setLogs(prev => [...prev.slice(-20), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
   }, []);
 
-  // ✅ Resample audio from any rate to 24000 Hz
+  // ✅ Resample audio to 24kHz
   function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
     if (inputRate === 24000) return inputBuffer;
     
@@ -53,8 +54,6 @@ export default function CallClient() {
       const srcIndexFloor = Math.floor(srcIndex);
       const srcIndexCeil = Math.min(srcIndexFloor + 1, inputBuffer.length - 1);
       const t = srcIndex - srcIndexFloor;
-      
-      // Linear interpolation
       output[i] = inputBuffer[srcIndexFloor] * (1 - t) + inputBuffer[srcIndexCeil] * t;
     }
     
@@ -88,58 +87,74 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate: number): AudioBuffer {
-    const ac = acRef.current!;
-    const audioBuffer = ac.createBuffer(1, pcm16.length, sampleRate);
-    const channelData = audioBuffer.getChannelData(0);
+  // ✅ Convert PCM16 to WAV Blob (original method)
+  function pcm16ToWavBlob(pcm16: Int16Array, sampleRate: number): Blob {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    const blockAlign = numChannels * (bitsPerSample / 8);
+    const dataSize = pcm16.length * 2;
+    
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+    
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
     
     for (let i = 0; i < pcm16.length; i++) {
-      channelData[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
+      view.setInt16(44 + i * 2, pcm16[i], true);
     }
     
-    return audioBuffer;
+    return new Blob([buffer], { type: 'audio/wav' });
   }
 
-  const playNextBuffer = useCallback(() => {
-    log(`[playNext] playing:${isPlayingRef.current} queue:${playbackQueueRef.current.length}`);
+  // ✅ Original playback method
+  const playNext = useCallback(() => {
+    log(`[playNext] playing:${playingRef.current} queue:${queueRef.current.length}`);
     
-    if (isPlayingRef.current || playbackQueueRef.current.length === 0) {
+    if (playingRef.current || queueRef.current.length === 0) {
       return;
     }
     
-    const ac = acRef.current;
-    if (!ac) {
-      log("[playNext] ❌ No audio context!");
+    const audio = audioRef.current;
+    if (!audio) {
+      log("[playNext] ❌ No audio element!");
       return;
     }
     
-    isPlayingRef.current = true;
-    const audioBuffer = playbackQueueRef.current.shift()!;
+    playingRef.current = true;
+    const url = queueRef.current.shift()!;
     
-    log(`[playNext] ▶️ Playing (${playbackQueueRef.current.length} left in queue)`);
+    log(`[playNext] ▶️ Playing (${queueRef.current.length} left in queue)`);
     
-    try {
-      const source = ac.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ac.destination);
-      
-      source.onended = () => {
-        log("[Audio] Ended");
-        isPlayingRef.current = false;
-        playbackSourceRef.current = null;
-        playNextBuffer();
-      };
-      
-      playbackSourceRef.current = source;
-      source.start(0);
-      log("[play] ✅ Started");
-      
-    } catch (err) {
-      const error = err as Error;
-      log(`[play] ❌ Error: ${error.name} - ${error.message}`);
-      isPlayingRef.current = false;
-      playNextBuffer();
-    }
+    audio.src = url;
+    audio.play()
+      .then(() => {
+        log("[play] ✅ Started");
+      })
+      .catch(err => {
+        log(`[play] ❌ Error: ${err.name} - ${err.message}`);
+        URL.revokeObjectURL(url);
+        playingRef.current = false;
+        playNext();
+      });
   }, [log]);
 
   const ensureAudio = useCallback(async () => {
@@ -147,7 +162,6 @@ export default function CallClient() {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       
-      // ✅ Let the browser choose its native sample rate
       acRef.current = new AC({ 
         latencyHint: 'interactive'
       });
@@ -166,7 +180,6 @@ export default function CallClient() {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-          // ✅ Don't force sample rate, let browser choose
         } as MediaTrackConstraints
       };
       
@@ -234,16 +247,9 @@ export default function CallClient() {
     try { micNodeRef.current?.disconnect(); } catch {}
     try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
     
-    try { 
-      if (playbackSourceRef.current) {
-        playbackSourceRef.current.stop();
-        playbackSourceRef.current.disconnect();
-        playbackSourceRef.current = null;
-      }
-    } catch {}
-    
-    playbackQueueRef.current = [];
-    isPlayingRef.current = false;
+    queueRef.current.forEach(url => URL.revokeObjectURL(url));
+    queueRef.current = [];
+    playingRef.current = false;
     
     log("[Audio] Cleanup complete");
   }, [log]);
@@ -258,6 +264,27 @@ export default function CallClient() {
     try {
       setStatus("connecting");
       log("[Call] Starting...");
+      
+      // ✅ Create HTMLAudioElement (original method)
+      log("[Audio] Creating element...");
+      const audio = new Audio();
+      audioRef.current = audio;
+      
+      audio.addEventListener('ended', () => {
+        log("[Audio] Ended");
+        playingRef.current = false;
+        URL.revokeObjectURL(audio.src);
+        playNext();
+      });
+      
+      audio.addEventListener('error', (e) => {
+        const target = e.target as HTMLAudioElement;
+        log(`[Audio] Error: ${target.error?.code} ${target.error?.message}`);
+        playingRef.current = false;
+        playNext();
+      });
+      
+      log("[Audio] Element created");
       
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -312,7 +339,9 @@ export default function CallClient() {
         processorRef.current = proc;
         gn.connect(proc);
         
-        // ✅ Get the actual sample rate from audio context
+        // ✅ DO NOT connect to destination (no echo!)
+        // proc.connect(ac.destination); // REMOVED
+        
         const contextSampleRate = ac.sampleRate;
         log(`[Audio] Processing at ${contextSampleRate} Hz, will resample to 24000 Hz`);
         
@@ -321,7 +350,7 @@ export default function CallClient() {
           
           let input = ev.inputBuffer.getChannelData(0);
           
-          // ✅ Resample to 24000 Hz if needed
+          // ✅ Resample if needed
           if (contextSampleRate !== 24000) {
             input = resampleTo24k(input, contextSampleRate);
           }
@@ -331,7 +360,7 @@ export default function CallClient() {
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
         };
 
-        log("[Audio] Microphone pipeline connected with resampling");
+        log("[Audio] Microphone pipeline connected (resampling enabled, no echo)");
 
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -348,11 +377,14 @@ export default function CallClient() {
             log("[WS] Audio delta received");
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
-            const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
             
-            playbackQueueRef.current.push(audioBuffer);
-            log(`[Queue] Added (total: ${playbackQueueRef.current.length})`);
-            playNextBuffer();
+            // ✅ Use original WAV blob method
+            const wavBlob = pcm16ToWavBlob(pcm16, 24000);
+            const url = URL.createObjectURL(wavBlob);
+            
+            queueRef.current.push(url);
+            log(`[Queue] Added (total: ${queueRef.current.length})`);
+            playNext();
           }
           
           if (obj?.type === "error") {
@@ -385,7 +417,7 @@ export default function CallClient() {
       setStatus("error");
       show("Failed to start call");
     }
-  }, [ensureAudio, gain, show, startMeter, playNextBuffer, cleanupAudio, log]);
+  }, [ensureAudio, gain, show, startMeter, playNext, cleanupAudio, log]);
 
   useEffect(() => {
     return () => cleanupAll();
@@ -445,10 +477,10 @@ export default function CallClient() {
             
             <h1 className="text-3xl font-bold mb-2">Ready to Call Ellie</h1>
             <p className="text-pink-200 mb-2 text-center max-w-sm">
-              Fixed: Sample rate conversion + No echo
+              Original playback + Resampling + No echo
             </p>
             <p className="text-pink-300 mb-8 text-center max-w-sm text-sm">
-              Automatically resamples mic to 24kHz for server
+              The version that should work!
             </p>
             
             <button
