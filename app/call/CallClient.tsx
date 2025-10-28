@@ -71,10 +71,26 @@ export default function CallClient() {
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
-acRef.current = new AC({ sampleRate: 24000 }); // â† CHANGE TO 24000
+      acRef.current = new AC({ sampleRate: 24000, latencyHint: 'interactive' });
+      
+      // iOS requires AudioContext to be resumed after user interaction
+      if (acRef.current.state === 'suspended') {
+        await acRef.current.resume();
+      }
     }
     if (!micStreamRef.current) {
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // iOS-specific audio constraints for proper headphone/bluetooth routing
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          // These help iOS route to headphones/bluetooth properly
+          channelCount: 1,
+          sampleRate: { ideal: 24000 },
+        }
+      };
+      micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
     }
     return acRef.current!;
   }, []);
@@ -188,7 +204,7 @@ acRef.current = new AC({ sampleRate: 24000 }); // â† CHANGE TO 24000
 
       ws.onopen = async () => {
         clearTimeout(connectionTimeout);
-        console.log("[WS] âœ… CONNECTION OPENED");
+        console.log("[WS] Ã¢Å“â€¦ CONNECTION OPENED");
         setStatus("connected");
         show("Call connected");
 
@@ -210,7 +226,7 @@ acRef.current = new AC({ sampleRate: 24000 }); // â† CHANGE TO 24000
         // Send hello with language and REAL userId
         ws.send(JSON.stringify({ 
           type: "hello", 
-          userId: realUserId,  // ✅ REAL USER ID!
+          userId: realUserId,  // âœ… REAL USER ID!
           language: storedLang,
           sampleRate: 24000 
         }));
@@ -315,7 +331,7 @@ acRef.current = new AC({ sampleRate: 24000 }); // â† CHANGE TO 24000
     router.push("/chat");
   }, [router]);
 
-  // Keyboard M â†’ mute
+  // Keyboard M Ã¢â€ â€™ mute
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key.toLowerCase() === "m") toggleMute(); };
     window.addEventListener("keydown", onKey);
@@ -347,11 +363,11 @@ acRef.current = new AC({ sampleRate: 24000 }); // â† CHANGE TO 24000
       {/* Top bar */}
       <header className="relative z-10 flex items-center justify-between px-6 pt-5">
         <div className="flex items-center gap-2">
-          <div className="size-8 grid place-items-center rounded-lg bg-white/10">ðŸ“ž</div>
+          <div className="size-8 grid place-items-center rounded-lg bg-white/10">Ã°Å¸â€œÅ¾</div>
           <div className="text-sm">
             <div className="font-semibold">Call</div>
             <div className={`text-xs ${status === "connected" ? "text-emerald-400" : "text-white/60"}`}>
-              {status === "connecting" && "Connectingâ€¦"}
+              {status === "connecting" && "ConnectingÃ¢â‚¬Â¦"}
               {status === "connected" && "Connected"}
               {status === "closed" && "Ended"}
               {status === "error" && "Error"}
