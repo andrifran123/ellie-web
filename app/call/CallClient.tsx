@@ -452,25 +452,29 @@ export default function CallClient() {
         let lastLogTime = performance.now();
 
         proc.onaudioprocess = (ev) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
+  if (ws.readyState !== WebSocket.OPEN) return;
 
-          let input = ev.inputBuffer.getChannelData(0);
-          if (contextSampleRate !== 24000) {
-            input = resampleTo24k(input, contextSampleRate);
-          }
+  const inputCh = ev.inputBuffer.getChannelData(0); // original Float32Array from WebAudio
+  // Avoid reassigning `inputCh` (its generic base buffer type causes TS grief on some builds).
+  // Instead, create a new Float32Array when not resampling, or resample into a fresh array.
+  const mono24k: Float32Array =
+    contextSampleRate !== 24000
+      ? resampleTo24k(inputCh, contextSampleRate)
+      : new Float32Array(inputCh); // copy to a plain Float32Array
 
-          const pcm16 = floatTo16BitPCM(input);
-          const b64 = abToBase64(pcm16.buffer);
-          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-          audioChunksSent++;
+  const pcm16 = floatTo16BitPCM(mono24k);
+  const b64 = abToBase64(pcm16.buffer);
+  ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+  audioChunksSent++;
 
-          const now = performance.now();
-          if (now - lastLogTime > 2000) {
-            log(`[Audio] 📤 Sent ${audioChunksSent} chunks`);
-            lastLogTime = now;
-            audioChunksSent = 0;
-          }
-        };
+  const now = performance.now();
+  if (now - lastLogTime > 2000) {
+    log(`[Audio] 📤 Sent ${audioChunksSent} chunks`);
+    lastLogTime = now;
+    audioChunksSent = 0;
+  }
+};
+
 
         // keepalive pings
         wsPingRef.current = window.setInterval(() => {
