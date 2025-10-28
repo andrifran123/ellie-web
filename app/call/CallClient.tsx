@@ -380,13 +380,9 @@ export default function CallClient() {
       // iOS: Prevent screen lock/sleep during call
       if ('wakeLock' in navigator) {
         try {
-          // WakeLock API is experimental, so we cast to access it
-          interface NavigatorWithWakeLock extends Navigator {
-            wakeLock: {
-              request: (type: 'screen') => Promise<unknown>;
-            };
-          }
-          await (navigator as NavigatorWithWakeLock).wakeLock.request('screen');
+          // WakeLock API is experimental - use type assertion
+          const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
+          await nav.wakeLock?.request('screen');
           log("[iOS] 🔓 Wake lock acquired");
         } catch {
           log("[iOS] ⚠️ Wake lock not available");
