@@ -79,8 +79,7 @@ export default function CallClient() {
     const chunk = 0x8000;
     let binary = "";
     for (let i = 0; i < bytes.length; i += chunk) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk) as any);
+      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
     }
     return btoa(binary);
   }
@@ -351,8 +350,7 @@ export default function CallClient() {
         cleanupAudio();
         wsRef.current = null;
       };
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+    } catch {
       setStatus("error");
       show("Failed to start call");
     }
