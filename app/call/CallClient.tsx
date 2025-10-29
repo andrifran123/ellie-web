@@ -34,16 +34,14 @@ export default function CallClient() {
   // iOS BT output element (hidden) + destination stream
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const outDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  
-  // WebRTC for iOS Bluetooth routing
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const audioMonitorRef = useRef<number | null>(null);
 
   // Web Audio playback chain for Ellie's voice
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const lookaheadPaddingSec = 0.02;
 
-  // Keepalive
+  // VERY aggressive keepalive - audible for testing!
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
@@ -114,6 +112,38 @@ export default function CallClient() {
     return buffer;
   }
 
+  // ---------- AGGRESSIVE audio element monitoring ----------
+  const startAudioMonitoring = useCallback(() => {
+    if (audioMonitorRef.current) return;
+    
+    log("[Monitor] 👁️ Starting audio element monitoring");
+    
+    audioMonitorRef.current = window.setInterval(() => {
+      const audio = audioElementRef.current;
+      if (!audio) return;
+      
+      // Check if audio element paused or ended
+      if (audio.paused || audio.ended) {
+        log("[Monitor] ⚠️ Audio element PAUSED/ENDED - iOS may have switched route! Restarting...");
+        audio.play().catch(e => log(`[Monitor] Restart failed: ${e}`));
+      }
+      
+      // Log current state every 5 seconds
+      const now = Date.now();
+      if (now % 5000 < 100) {
+        log(`[Monitor] Audio state: paused=${audio.paused}, ended=${audio.ended}, volume=${audio.volume}`);
+      }
+    }, 100); // Check every 100ms
+  }, [log]);
+
+  const stopAudioMonitoring = useCallback(() => {
+    if (audioMonitorRef.current) {
+      window.clearInterval(audioMonitorRef.current);
+      audioMonitorRef.current = null;
+      log("[Monitor] Stopped audio monitoring");
+    }
+  }, [log]);
+
   // ---------- iOS Bluetooth beep ----------
   const playBluetoothBeepOnce = useCallback(async () => {
     try {
@@ -129,8 +159,9 @@ export default function CallClient() {
         await ac.resume();
       }
 
+      // Longer beep to keep route active
       const sampleRate = 24000;
-      const duration = 0.5;
+      const duration = 1.0;
       const samples = Math.floor(sampleRate * duration);
       const beepData = new Int16Array(samples);
       for (let i = 0; i < samples; i++) {
@@ -148,9 +179,13 @@ export default function CallClient() {
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(speakGain);
-      source.start(0);
       
-      log("[Audio] ✅ Beep playing");
+      source.onended = () => {
+        log("[Audio] ✅ Beep ended - TTS should start soon");
+      };
+      
+      source.start(0);
+      log("[Audio] ▶️ Beep playing (1 second)");
 
     } catch (err) {
       log(`[Audio] ⚠️ Beep failed: ${String(err)}`);
@@ -209,6 +244,8 @@ export default function CallClient() {
 
   const cleanupAudio = useCallback(() => {
     log("[Audio] 🧹 Cleaning up…");
+    stopAudioMonitoring();
+    
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
     try { micNodeRef.current?.disconnect(); } catch {}
@@ -218,13 +255,10 @@ export default function CallClient() {
     try { routeKeepaliveRef.current?.disconnect(); } catch {}
     routeKeepaliveRef.current = null;
 
-    try { peerConnectionRef.current?.close(); } catch {}
-    peerConnectionRef.current = null;
-
     nextPlayTimeRef.current = 0;
 
     log("[Audio] ✅ Cleanup complete");
-  }, [log]);
+  }, [log, stopAudioMonitoring]);
 
   const cleanupAll = useCallback(() => {
     stopPinger();
@@ -246,17 +280,44 @@ export default function CallClient() {
       }
     }
 
-    // Create audio element
+    // Create audio element with ALL iOS-friendly attributes
     if (!audioElementRef.current) {
       const audio = document.createElement("audio");
       audio.style.display = "none";
       audio.autoplay = true;
+      audio.loop = false;
+      audio.muted = false;
+      audio.volume = 1.0;
       audio.setAttribute("playsinline", "true");
       audio.setAttribute("webkit-playsinline", "true");
       audio.setAttribute("x-webkit-airplay", "allow");
+      
+      // Add ALL possible event listeners to catch iOS switching audio
+      audio.addEventListener('pause', (e) => {
+        log("[Audio] ❌ PAUSE EVENT - iOS switched route!");
+        audio.play().catch(err => log(`[Audio] Resume failed: ${err}`));
+      });
+      
+      audio.addEventListener('suspend', () => {
+        log("[Audio] ❌ SUSPEND EVENT - iOS suspended playback!");
+      });
+      
+      audio.addEventListener('ended', () => {
+        log("[Audio] ❌ ENDED EVENT - Should never happen with MediaStream!");
+        audio.play().catch(err => log(`[Audio] Resume failed: ${err}`));
+      });
+      
+      audio.addEventListener('playing', () => {
+        log("[Audio] ✅ PLAYING EVENT - Audio active");
+      });
+      
+      audio.addEventListener('stalled', () => {
+        log("[Audio] ⚠️ STALLED EVENT - Stream stalled");
+      });
+      
       document.body.appendChild(audio);
       audioElementRef.current = audio;
-      log("[Audio] HTMLAudioElement created");
+      log("[Audio] HTMLAudioElement created with monitoring");
     }
 
     // Output chain
@@ -264,64 +325,52 @@ export default function CallClient() {
       speakGainRef.current = acRef.current.createGain();
       speakGainRef.current.gain.value = 1.0;
     }
+    
     if (!outDestRef.current) {
       outDestRef.current = acRef.current.createMediaStreamDestination();
       speakGainRef.current.connect(outDestRef.current);
-    }
-
-    // === WEBRTC PEER CONNECTION FOR iOS BLUETOOTH ===
-    if (!peerConnectionRef.current) {
-      log("[WebRTC] Creating PeerConnection for iOS Bluetooth routing...");
       
-      const pc = new RTCPeerConnection({
-        iceServers: [] // No need for actual connection
-      });
-      peerConnectionRef.current = pc;
-
+      // Set srcObject
       const stream = outDestRef.current.stream;
-      
-      // Add tracks to peer connection - this makes iOS treat it as a call!
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-        log(`[WebRTC] Added ${track.kind} track to PeerConnection`);
-      });
-
-      // Create offer/answer to activate call mode
-      try {
-        const offer = await pc.createOffer({ offerToReceiveAudio: true });
-        await pc.setLocalDescription(offer);
-        log("[WebRTC] ✅ PeerConnection configured (iOS call mode)");
-      } catch (e) {
-        log(`[WebRTC] ⚠️ Offer/Answer failed: ${e}`);
-      }
-
-      // Now set srcObject
       audioElementRef.current!.srcObject = stream;
-      log("[Audio] MediaStream connected to audio element");
+      
+      log(`[Audio] MediaStream connected: ${stream.getTracks().length} tracks`);
+      stream.getTracks().forEach(track => {
+        log(`[Audio] Track: ${track.kind}, enabled=${track.enabled}, readyState=${track.readyState}`);
+      });
     }
 
-    // Keepalive oscillator
+    // VERY STRONG keepalive - make it audible for testing!
     if (!routeKeepaliveRef.current) {
       const osc = acRef.current.createOscillator();
       const g = acRef.current.createGain();
-      g.gain.value = 0.001;
+      // Make it LOUD enough to be sure it's keeping route alive
+      // Set to 0.01 for testing (you'll hear a low hum)
+      // Set to 0.0001 for production (inaudible)
+      g.gain.value = 0.01; // AUDIBLE for testing!
       osc.frequency.value = 50;
       osc.connect(g).connect(speakGainRef.current);
       osc.start();
       routeKeepaliveRef.current = osc;
-      log("[Audio] 🔊 Keepalive started");
+      log("[Audio] 🔊 LOUD keepalive started (you should hear low hum)");
     }
 
-    // Start audio element
+    // Start audio element playback
     try {
       await audioElementRef.current!.play();
-      log("[Audio] ▶️ Audio element playing (WebRTC call mode → should route to BT)");
+      log("[Audio] ▶️ Audio element playing");
     } catch (err) {
       log(`[Audio] ⚠️ Play failed: ${String(err)}`);
     }
 
+    // Start monitoring BEFORE beep
+    startAudioMonitoring();
+
     // Play beep
     await playBluetoothBeepOnce();
+    
+    // Small delay
+    await new Promise(resolve => setTimeout(resolve, 200));
 
     // Mic
     if (!micStreamRef.current) {
@@ -345,9 +394,9 @@ export default function CallClient() {
       }
     }
 
-    log("[Audio] ✅ Audio ready (WebRTC mode for Bluetooth)");
+    log("[Audio] ✅ Audio ready - monitoring for route switches");
     return acRef.current!;
-  }, [log, playBluetoothBeepOnce]);
+  }, [log, playBluetoothBeepOnce, startAudioMonitoring]);
 
   // ---------- playback scheduling ----------
   const schedulePlayback = useCallback((buffer: AudioBuffer) => {
@@ -368,7 +417,6 @@ export default function CallClient() {
       log("[Call] 📞 Starting call…");
       log(`[Call] Device: ${navigator.userAgent.slice(0, 140)}`);
 
-      // Wake lock
       if ("wakeLock" in navigator) {
         try {
           const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
@@ -552,11 +600,10 @@ export default function CallClient() {
 
   return (
     <div className="flex flex-col items-center gap-4 p-4">
-      {/* Bluetooth instruction banner */}
-      <div className="w-full max-w-xl p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
-        <div className="font-semibold text-blue-900 mb-1">🎧 For Bluetooth Audio:</div>
-        <div className="text-blue-700">
-          Before starting call: Open Control Center → Select your Bluetooth device
+      <div className="w-full max-w-xl p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
+        <div className="font-semibold text-yellow-900 mb-1">🔊 Testing Mode Active</div>
+        <div className="text-yellow-700">
+          You should hear a low hum during the call (keepalive signal). Check logs for "PAUSE EVENT" - that's when iOS switches the route!
         </div>
       </div>
 
@@ -610,11 +657,11 @@ export default function CallClient() {
         <span className="text-sm tabular-nums">{gain.toFixed(2)}×</span>
       </div>
 
-      <details className="w-full max-w-xl">
-        <summary className="cursor-pointer text-sm text-gray-700">Logs</summary>
+      <details className="w-full max-w-xl" open>
+        <summary className="cursor-pointer text-sm text-gray-700 font-semibold">📋 Logs (WATCH FOR "PAUSE EVENT"!)</summary>
         <div className="mt-2 max-h-64 overflow-auto rounded border p-2 text-xs font-mono bg-white">
           {logs.map((l, i) => (
-            <div key={i}>{l}</div>
+            <div key={i} className={l.includes('PAUSE') || l.includes('ENDED') ? 'text-red-600 font-bold' : ''}>{l}</div>
           ))}
         </div>
       </details>
