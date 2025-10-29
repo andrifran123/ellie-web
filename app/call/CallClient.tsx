@@ -31,17 +31,12 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // iOS BT output element (hidden) + destination stream
-  const audioElementRef = useRef<HTMLAudioElement | null>(null);
-  const outDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
-  const audioMonitorRef = useRef<number | null>(null);
-
-  // Web Audio playback chain for Ellie's voice
+  // Web Audio playback - NO HTMLAudioElement!
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const lookaheadPaddingSec = 0.02;
 
-  // VERY aggressive keepalive - audible for testing!
+  // Strong keepalive
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
@@ -112,38 +107,6 @@ export default function CallClient() {
     return buffer;
   }
 
-  // ---------- AGGRESSIVE audio element monitoring ----------
-  const startAudioMonitoring = useCallback(() => {
-    if (audioMonitorRef.current) return;
-    
-    log("[Monitor] 👁️ Starting audio element monitoring");
-    
-    audioMonitorRef.current = window.setInterval(() => {
-      const audio = audioElementRef.current;
-      if (!audio) return;
-      
-      // Check if audio element paused or ended
-      if (audio.paused || audio.ended) {
-        log("[Monitor] ⚠️ Audio element PAUSED/ENDED - iOS may have switched route! Restarting...");
-        audio.play().catch(e => log(`[Monitor] Restart failed: ${e}`));
-      }
-      
-      // Log current state every 5 seconds
-      const now = Date.now();
-      if (now % 5000 < 100) {
-        log(`[Monitor] Audio state: paused=${audio.paused}, ended=${audio.ended}, volume=${audio.volume}`);
-      }
-    }, 100); // Check every 100ms
-  }, [log]);
-
-  const stopAudioMonitoring = useCallback(() => {
-    if (audioMonitorRef.current) {
-      window.clearInterval(audioMonitorRef.current);
-      audioMonitorRef.current = null;
-      log("[Monitor] Stopped audio monitoring");
-    }
-  }, [log]);
-
   // ---------- iOS Bluetooth beep ----------
   const playBluetoothBeepOnce = useCallback(async () => {
     try {
@@ -157,11 +120,11 @@ export default function CallClient() {
 
       if (ac.state === "suspended") {
         await ac.resume();
+        log("[Audio] Resumed AudioContext");
       }
 
-      // Longer beep to keep route active
       const sampleRate = 24000;
-      const duration = 1.0;
+      const duration = 0.8;
       const samples = Math.floor(sampleRate * duration);
       const beepData = new Int16Array(samples);
       for (let i = 0; i < samples; i++) {
@@ -179,13 +142,9 @@ export default function CallClient() {
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(speakGain);
-      
-      source.onended = () => {
-        log("[Audio] ✅ Beep ended - TTS should start soon");
-      };
-      
       source.start(0);
-      log("[Audio] ▶️ Beep playing (1 second)");
+      
+      log("[Audio] ✅ Beep playing (direct to speakers)");
 
     } catch (err) {
       log(`[Audio] ⚠️ Beep failed: ${String(err)}`);
@@ -244,7 +203,6 @@ export default function CallClient() {
 
   const cleanupAudio = useCallback(() => {
     log("[Audio] 🧹 Cleaning up…");
-    stopAudioMonitoring();
     
     try { processorRef.current?.disconnect(); } catch {}
     try { gainRef.current?.disconnect(); } catch {}
@@ -258,7 +216,7 @@ export default function CallClient() {
     nextPlayTimeRef.current = 0;
 
     log("[Audio] ✅ Cleanup complete");
-  }, [log, stopAudioMonitoring]);
+  }, [log]);
 
   const cleanupAll = useCallback(() => {
     stopPinger();
@@ -266,105 +224,45 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-  // ---------- ensure audio & mic ----------
+  // ---------- ensure audio & mic - DIRECT WEB AUDIO ONLY ----------
   const ensureAudio = useCallback(async () => {
-    log("[Audio] 🎤 Initializing audio…");
+    log("[Audio] 🎤 Initializing DIRECT Web Audio (no HTMLAudioElement)...");
 
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
       acRef.current = new AC({ latencyHint: "interactive" });
       log(`[Audio] AudioContext: state=${acRef.current.state}, rate=${acRef.current.sampleRate}Hz`);
-      if (acRef.current.state === "suspended") {
-        await acRef.current.resume();
-      }
     }
 
-    // Create audio element with ALL iOS-friendly attributes
-    if (!audioElementRef.current) {
-      const audio = document.createElement("audio");
-      audio.style.display = "none";
-      audio.autoplay = true;
-      audio.loop = false;
-      audio.muted = false;
-      audio.volume = 1.0;
-      audio.setAttribute("playsinline", "true");
-      audio.setAttribute("webkit-playsinline", "true");
-      audio.setAttribute("x-webkit-airplay", "allow");
-      
-      // Add ALL possible event listeners to catch iOS switching audio
-      audio.addEventListener('pause', () => {
-        log("[Audio] ❌ PAUSE EVENT - iOS switched route!");
-        audio.play().catch(err => log(`[Audio] Resume failed: ${err}`));
-      });
-      
-      audio.addEventListener('suspend', () => {
-        log("[Audio] ❌ SUSPEND EVENT - iOS suspended playback!");
-      });
-      
-      audio.addEventListener('ended', () => {
-        log("[Audio] ❌ ENDED EVENT - Should never happen with MediaStream!");
-        audio.play().catch(err => log(`[Audio] Resume failed: ${err}`));
-      });
-      
-      audio.addEventListener('playing', () => {
-        log("[Audio] ✅ PLAYING EVENT - Audio active");
-      });
-      
-      audio.addEventListener('stalled', () => {
-        log("[Audio] ⚠️ STALLED EVENT - Stream stalled");
-      });
-      
-      document.body.appendChild(audio);
-      audioElementRef.current = audio;
-      log("[Audio] HTMLAudioElement created with monitoring");
+    // Resume if suspended
+    if (acRef.current.state === "suspended") {
+      await acRef.current.resume();
+      log("[Audio] ✅ AudioContext resumed");
     }
 
-    // Output chain
+    // Create output gain - connects DIRECTLY to destination (no HTMLAudioElement!)
     if (!speakGainRef.current) {
       speakGainRef.current = acRef.current.createGain();
       speakGainRef.current.gain.value = 1.0;
-    }
-    
-    if (!outDestRef.current) {
-      outDestRef.current = acRef.current.createMediaStreamDestination();
-      speakGainRef.current.connect(outDestRef.current);
       
-      // Set srcObject
-      const stream = outDestRef.current.stream;
-      audioElementRef.current!.srcObject = stream;
+      // CRITICAL: Connect directly to destination
+      speakGainRef.current.connect(acRef.current.destination);
       
-      log(`[Audio] MediaStream connected: ${stream.getTracks().length} tracks`);
-      stream.getTracks().forEach(track => {
-        log(`[Audio] Track: ${track.kind}, enabled=${track.enabled}, readyState=${track.readyState}`);
-      });
+      log("[Audio] ✅ Output connected DIRECTLY to ac.destination (no HTMLAudioElement)");
     }
 
-    // VERY STRONG keepalive - make it audible for testing!
+    // Strong keepalive - audible for testing
     if (!routeKeepaliveRef.current) {
       const osc = acRef.current.createOscillator();
       const g = acRef.current.createGain();
-      // Make it LOUD enough to be sure it's keeping route alive
-      // Set to 0.01 for testing (you'll hear a low hum)
-      // Set to 0.0001 for production (inaudible)
-      g.gain.value = 0.01; // AUDIBLE for testing!
+      g.gain.value = 0.005; // Audible but quiet
       osc.frequency.value = 50;
       osc.connect(g).connect(speakGainRef.current);
       osc.start();
       routeKeepaliveRef.current = osc;
-      log("[Audio] 🔊 LOUD keepalive started (you should hear low hum)");
+      log("[Audio] 🔊 Keepalive started (direct to speakers)");
     }
-
-    // Start audio element playback
-    try {
-      await audioElementRef.current!.play();
-      log("[Audio] ▶️ Audio element playing");
-    } catch (err) {
-      log(`[Audio] ⚠️ Play failed: ${String(err)}`);
-    }
-
-    // Start monitoring BEFORE beep
-    startAudioMonitoring();
 
     // Play beep
     await playBluetoothBeepOnce();
@@ -394,9 +292,9 @@ export default function CallClient() {
       }
     }
 
-    log("[Audio] ✅ Audio ready - monitoring for route switches");
+    log("[Audio] ✅ Direct Web Audio ready - iOS can't suspend this!");
     return acRef.current!;
-  }, [log, playBluetoothBeepOnce, startAudioMonitoring]);
+  }, [log, playBluetoothBeepOnce]);
 
   // ---------- playback scheduling ----------
   const schedulePlayback = useCallback((buffer: AudioBuffer) => {
@@ -414,7 +312,7 @@ export default function CallClient() {
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
-      log("[Call] 📞 Starting call…");
+      log("[Call] 📞 Starting call (Direct Web Audio mode)...");
       log(`[Call] Device: ${navigator.userAgent.slice(0, 140)}`);
 
       if ("wakeLock" in navigator) {
@@ -600,10 +498,10 @@ export default function CallClient() {
 
   return (
     <div className="flex flex-col items-center gap-4 p-4">
-      <div className="w-full max-w-xl p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
-        <div className="font-semibold text-yellow-900 mb-1">🔊 Testing Mode Active</div>
-        <div className="text-yellow-700">
-          You should hear a low hum during the call (keepalive signal). Check logs for &ldquo;PAUSE EVENT&rdquo; - that&rsquo;s when iOS switches the route!
+      <div className="w-full max-w-xl p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+        <div className="font-semibold text-blue-900 mb-1">🔊 Direct Web Audio Mode</div>
+        <div className="text-blue-700">
+          No HTMLAudioElement - iOS can&rsquo;t suspend what doesn&rsquo;t exist! Audio goes directly to speakers/Bluetooth.
         </div>
       </div>
 
@@ -657,11 +555,11 @@ export default function CallClient() {
         <span className="text-sm tabular-nums">{gain.toFixed(2)}×</span>
       </div>
 
-      <details className="w-full max-w-xl" open>
-        <summary className="cursor-pointer text-sm text-gray-700 font-semibold">📋 Logs (WATCH FOR &ldquo;PAUSE EVENT&rdquo;!)</summary>
+      <details className="w-full max-w-xl">
+        <summary className="cursor-pointer text-sm text-gray-700 font-semibold">📋 Logs</summary>
         <div className="mt-2 max-h-64 overflow-auto rounded border p-2 text-xs font-mono bg-white text-gray-900">
           {logs.map((l, i) => (
-            <div key={i} className={l.includes('PAUSE') || l.includes('ENDED') ? 'text-red-600 font-bold' : 'text-gray-800'}>{l}</div>
+            <div key={i} className={l.includes('❌') ? 'text-red-600 font-bold' : 'text-gray-800'}>{l}</div>
           ))}
         </div>
       </details>
