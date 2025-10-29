@@ -224,9 +224,35 @@ export default function CallClient() {
     cleanupAudio();
   }, [cleanupAudio]);
 
-  // ---------- ensure audio & mic - DIRECT WEB AUDIO ONLY ----------
+  // ---------- ensure audio & mic - MIC FIRST! ----------
   const ensureAudio = useCallback(async () => {
-    log("[Audio] 🎤 Initializing DIRECT Web Audio (no HTMLAudioElement)...");
+    log("[Audio] 🎤 Requesting microphone FIRST (establishes iOS audio session)...");
+
+    // GET MICROPHONE PERMISSION FIRST - before any audio output!
+    if (!micStreamRef.current) {
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        } as MediaTrackConstraints,
+      };
+      try {
+        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
+        const track = micStreamRef.current.getAudioTracks()[0];
+        const st = track.getSettings();
+        log(`[Audio] ✅ Mic granted FIRST: ${st.sampleRate || "unknown"} Hz`);
+        log("[Audio] iOS audio session now in 'play and record' mode");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log(`[Audio] ❌ Mic error: ${message}`);
+        throw err;
+      }
+    }
+
+    // NOW set up audio output (after mic is granted)
+    log("[Audio] 🔊 Now initializing audio output...");
 
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
@@ -249,7 +275,7 @@ export default function CallClient() {
       // CRITICAL: Connect directly to destination
       speakGainRef.current.connect(acRef.current.destination);
       
-      log("[Audio] ✅ Output connected DIRECTLY to ac.destination (no HTMLAudioElement)");
+      log("[Audio] ✅ Output connected DIRECTLY to ac.destination");
     }
 
     // Strong keepalive - audible for testing
@@ -261,7 +287,7 @@ export default function CallClient() {
       osc.connect(g).connect(speakGainRef.current);
       osc.start();
       routeKeepaliveRef.current = osc;
-      log("[Audio] 🔊 Keepalive started (direct to speakers)");
+      log("[Audio] 🔊 Keepalive started");
     }
 
     // Play beep
@@ -270,29 +296,7 @@ export default function CallClient() {
     // Small delay
     await new Promise(resolve => setTimeout(resolve, 200));
 
-    // Mic
-    if (!micStreamRef.current) {
-      const constraints = {
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        } as MediaTrackConstraints,
-      };
-      try {
-        micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
-        const track = micStreamRef.current.getAudioTracks()[0];
-        const st = track.getSettings();
-        log(`[Audio] ✅ Mic granted: ${st.sampleRate || "unknown"} Hz`);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log(`[Audio] ❌ Mic error: ${message}`);
-        throw err;
-      }
-    }
-
-    log("[Audio] ✅ Direct Web Audio ready - iOS can't suspend this!");
+    log("[Audio] ✅ Audio ready - mic granted BEFORE output setup!");
     return acRef.current!;
   }, [log, playBluetoothBeepOnce]);
 
@@ -499,9 +503,9 @@ export default function CallClient() {
   return (
     <div className="flex flex-col items-center gap-4 p-4">
       <div className="w-full max-w-xl p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
-        <div className="font-semibold text-blue-900 mb-1">🔊 Direct Web Audio Mode</div>
+        <div className="font-semibold text-blue-900 mb-1">🎤 Mic Permission First!</div>
         <div className="text-blue-700">
-          No HTMLAudioElement - iOS can&rsquo;t suspend what doesn&rsquo;t exist! Audio goes directly to speakers/Bluetooth.
+          Requesting microphone BEFORE audio setup so iOS establishes the correct audio session. Grant permission, then audio will route to Bluetooth!
         </div>
       </div>
 
