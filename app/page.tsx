@@ -278,9 +278,9 @@ export default function HomePage() {
 
                   <div className="mt-6 space-y-3">
                     {[
-                      { text: ""Missed you today. Tell me what you're up to?"", delay: 0 },
-                      { text: ""We should plan a cozy night soon."", delay: 0.2 },
-                      { text: ""You sounded a bit tired—want me to help you unwind?"", delay: 0.4 },
+                      { text: "\"Missed you today. Tell me what you're up to?\"", delay: 0 },
+                      { text: "\"We should plan a cozy night soon.\"", delay: 0.2 },
+                      { text: "\"You sounded a bit tired—want me to help you unwind?\"", delay: 0.4 },
                     ].map((msg, i) => (
                       <motion.div
                         key={i}
