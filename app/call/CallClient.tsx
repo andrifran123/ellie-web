@@ -79,7 +79,8 @@ export default function CallClient() {
     const chunk = 0x8000;
     let binary = "";
     for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+      const chunkArray = Array.from(bytes.subarray(i, i + chunk));
+      binary += String.fromCharCode(...chunkArray);
     }
     return btoa(binary);
   }
