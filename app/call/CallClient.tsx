@@ -22,10 +22,9 @@ export default function CallClient() {
   // --- Core refs
   const wsRef = useRef<WebSocket | null>(null);
   const wsPingRef = useRef<number | null>(null);
-
   const acRef = useRef<AudioContext | null>(null);
 
-  // mic capture
+  // Mic capture
   const micStreamRef = useRef<MediaStream | null>(null);
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
@@ -82,6 +81,7 @@ export default function CallClient() {
     return out;
   }
 
+  // Accept ArrayBufferLike to avoid TS complaints with TypedArray.buffer
   function abToBase64(buf: ArrayBufferLike): string {
     const bytes = new Uint8Array(buf);
     const chunk = 0x8000;
@@ -112,82 +112,81 @@ export default function CallClient() {
     return buffer;
   }
 
-  // ---------- iOS Bluetooth priming beep ----------
+  // ---------- iOS Bluetooth priming beep (non-blocking) ----------
   const playBluetoothBeepOnce = useCallback(async () => {
-    if (!audioElementRef.current) {
-      const audio = document.createElement("audio");
-      audio.style.display = "none";
-      audio.autoplay = false;
-      audio.setAttribute("playsinline", "true");
-      audio.setAttribute("webkit-playsinline", "true");
-      document.body.appendChild(audio);
-      audioElementRef.current = audio;
-    }
-    const audio = audioElementRef.current;
-
-    // generate a short WAV beep
-    const sampleRate = 24000;
-    const duration = 0.3;
-    const samples = Math.floor(sampleRate * duration);
-    const beepData = new Int16Array(samples);
-    for (let i = 0; i < samples; i++) {
-      const t = i / sampleRate;
-      let env = 1;
-      const fadeIn = samples * 0.2;
-      const fadeOutStart = samples * 0.8;
-      if (i < fadeIn) env = i / fadeIn;
-      else if (i > fadeOutStart) env = (samples - i) / (samples - fadeOutStart);
-      const amplitude = 0.5 * env;
-      beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
-    }
-    // build wav
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-    const blockAlign = numChannels * (bitsPerSample / 8);
-    const dataSize = beepData.length * 2;
-    const buffer = new ArrayBuffer(44 + dataSize);
-    const view = new DataView(buffer);
-    const wstr = (o: number, s: string) => {
-      for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
-    };
-    wstr(0, "RIFF");
-    view.setUint32(4, 36 + dataSize, true);
-    wstr(8, "WAVE");
-    wstr(12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitsPerSample, true);
-    wstr(36, "data");
-    view.setUint32(40, dataSize, true);
-    for (let i = 0; i < beepData.length; i++) {
-      view.setInt16(44 + i * 2, beepData[i], true);
-    }
-
-    const url = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
-    audio.src = url;
-    audio.volume = 0.7;
     try {
+      if (!audioElementRef.current) {
+        const audio = document.createElement("audio");
+        audio.style.display = "none";
+        audio.autoplay = false;
+        audio.setAttribute("playsinline", "true");
+        audio.setAttribute("webkit-playsinline", "true");
+        document.body.appendChild(audio);
+        audioElementRef.current = audio;
+      }
+      const audio = audioElementRef.current;
+
+      // generate a short WAV beep
+      const sampleRate = 24000;
+      const duration = 0.3;
+      const samples = Math.floor(sampleRate * duration);
+      const beepData = new Int16Array(samples);
+      for (let i = 0; i < samples; i++) {
+        const t = i / sampleRate;
+        let env = 1;
+        const fadeIn = samples * 0.2;
+        const fadeOutStart = samples * 0.8;
+        if (i < fadeIn) env = i / fadeIn;
+        else if (i > fadeOutStart) env = (samples - i) / (samples - fadeOutStart);
+        const amplitude = 0.5 * env;
+        beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
+      }
+      // build wav
+      const numChannels = 1;
+      const bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+      const blockAlign = numChannels * (bitsPerSample / 8);
+      const dataSize = beepData.length * 2;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+      const wstr = (o: number, s: string) => {
+        for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
+      };
+      wstr(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      wstr(8, "WAVE");
+      wstr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      wstr(36, "data");
+      view.setUint32(40, dataSize, true);
+      for (let i = 0; i < beepData.length; i++) {
+        view.setInt16(44 + i * 2, beepData[i], true);
+      }
+
+      const url = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+      audio.src = url;
+
       if (acRef.current && acRef.current.state === "suspended") {
         await acRef.current.resume();
       }
-      await audio.play();
-      await new Promise<void>((resolve) => {
-        const onEnd = () => {
-          audio.removeEventListener("ended", onEnd);
-          URL.revokeObjectURL(url);
-          resolve();
-        };
-        audio.addEventListener("ended", onEnd, { once: true });
-      });
-      log("[Audio] ✅ Beep played — Bluetooth route primed");
+
+      audio
+        .play()
+        .then(() => log("[Audio] ✅ Beep playing (priming)"))
+        .catch(() => log("[Audio] ⚠️ Beep play rejected (continuing)"));
+
+      // Clean URL eventually (not awaited)
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 1500);
     } catch {
-      URL.revokeObjectURL(url);
-      log("[Audio] ⚠️ Beep failed (continuing)");
+      log("[Audio] ⚠️ Beep setup failed (continuing)");
     }
   }, [log]);
 
@@ -266,6 +265,7 @@ export default function CallClient() {
   // ---------- ensure audio & mic ----------
   const ensureAudio = useCallback(async () => {
     log("[Audio] 🎤 Initializing audio…");
+
     if (!acRef.current) {
       const AnyWin = window as unknown as { webkitAudioContext?: typeof AudioContext };
       const AC = window.AudioContext || AnyWin.webkitAudioContext;
@@ -295,7 +295,6 @@ export default function CallClient() {
     if (!outDestRef.current) {
       outDestRef.current = acRef.current.createMediaStreamDestination();
       speakGainRef.current.connect(outDestRef.current);
-      // Bind the audio element to our output stream
       if (audioElementRef.current!.srcObject !== outDestRef.current.stream) {
         audioElementRef.current!.srcObject = outDestRef.current.stream;
       }
@@ -307,21 +306,19 @@ export default function CallClient() {
       const g = acRef.current.createGain();
       g.gain.value = 0.0001; // inaudible
       osc.frequency.value = 20;
-      osc.connect(g).connect(speakGainRef.current); // keepalive goes through the same output chain
+      osc.connect(g).connect(speakGainRef.current); // keepalive through same output chain
       osc.start();
       routeKeepaliveRef.current = osc;
     }
 
-    // iOS BT priming beep (ensures route is available)
-    await playBluetoothBeepOnce();
+    // iOS BT priming beep (non-blocking)
+    playBluetoothBeepOnce();
 
-    // IMPORTANT: start the hidden audio element once; it will keep playing our stream
-    try {
-      await audioElementRef.current!.play();
-      log("[Audio] ▶️ Output element playing (stream mode)");
-    } catch (e) {
-      log("[Audio] ⚠️ Could not start output element yet (needs user gesture)");
-    }
+    // Start the hidden audio element (non-blocking)
+    audioElementRef.current!
+      .play()
+      .then(() => log("[Audio] ▶️ Output element playing (stream mode)"))
+      .catch(() => log("[Audio] ⚠️ Output element not started yet (wait for user tap)"));
 
     // Mic
     if (!micStreamRef.current) {
@@ -331,7 +328,7 @@ export default function CallClient() {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-          // sampleRate: 16000, // uncomment if your server prefers HFP-friendly rate
+          // sampleRate: 16000, // enable if your server prefers 16 kHz
         } as MediaTrackConstraints,
       };
       try {
@@ -362,14 +359,14 @@ export default function CallClient() {
     nextPlayTimeRef.current = startTime + buffer.duration;
   }, []);
 
-  // ---------- call start ----------
+  // ---------- start call (WS-first) ----------
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
       log("[Call] 📞 Starting call…");
-      log(`[Call] Device: ${navigator.userAgent.slice(0, 120)}`);
+      log(`[Call] Device: ${navigator.userAgent.slice(0, 140)}`);
 
-      // wake lock (best effort)
+      // Wake lock (best effort)
       if ("wakeLock" in navigator) {
         try {
           const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
@@ -386,9 +383,7 @@ export default function CallClient() {
         }
       });
 
-      const ac = await ensureAudio();
-
-      // WebSocket
+      // 1) Connect WS FIRST (so UI won't be stuck if audio init is finicky)
       log(`[WS] Connecting to ${WS_URL}…`);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -397,7 +392,7 @@ export default function CallClient() {
       const connectionTimeout = setTimeout(() => {
         if (ws.readyState === WebSocket.CONNECTING) {
           log("[WS] ⏱️ Connection timeout");
-          ws.close();
+          try { ws.close(); } catch {}
           setStatus("error");
           show("Connection timeout");
         }
@@ -409,7 +404,14 @@ export default function CallClient() {
         show("Connected!");
         log("[WS] ✅ Connected");
 
-        // identify user
+        // 2) Audio setup AFTER socket up (non-blocking plays)
+        try {
+          await ensureAudio();
+        } catch (e) {
+          log("[Audio] ❌ ensureAudio failed (continuing without audio)");
+        }
+
+        // Identify user
         let realUserId = "default-user";
         try {
           const meRes = await fetch("/api/auth/me", { credentials: "include" });
@@ -417,20 +419,16 @@ export default function CallClient() {
             const me = await meRes.json();
             realUserId = me.userId || "default-user";
           }
-        } catch {}
+        } catch {
+          // ignore
+        }
 
-        const storedLang = localStorage.getItem("ellie_language") || "en";
-        ws.send(
-          JSON.stringify({
-            type: "hello",
-            userId: realUserId,
-            language: storedLang,
-            sampleRate: 24000,
-          })
-        );
+        const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
+        ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
         log("[WS] ➡️ Sent hello");
 
-        // mic capture -> encode -> ws
+        // Mic capture -> encode -> ws
+        const ac = acRef.current!;
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
         micNodeRef.current = src;
@@ -447,10 +445,10 @@ export default function CallClient() {
         gn.connect(proc);
 
         // connect to destination (muted) so onaudioprocess fires on iOS
-        const muted = ac.createGain();
-        muted.gain.value = 0;
-        proc.connect(muted);
-        muted.connect(ac.destination);
+        const mutedNode = ac.createGain();
+        mutedNode.gain.value = 0;
+        proc.connect(mutedNode);
+        mutedNode.connect(ac.destination);
 
         let audioChunksSent = 0;
         let lastLogTime = performance.now();
@@ -462,7 +460,7 @@ export default function CallClient() {
           const mono24k: Float32Array =
             contextSampleRate !== 24000
               ? resampleTo24k(inputCh, contextSampleRate)
-              : new Float32Array(inputCh);
+              : new Float32Array(inputCh); // copy to avoid generic buffer type mismatch
 
           const pcm16 = floatTo16BitPCM(mono24k);
           const b64 = abToBase64(pcm16.buffer);
@@ -501,13 +499,13 @@ export default function CallClient() {
             log(`[Server] ❌ ${obj.message}`);
           }
         } catch (err) {
-          log(`[WS] Parse error: ${err}`);
+          log(`[WS] Parse error: ${String(err)}`);
         }
       };
 
       ws.onerror = (err) => {
         clearTimeout(connectionTimeout);
-        log(`[WS] ❌ Error: ${err}`);
+        log(`[WS] ❌ Error: ${String(err)}`);
         setStatus("error");
         show("Connection error");
       };
@@ -549,9 +547,7 @@ export default function CallClient() {
 
   const hangUp = useCallback(() => {
     log("[Call] 📴 Hanging up…");
-    try {
-      wsRef.current?.close();
-    } catch {}
+    try { wsRef.current?.close(); } catch {}
     setStatus("ready");
   }, [log]);
 
