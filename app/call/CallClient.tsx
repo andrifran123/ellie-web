@@ -34,13 +34,16 @@ export default function CallClient() {
   // iOS BT output element (hidden) + destination stream
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const outDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  
+  // WebRTC for iOS Bluetooth routing
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
 
   // Web Audio playback chain for Ellie's voice
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const lookaheadPaddingSec = 0.02;
 
-  // Stronger keepalive for iOS
+  // Keepalive
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
@@ -81,7 +84,6 @@ export default function CallClient() {
     return out;
   }
 
-  // Accept ArrayBufferLike to avoid TS complaints with TypedArray.buffer
   function abToBase64(buf: ArrayBufferLike): string {
     const bytes = new Uint8Array(buf);
     const chunk = 0x8000;
@@ -112,25 +114,23 @@ export default function CallClient() {
     return buffer;
   }
 
-  // ---------- iOS Bluetooth priming beep using Web Audio API ----------
+  // ---------- iOS Bluetooth beep ----------
   const playBluetoothBeepOnce = useCallback(async () => {
     try {
       const ac = acRef.current;
       const speakGain = speakGainRef.current;
       
       if (!ac || !speakGain) {
-        log("[Audio] ⚠️ AudioContext or speakGain not ready for beep");
+        log("[Audio] ⚠️ AudioContext or speakGain not ready");
         return;
       }
 
-      // Resume AudioContext if suspended
       if (ac.state === "suspended") {
         await ac.resume();
       }
 
-      // Generate LONGER beep (1 second) to keep route active longer
       const sampleRate = 24000;
-      const duration = 1.0; // INCREASED from 0.3 to 1.0 second
+      const duration = 0.5;
       const samples = Math.floor(sampleRate * duration);
       const beepData = new Int16Array(samples);
       for (let i = 0; i < samples; i++) {
@@ -144,19 +144,16 @@ export default function CallClient() {
         beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
       }
 
-      // Convert to AudioBuffer using Web Audio API
       const audioBuffer = pcm16ToAudioBuffer(beepData, sampleRate);
-
-      // Play through Web Audio API - same chain as TTS!
       const source = ac.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(speakGain); // Goes through MediaStreamDestination → HTMLAudioElement
+      source.connect(speakGain);
       source.start(0);
       
-      log("[Audio] ✅ Beep playing via Web Audio (BT route active)");
+      log("[Audio] ✅ Beep playing");
 
     } catch (err) {
-      log(`[Audio] ⚠️ Beep failed: ${String(err)} (continuing)`);
+      log(`[Audio] ⚠️ Beep failed: ${String(err)}`);
     }
   }, [log]);
 
@@ -221,6 +218,9 @@ export default function CallClient() {
     try { routeKeepaliveRef.current?.disconnect(); } catch {}
     routeKeepaliveRef.current = null;
 
+    try { peerConnectionRef.current?.close(); } catch {}
+    peerConnectionRef.current = null;
+
     nextPlayTimeRef.current = 0;
 
     log("[Audio] ✅ Cleanup complete");
@@ -246,30 +246,20 @@ export default function CallClient() {
       }
     }
 
-    // Create (or reuse) hidden <audio> element early
+    // Create audio element
     if (!audioElementRef.current) {
       const audio = document.createElement("audio");
       audio.style.display = "none";
-      audio.autoplay = false;
-      audio.loop = false; // Don't loop - stream is continuous
+      audio.autoplay = true;
       audio.setAttribute("playsinline", "true");
       audio.setAttribute("webkit-playsinline", "true");
+      audio.setAttribute("x-webkit-airplay", "allow");
       document.body.appendChild(audio);
-      
-      // Add event listeners to monitor state
-      audio.addEventListener('pause', () => {
-        log("[Audio] ⚠️ Audio element paused - attempting restart");
-        audio.play().catch(e => log(`[Audio] Restart failed: ${e}`));
-      });
-      audio.addEventListener('ended', () => {
-        log("[Audio] ⚠️ Audio element ended - attempting restart");
-        audio.play().catch(e => log(`[Audio] Restart failed: ${e}`));
-      });
-      
       audioElementRef.current = audio;
+      log("[Audio] HTMLAudioElement created");
     }
 
-    // Output chain: speakGain -> MediaStreamDestination -> <audio srcObject>
+    // Output chain
     if (!speakGainRef.current) {
       speakGainRef.current = acRef.current.createGain();
       speakGainRef.current.gain.value = 1.0;
@@ -277,36 +267,61 @@ export default function CallClient() {
     if (!outDestRef.current) {
       outDestRef.current = acRef.current.createMediaStreamDestination();
       speakGainRef.current.connect(outDestRef.current);
-      if (audioElementRef.current!.srcObject !== outDestRef.current.stream) {
-        audioElementRef.current!.srcObject = outDestRef.current.stream;
-      }
     }
 
-    // STRONGER keepalive: Higher volume and audible if needed for testing
+    // === WEBRTC PEER CONNECTION FOR iOS BLUETOOTH ===
+    if (!peerConnectionRef.current) {
+      log("[WebRTC] Creating PeerConnection for iOS Bluetooth routing...");
+      
+      const pc = new RTCPeerConnection({
+        iceServers: [] // No need for actual connection
+      });
+      peerConnectionRef.current = pc;
+
+      const stream = outDestRef.current.stream;
+      
+      // Add tracks to peer connection - this makes iOS treat it as a call!
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
+        log(`[WebRTC] Added ${track.kind} track to PeerConnection`);
+      });
+
+      // Create offer/answer to activate call mode
+      try {
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        log("[WebRTC] ✅ PeerConnection configured (iOS call mode)");
+      } catch (e) {
+        log(`[WebRTC] ⚠️ Offer/Answer failed: ${e}`);
+      }
+
+      // Now set srcObject
+      audioElementRef.current!.srcObject = stream;
+      log("[Audio] MediaStream connected to audio element");
+    }
+
+    // Keepalive oscillator
     if (!routeKeepaliveRef.current) {
       const osc = acRef.current.createOscillator();
       const g = acRef.current.createGain();
-      g.gain.value = 0.001; // Slightly higher than before (was 0.0001)
-      osc.frequency.value = 50; // Low frequency that's harder for iOS to ignore
-      osc.connect(g).connect(speakGainRef.current); // keepalive through same output chain
+      g.gain.value = 0.001;
+      osc.frequency.value = 50;
+      osc.connect(g).connect(speakGainRef.current);
       osc.start();
       routeKeepaliveRef.current = osc;
-      log("[Audio] 🔊 Keepalive oscillator started");
+      log("[Audio] 🔊 Keepalive started");
     }
 
-    // CRITICAL: Start the audio element FIRST to establish iOS Bluetooth route
+    // Start audio element
     try {
       await audioElementRef.current!.play();
-      log("[Audio] ▶️ Output element playing (BT route established)");
+      log("[Audio] ▶️ Audio element playing (WebRTC call mode → should route to BT)");
     } catch (err) {
-      log(`[Audio] ⚠️ Output element play failed: ${String(err)}`);
+      log(`[Audio] ⚠️ Play failed: ${String(err)}`);
     }
 
-    // NOW play the longer beep through Web Audio (uses the established BT route)
+    // Play beep
     await playBluetoothBeepOnce();
-    
-    // Give iOS a moment to stabilize the route
-    await new Promise(resolve => setTimeout(resolve, 100));
 
     // Mic
     if (!micStreamRef.current) {
@@ -316,7 +331,6 @@ export default function CallClient() {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-          // sampleRate: 16000, // enable if your server prefers 16 kHz
         } as MediaTrackConstraints,
       };
       try {
@@ -331,7 +345,7 @@ export default function CallClient() {
       }
     }
 
-    log("[Audio] ✅ Audio ready (BT route should be stable)");
+    log("[Audio] ✅ Audio ready (WebRTC mode for Bluetooth)");
     return acRef.current!;
   }, [log, playBluetoothBeepOnce]);
 
@@ -347,14 +361,14 @@ export default function CallClient() {
     nextPlayTimeRef.current = startTime + buffer.duration;
   }, []);
 
-  // ---------- start call (WS-first) ----------
+  // ---------- start call ----------
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
       log("[Call] 📞 Starting call…");
       log(`[Call] Device: ${navigator.userAgent.slice(0, 140)}`);
 
-      // Wake lock (best effort)
+      // Wake lock
       if ("wakeLock" in navigator) {
         try {
           const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
@@ -371,7 +385,6 @@ export default function CallClient() {
         }
       });
 
-      // 1) Connect WS FIRST (so UI won't be stuck if audio init is finicky)
       log(`[WS] Connecting to ${WS_URL}…`);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -392,14 +405,12 @@ export default function CallClient() {
         show("Connected!");
         log("[WS] ✅ Connected");
 
-        // 2) Audio setup AFTER socket up (non-blocking plays)
         try {
           await ensureAudio();
         } catch (e) {
-          log("[Audio] ❌ ensureAudio failed (continuing without audio)");
+          log("[Audio] ❌ ensureAudio failed");
         }
 
-        // Identify user
         let realUserId = "default-user";
         try {
           const meRes = await fetch("/api/auth/me", { credentials: "include" });
@@ -407,15 +418,12 @@ export default function CallClient() {
             const me = await meRes.json();
             realUserId = me.userId || "default-user";
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
 
         const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
         ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
         log("[WS] ➡️ Sent hello");
 
-        // Mic capture -> encode -> ws
         const ac = acRef.current!;
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
@@ -432,7 +440,6 @@ export default function CallClient() {
         processorRef.current = proc;
         gn.connect(proc);
 
-        // connect to destination (muted) so onaudioprocess fires on iOS
         const mutedNode = ac.createGain();
         mutedNode.gain.value = 0;
         proc.connect(mutedNode);
@@ -448,7 +455,7 @@ export default function CallClient() {
           const mono24k: Float32Array =
             contextSampleRate !== 24000
               ? resampleTo24k(inputCh, contextSampleRate)
-              : new Float32Array(inputCh); // copy to avoid generic buffer type mismatch
+              : new Float32Array(inputCh);
 
           const pcm16 = floatTo16BitPCM(mono24k);
           const b64 = abToBase64(pcm16.buffer);
@@ -463,7 +470,6 @@ export default function CallClient() {
           }
         };
 
-        // keepalive pings
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -546,6 +552,14 @@ export default function CallClient() {
 
   return (
     <div className="flex flex-col items-center gap-4 p-4">
+      {/* Bluetooth instruction banner */}
+      <div className="w-full max-w-xl p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+        <div className="font-semibold text-blue-900 mb-1">🎧 For Bluetooth Audio:</div>
+        <div className="text-blue-700">
+          Before starting call: Open Control Center → Select your Bluetooth device
+        </div>
+      </div>
+
       <motion.div
         animate={{ scale: outerScale, boxShadow: `0 0 ${glow}px rgba(255, 99, 132, 0.5)` }}
         transition={{ type: "spring", stiffness: 120, damping: 12 }}
