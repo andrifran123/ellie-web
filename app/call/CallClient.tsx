@@ -205,17 +205,30 @@ export default function CallClient() {
     log("[Audio] 🧹 Cleaning up…");
     
     try { processorRef.current?.disconnect(); } catch {}
+    processorRef.current = null;
+    
     try { gainRef.current?.disconnect(); } catch {}
+    gainRef.current = null;
+    
     try { micNodeRef.current?.disconnect(); } catch {}
-    try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+    micNodeRef.current = null;
+    
+    try { 
+      micStreamRef.current?.getTracks().forEach((t) => t.stop()); 
+      log("[Audio] Stopped mic tracks");
+    } catch {}
+    micStreamRef.current = null; // CRITICAL: Clear ref so next call requests new mic!
 
     try { routeKeepaliveRef.current?.stop(); } catch {}
     try { routeKeepaliveRef.current?.disconnect(); } catch {}
     routeKeepaliveRef.current = null;
+    
+    try { speakGainRef.current?.disconnect(); } catch {}
+    speakGainRef.current = null;
 
     nextPlayTimeRef.current = 0;
 
-    log("[Audio] ✅ Cleanup complete");
+    log("[Audio] ✅ Cleanup complete - all refs cleared");
   }, [log]);
 
   const cleanupAll = useCallback(() => {
@@ -502,10 +515,15 @@ export default function CallClient() {
 
   return (
     <div className="flex flex-col items-center gap-4 p-4">
-      <div className="w-full max-w-xl p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm">
-        <div className="font-semibold text-blue-900 mb-1">🎤 Mic Permission First!</div>
-        <div className="text-blue-700">
-          Requesting microphone BEFORE audio setup so iOS establishes the correct audio session. Grant permission, then audio will route to Bluetooth!
+      <div className="w-full max-w-xl p-3 bg-yellow-50 border-2 border-yellow-400 rounded-lg text-sm">
+        <div className="font-bold text-yellow-900 mb-2">🎧 For Bluetooth Audio (IMPORTANT!):</div>
+        <div className="text-yellow-800 space-y-1">
+          <div className="font-semibold">Before starting the call:</div>
+          <div>1. Open <strong>Control Center</strong> (swipe down from top-right)</div>
+          <div>2. <strong>Long-press</strong> the audio/music widget</div>
+          <div>3. <strong>Select your AirPods/Bluetooth device</strong></div>
+          <div>4. Then click <strong>&ldquo;Start&rdquo;</strong> below</div>
+          <div className="text-xs mt-2 italic">iOS Safari requires manual Bluetooth selection for web apps</div>
         </div>
       </div>
 
