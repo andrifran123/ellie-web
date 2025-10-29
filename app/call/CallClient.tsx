@@ -35,7 +35,7 @@ export default function CallClient() {
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const outDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
-  // Web Audio playback chain for Ellie’s voice
+  // Web Audio playback chain for Ellie's voice
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const lookaheadPaddingSec = 0.02;
@@ -112,21 +112,21 @@ export default function CallClient() {
     return buffer;
   }
 
-  // ---------- iOS Bluetooth priming beep (non-blocking) ----------
+  // ---------- iOS Bluetooth priming beep using Web Audio API ----------
   const playBluetoothBeepOnce = useCallback(async () => {
     try {
-      if (!audioElementRef.current) {
-        const audio = document.createElement("audio");
-        audio.style.display = "none";
-        audio.autoplay = false;
-        audio.setAttribute("playsinline", "true");
-        audio.setAttribute("webkit-playsinline", "true");
-        document.body.appendChild(audio);
-        audioElementRef.current = audio;
+      const ac = acRef.current;
+      if (!ac) {
+        log("[Audio] ⚠️ AudioContext not ready for beep");
+        return;
       }
-      const audio = audioElementRef.current;
 
-      // generate a short WAV beep
+      // Resume AudioContext if suspended
+      if (ac.state === "suspended") {
+        await ac.resume();
+      }
+
+      // Generate beep as PCM16 data (same as before)
       const sampleRate = 24000;
       const duration = 0.3;
       const samples = Math.floor(sampleRate * duration);
@@ -141,55 +141,30 @@ export default function CallClient() {
         const amplitude = 0.5 * env;
         beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
       }
-      // build wav
-      const numChannels = 1;
-      const bitsPerSample = 16;
-      const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-      const blockAlign = numChannels * (bitsPerSample / 8);
-      const dataSize = beepData.length * 2;
-      const buffer = new ArrayBuffer(44 + dataSize);
-      const view = new DataView(buffer);
-      const wstr = (o: number, s: string) => {
-        for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i));
-      };
-      wstr(0, "RIFF");
-      view.setUint32(4, 36 + dataSize, true);
-      wstr(8, "WAVE");
-      wstr(12, "fmt ");
-      view.setUint32(16, 16, true);
-      view.setUint16(20, 1, true);
-      view.setUint16(22, numChannels, true);
-      view.setUint32(24, sampleRate, true);
-      view.setUint32(28, byteRate, true);
-      view.setUint16(32, blockAlign, true);
-      view.setUint16(34, bitsPerSample, true);
-      wstr(36, "data");
-      view.setUint32(40, dataSize, true);
-      for (let i = 0; i < beepData.length; i++) {
-        view.setInt16(44 + i * 2, beepData[i], true);
+
+      // Convert to AudioBuffer using Web Audio API
+      const audioBuffer = pcm16ToAudioBuffer(beepData, sampleRate);
+
+      // Play through Web Audio API (same pipeline as TTS)
+      const source = ac.createBufferSource();
+      source.buffer = audioBuffer;
+      
+      // Connect to the same output chain as TTS for consistent routing
+      if (speakGainRef.current) {
+        source.connect(speakGainRef.current);
+      } else {
+        // Fallback: connect directly to destination
+        source.connect(ac.destination);
       }
 
-      const url = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
-      audio.src = url;
+      // Start playback immediately
+      source.start(0);
+      log("[Audio] ✅ Beep playing via Web Audio (priming BT route)");
 
-      if (acRef.current && acRef.current.state === "suspended") {
-        await acRef.current.resume();
-      }
-
-      audio
-        .play()
-        .then(() => log("[Audio] ✅ Beep playing (priming)"))
-        .catch(() => log("[Audio] ⚠️ Beep play rejected (continuing)"));
-
-      // Clean URL eventually (not awaited)
-      setTimeout(() => {
-        URL.revokeObjectURL(url);
-      }, 1500);
-    } catch {
-      log("[Audio] ⚠️ Beep setup failed (continuing)");
+    } catch (err) {
+      log(`[Audio] ⚠️ Beep failed: ${String(err)} (continuing)`);
     }
   }, [log]);
-
   // ---------- Visual meter ----------
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
