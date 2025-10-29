@@ -278,7 +278,7 @@ export default function HomePage() {
 
                   <div className="mt-6 space-y-3">
                     {[
-                      { text: "\"Missed you today. Tell me what you're up to?\"", delay: 0 },
+                      { text: "\"Missed you today. Tell me what you&apos;re up to?\"", delay: 0 },
                       { text: "\"We should plan a cozy night soon.\"", delay: 0.2 },
                       { text: "\"You sounded a bit tired—want me to help you unwind?\"", delay: 0.4 },
                     ].map((msg, i) => (
@@ -361,7 +361,7 @@ export default function HomePage() {
                 },
                 {
                   title: "Mood-aware",
-                  text: "She adapts to your tone—gentle when you're stressed, playful when you're upbeat.",
+                  text: "She adapts to your tone—gentle when you&apos;re stressed, playful when you&apos;re upbeat.",
                   icon: "💞",
                   gradient: "from-pink-500 to-purple-500",
                 },
@@ -440,7 +440,7 @@ export default function HomePage() {
                   <h3 className="text-3xl font-bold text-white">Privacy &amp; Safety</h3>
                 </div>
                 <p className="text-purple-200 leading-relaxed max-w-3xl">
-                  Conversations are private to you. Ellie won't answer explicitly sexual requests and will steer
+                  Conversations are private to you. Ellie won&apos;t answer explicitly sexual requests and will steer
                   things back to a respectful tone. You can reset memory any time.
                 </p>
 
