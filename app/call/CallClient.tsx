@@ -8,11 +8,15 @@ type Status = "ready" | "connecting" | "connected" | "closed" | "error";
 
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
 
+// Half-duplex safety margins
+const TTS_START_PAD_MS = 20;   // slight lead to ensure gate closes before audio starts
+const TTS_END_HOLD_MS  = 120;  // keep mic off a moment after TTS ends to avoid tail pickup
+
 export default function CallClient() {
   const { show } = useToasts();
 
   const [status, setStatus] = useState<Status>("ready");
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(false); // manual mute state
   const [logs, setLogs] = useState<string[]>([]);
   const [gain, setGain] = useState<number>(() => {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
@@ -31,17 +35,21 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // iOS BT output element (hidden) + destination stream
+  // Output: a single hidden <audio> powered by MediaStreamDestination
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const outDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
-  // Web Audio playback chain for Ellie's voice
+  // WebAudio playback chain for Ellie’s voice
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const lookaheadPaddingSec = 0.02;
 
-  // Optional keepalive osc (helps iOS keep route during long silences)
+  // Keep BT route alive
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
+
+  // Auto half-duplex gate control
+  const ttsActiveRef = useRef<boolean>(false);
+  const autoGateTimerRef = useRef<number | null>(null);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
@@ -49,15 +57,13 @@ export default function CallClient() {
   // ---------- logging ----------
   const log = useCallback((msg: string) => {
     console.log(msg);
-    setLogs((prev) => [...prev.slice(-25), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
+    setLogs((prev) => [...prev.slice(-60), `${new Date().toISOString().slice(11, 23)} ${msg}`]);
   }, []);
 
   // ---------- helpers ----------
   function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
     if (inputRate === 24000) {
-      const output = new Float32Array(inputBuffer.length);
-      output.set(inputBuffer);
-      return output;
+      return new Float32Array(inputBuffer); // clone to plain Float32Array
     }
     const ratio = 24000 / inputRate;
     const outLen = Math.floor(inputBuffer.length * ratio);
@@ -81,7 +87,6 @@ export default function CallClient() {
     return out;
   }
 
-  // Accept ArrayBufferLike to avoid TS complaints with TypedArray.buffer
   function abToBase64(buf: ArrayBufferLike): string {
     const bytes = new Uint8Array(buf);
     const chunk = 0x8000;
@@ -112,51 +117,67 @@ export default function CallClient() {
     return buffer;
   }
 
-  // ---------- iOS Bluetooth priming beep using Web Audio API ----------
-  const playBluetoothBeepOnce = useCallback(async () => {
+  // ---------- iOS BT priming beep (non-blocking) ----------
+  const primeBluetoothRoute = useCallback(() => {
     try {
-      const ac = acRef.current;
-      const speakGain = speakGainRef.current;
-      
-      if (!ac || !speakGain) {
-        log("[Audio] ⚠️ AudioContext or speakGain not ready for beep");
-        return;
+      if (!audioElementRef.current) {
+        const audio = document.createElement("audio");
+        audio.style.display = "none";
+        audio.autoplay = false;
+        audio.muted = false;
+        audio.volume = 0.9;
+        audio.setAttribute("playsinline", "true");
+        audio.setAttribute("webkit-playsinline", "true");
+        document.body.appendChild(audio);
+        audioElementRef.current = audio;
       }
+      const audio = audioElementRef.current;
 
-      // Resume AudioContext if suspended
-      if (ac.state === "suspended") {
-        await ac.resume();
-      }
-
-      // Generate beep as PCM16 data
+      // short WAV beep @ 24kHz
       const sampleRate = 24000;
-      const duration = 0.3;
+      const duration = 0.25;
       const samples = Math.floor(sampleRate * duration);
-      const beepData = new Int16Array(samples);
+      const beep = new Int16Array(samples);
       for (let i = 0; i < samples; i++) {
         const t = i / sampleRate;
-        let env = 1;
-        const fadeIn = samples * 0.2;
-        const fadeOutStart = samples * 0.8;
-        if (i < fadeIn) env = i / fadeIn;
-        else if (i > fadeOutStart) env = (samples - i) / (samples - fadeOutStart);
-        const amplitude = 0.5 * env;
-        beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
+        const env = i < samples * 0.1 ? i / (samples * 0.1) : i > samples * 0.9 ? (samples - i) / (samples * 0.1) : 1;
+        beep[i] = Math.floor(0.55 * env * 32767 * Math.sin(2 * Math.PI * 700 * t));
+      }
+      const numChannels = 1, bitsPerSample = 16;
+      const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+      const blockAlign = numChannels * (bitsPerSample / 8);
+      const dataSize = beep.length * 2;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+      const wstr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+      wstr(0, "RIFF");
+      view.setUint32(4, 36 + dataSize, true);
+      wstr(8, "WAVE");
+      wstr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, bitsPerSample, true);
+      wstr(36, "data");
+      view.setUint32(40, dataSize, true);
+      for (let i = 0; i < beep.length; i++) view.setInt16(44 + i * 2, beep[i], true);
+
+      const url = URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+      audio.src = url;
+
+      if (acRef.current && acRef.current.state === "suspended") {
+        acRef.current.resume().catch(() => {});
       }
 
-      // Convert to AudioBuffer using Web Audio API
-      const audioBuffer = pcm16ToAudioBuffer(beepData, sampleRate);
+      audio.play().then(() => log("[Audio] ✅ Priming beep playing"))
+                  .catch(() => log("[Audio] ⚠️ Priming beep rejected (continuing)"));
 
-      // Play through Web Audio API - same chain as TTS!
-      const source = ac.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(speakGain); // Goes through MediaStreamDestination → HTMLAudioElement
-      source.start(0);
-      
-      log("[Audio] ✅ Beep playing via Web Audio (BT route established)");
-
-    } catch (err) {
-      log(`[Audio] ⚠️ Beep failed: ${String(err)} (continuing)`);
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch {
+      log("[Audio] ⚠️ Priming setup failed (continuing)");
     }
   }, [log]);
 
@@ -192,12 +213,8 @@ export default function CallClient() {
 
     return () => {
       cancelAnimationFrame(raf);
-      try {
-        nodeAfterGain.disconnect(analyser);
-      } catch {}
-      try {
-        analyser.disconnect();
-      } catch {}
+      try { nodeAfterGain.disconnect(analyser); } catch {}
+      try { analyser.disconnect(); } catch {}
       analyserRef.current = null;
     };
   }, []);
@@ -222,6 +239,7 @@ export default function CallClient() {
     routeKeepaliveRef.current = null;
 
     nextPlayTimeRef.current = 0;
+    ttsActiveRef.current = false;
 
     log("[Audio] ✅ Cleanup complete");
   }, [log]);
@@ -246,18 +264,20 @@ export default function CallClient() {
       }
     }
 
-    // Create (or reuse) hidden <audio> element early
+    // Create/reuse hidden <audio>
     if (!audioElementRef.current) {
       const audio = document.createElement("audio");
       audio.style.display = "none";
       audio.autoplay = false;
+      audio.muted = false;
+      audio.volume = 1;
       audio.setAttribute("playsinline", "true");
       audio.setAttribute("webkit-playsinline", "true");
       document.body.appendChild(audio);
       audioElementRef.current = audio;
     }
 
-    // Output chain: speakGain -> MediaStreamDestination -> <audio srcObject>
+    // Output chain: speakGain -> MediaStreamDestination -> element.srcObject
     if (!speakGainRef.current) {
       speakGainRef.current = acRef.current.createGain();
       speakGainRef.current.gain.value = 1.0;
@@ -270,44 +290,42 @@ export default function CallClient() {
       }
     }
 
-    // Keep iOS audio route alive during pauses (very low level)
+    // Keep iOS route alive between TTS chunks
     if (!routeKeepaliveRef.current) {
       const osc = acRef.current.createOscillator();
       const g = acRef.current.createGain();
       g.gain.value = 0.0001; // inaudible
       osc.frequency.value = 20;
-      osc.connect(g).connect(speakGainRef.current); // keepalive through same output chain
+      osc.connect(g).connect(speakGainRef.current);
       osc.start();
       routeKeepaliveRef.current = osc;
     }
 
-    // CRITICAL: Start the audio element FIRST to establish iOS Bluetooth route
-    try {
-      await audioElementRef.current!.play();
-      log("[Audio] ▶️ Output element playing (BT route ready)");
-    } catch (err) {
-      log(`[Audio] ⚠️ Output element play failed: ${String(err)}`);
-    }
+    // Start output element (non-blocking) BEFORE we ask for mic
+    audioElementRef.current!
+      .play()
+      .then(() => log("[Audio] ▶️ Output element playing (stream)"))
+      .catch(() => log("[Audio] ⚠️ Output element not started yet (needs user tap)"));
 
-    // NOW play the beep through Web Audio (uses the established BT route)
-    playBluetoothBeepOnce();
+    // Prime BT with a short beep (non-blocking)
+    primeBluetoothRoute();
 
-    // Mic
+    // Mic @ 16 kHz mono, EC/NS/AGC off (helps BT HFP & avoids speakerphone forcing)
     if (!micStreamRef.current) {
       const constraints = {
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
           channelCount: 1,
-          // sampleRate: 16000, // enable if your server prefers 16 kHz
+          sampleRate: 16000,
         } as MediaTrackConstraints,
       };
       try {
         micStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
         const track = micStreamRef.current.getAudioTracks()[0];
         const st = track.getSettings();
-        log(`[Audio] ✅ Mic granted: ${st.sampleRate || "unknown"} Hz`);
+        log(`[Audio] ✅ Mic granted: ${st.sampleRate || "unknown"} Hz, EC/NS/AGC: off`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log(`[Audio] ❌ Mic error: ${message}`);
@@ -317,9 +335,36 @@ export default function CallClient() {
 
     log("[Audio] ✅ Audio ready");
     return acRef.current!;
-  }, [log, playBluetoothBeepOnce]);
+  }, [log, primeBluetoothRoute]);
 
-  // ---------- playback scheduling ----------
+  // ---------- Auto half-duplex gating ----------
+  const setMicEnabled = useCallback((enabled: boolean) => {
+    const stream = micStreamRef.current;
+    if (!stream) return;
+    stream.getAudioTracks().forEach((t) => { t.enabled = enabled && !muted; });
+    log(`[Duplex] Mic ${enabled && !muted ? "ENABLED" : "DISABLED"}`);
+  }, [muted, log]);
+
+  const gateMicForTTS = useCallback((ttsDurationSec: number) => {
+    // Close mic slightly before start, reopen a bit after end
+    if (autoGateTimerRef.current) {
+      window.clearTimeout(autoGateTimerRef.current);
+      autoGateTimerRef.current = null;
+    }
+    ttsActiveRef.current = true;
+
+    // Close now (with tiny lead)
+    setTimeout(() => setMicEnabled(false), TTS_START_PAD_MS);
+
+    const reopenDelayMs = Math.max(0, Math.floor(ttsDurationSec * 1000) + TTS_END_HOLD_MS);
+    autoGateTimerRef.current = window.setTimeout(() => {
+      ttsActiveRef.current = false;
+      setMicEnabled(true);
+      autoGateTimerRef.current = null;
+    }, reopenDelayMs);
+  }, [setMicEnabled]);
+
+  // ---------- schedule TTS playback ----------
   const schedulePlayback = useCallback((buffer: AudioBuffer) => {
     const ac = acRef.current!;
     const speakGain = speakGainRef.current!;
@@ -328,8 +373,12 @@ export default function CallClient() {
     src.buffer = buffer;
     src.connect(speakGain);
     src.start(startTime);
+
+    // Trigger auto half-duplex gate for exactly this chunk’s duration
+    gateMicForTTS(buffer.duration);
+
     nextPlayTimeRef.current = startTime + buffer.duration;
-  }, []);
+  }, [gateMicForTTS]);
 
   // ---------- start call (WS-first) ----------
   const startCall = useCallback(async () => {
@@ -338,7 +387,6 @@ export default function CallClient() {
       log("[Call] 📞 Starting call…");
       log(`[Call] Device: ${navigator.userAgent.slice(0, 140)}`);
 
-      // Wake lock (best effort)
       if ("wakeLock" in navigator) {
         try {
           const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
@@ -351,11 +399,11 @@ export default function CallClient() {
 
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden && acRef.current?.state === "suspended") {
-          acRef.current.resume();
+          acRef.current.resume().catch(() => {});
         }
       });
 
-      // 1) Connect WS FIRST (so UI won't be stuck if audio init is finicky)
+      // 1) Connect WS FIRST
       log(`[WS] Connecting to ${WS_URL}…`);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
@@ -376,7 +424,7 @@ export default function CallClient() {
         show("Connected!");
         log("[WS] ✅ Connected");
 
-        // 2) Audio setup AFTER socket up (non-blocking plays)
+        // 2) Audio setup AFTER socket up (non-blocking play)
         try {
           await ensureAudio();
         } catch (e) {
@@ -391,9 +439,7 @@ export default function CallClient() {
             const me = await meRes.json();
             realUserId = me.userId || "default-user";
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
 
         const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
         ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
@@ -416,7 +462,7 @@ export default function CallClient() {
         processorRef.current = proc;
         gn.connect(proc);
 
-        // connect to destination (muted) so onaudioprocess fires on iOS
+        // connect to dest (muted) so onaudioprocess fires on iOS
         const mutedNode = ac.createGain();
         mutedNode.gain.value = 0;
         proc.connect(mutedNode);
@@ -428,20 +474,21 @@ export default function CallClient() {
         proc.onaudioprocess = (ev) => {
           if (ws.readyState !== WebSocket.OPEN) return;
 
+          // If TTS is playing, gate stays closed — but we still protect in case
+          const micEnabled = !ttsActiveRef.current && !muted;
           const inputCh = ev.inputBuffer.getChannelData(0);
-          const mono24k: Float32Array =
-            contextSampleRate !== 24000
-              ? resampleTo24k(inputCh, contextSampleRate)
-              : new Float32Array(inputCh); // copy to avoid generic buffer type mismatch
-
+          const mono24k = resampleTo24k(inputCh, contextSampleRate);
           const pcm16 = floatTo16BitPCM(mono24k);
-          const b64 = abToBase64(pcm16.buffer);
-          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-          audioChunksSent++;
+
+          if (micEnabled) {
+            const b64 = abToBase64(pcm16.buffer);
+            ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+            audioChunksSent++;
+          }
 
           const now = performance.now();
           if (now - lastLogTime > 2000) {
-            log(`[Audio] 📤 Sent ${audioChunksSent} chunks`);
+            log(`[Audio] 📤 Sent ${audioChunksSent} chunks (mic ${micEnabled ? "on" : "off"})`);
             lastLogTime = now;
             audioChunksSent = 0;
           }
@@ -449,9 +496,7 @@ export default function CallClient() {
 
         // keepalive pings
         wsPingRef.current = window.setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ping" }));
-          }
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
         }, 10000);
       };
 
@@ -496,12 +541,10 @@ export default function CallClient() {
       setStatus("error");
       show("Failed to start call");
     }
-  }, [cleanupAudio, ensureAudio, log, schedulePlayback, show, startMeter, gain]);
+  }, [cleanupAudio, ensureAudio, log, schedulePlayback, show, startMeter, gain, muted]);
 
   // ---------- UI helpers ----------
-  useEffect(() => {
-    return () => cleanupAll();
-  }, [cleanupAll]);
+  useEffect(() => () => cleanupAll(), [cleanupAll]);
 
   useEffect(() => {
     if (gainRef.current) gainRef.current.gain.value = gain;
