@@ -8,12 +8,6 @@ type Status = "ready" | "connecting" | "connected" | "closed" | "error";
 
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
 
-/**
- * CallClient
- * - Keeps initial iOS Bluetooth routing beep via <audio> element
- * - Streams Ellie TTS with low-latency Web Audio scheduling (no per-chunk HTMLAudio.play())
- * - Schedules AudioBuffer chunks back-to-back to remove gaps/lag on iPhone
- */
 export default function CallClient() {
   const { show } = useToasts();
 
@@ -38,15 +32,16 @@ export default function CallClient() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  // iOS BT priming
+  // iOS BT output element (hidden) + destination stream
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  const outDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
 
   // Web Audio playback chain for Ellie’s voice
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
-  const lookaheadPaddingSec = 0.02; // tiny headroom when starting
+  const lookaheadPaddingSec = 0.02;
 
-  // Optional “keepalive” oscillator to keep the audio route warm on iOS
+  // Optional keepalive osc (helps iOS keep route during long silences)
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
@@ -87,7 +82,6 @@ export default function CallClient() {
     return out;
   }
 
-  // Accept ArrayBufferLike to avoid TS complaints with TypedArray.buffer
   function abToBase64(buf: ArrayBufferLike): string {
     const bytes = new Uint8Array(buf);
     const chunk = 0x8000;
@@ -107,7 +101,6 @@ export default function CallClient() {
     return bytes.buffer;
   }
 
-  // Convert PCM16 mono @ 24k into an AudioBuffer for Web Audio
   function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate = 24000): AudioBuffer {
     const ac = acRef.current!;
     const float = new Float32Array(pcm16.length);
@@ -122,15 +115,17 @@ export default function CallClient() {
   // ---------- iOS Bluetooth priming beep ----------
   const playBluetoothBeepOnce = useCallback(async () => {
     if (!audioElementRef.current) {
-      const audio = new Audio();
+      const audio = document.createElement("audio");
+      audio.style.display = "none";
       audio.autoplay = false;
       audio.setAttribute("playsinline", "true");
       audio.setAttribute("webkit-playsinline", "true");
+      document.body.appendChild(audio);
       audioElementRef.current = audio;
     }
     const audio = audioElementRef.current;
 
-    // generate a short WAV beep (audible to really trigger iOS routing)
+    // generate a short WAV beep
     const sampleRate = 24000;
     const duration = 0.3;
     const samples = Math.floor(sampleRate * duration);
@@ -145,7 +140,7 @@ export default function CallClient() {
       const amplitude = 0.5 * env;
       beepData[i] = Math.floor(amplitude * 32767 * Math.sin(2 * Math.PI * 440 * t));
     }
-    // make a WAV header
+    // build wav
     const numChannels = 1;
     const bitsPerSample = 16;
     const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
@@ -189,10 +184,10 @@ export default function CallClient() {
         };
         audio.addEventListener("ended", onEnd, { once: true });
       });
-      log("[Audio] ✅ Beep played — Bluetooth route should be established");
+      log("[Audio] ✅ Beep played — Bluetooth route primed");
     } catch {
       URL.revokeObjectURL(url);
-      log("[Audio] ⚠️ Could not play beep (will continue)");
+      log("[Audio] ⚠️ Beep failed (continuing)");
     }
   }, [log]);
 
@@ -248,25 +243,13 @@ export default function CallClient() {
 
   const cleanupAudio = useCallback(() => {
     log("[Audio] 🧹 Cleaning up…");
-    try {
-      processorRef.current?.disconnect();
-    } catch {}
-    try {
-      gainRef.current?.disconnect();
-    } catch {}
-    try {
-      micNodeRef.current?.disconnect();
-    } catch {}
-    try {
-      micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    } catch {}
+    try { processorRef.current?.disconnect(); } catch {}
+    try { gainRef.current?.disconnect(); } catch {}
+    try { micNodeRef.current?.disconnect(); } catch {}
+    try { micStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
 
-    try {
-      routeKeepaliveRef.current?.stop();
-    } catch {}
-    try {
-      routeKeepaliveRef.current?.disconnect();
-    } catch {}
+    try { routeKeepaliveRef.current?.stop(); } catch {}
+    try { routeKeepaliveRef.current?.disconnect(); } catch {}
     routeKeepaliveRef.current = null;
 
     nextPlayTimeRef.current = 0;
@@ -276,9 +259,7 @@ export default function CallClient() {
 
   const cleanupAll = useCallback(() => {
     stopPinger();
-    try {
-      wsRef.current?.close();
-    } catch {}
+    try { wsRef.current?.close(); } catch {}
     cleanupAudio();
   }, [cleanupAudio]);
 
@@ -295,27 +276,54 @@ export default function CallClient() {
       }
     }
 
-    // output gain for Ellie’s voice
+    // Create (or reuse) hidden <audio> element early
+    if (!audioElementRef.current) {
+      const audio = document.createElement("audio");
+      audio.style.display = "none";
+      audio.autoplay = false;
+      audio.setAttribute("playsinline", "true");
+      audio.setAttribute("webkit-playsinline", "true");
+      document.body.appendChild(audio);
+      audioElementRef.current = audio;
+    }
+
+    // Output chain: speakGain -> MediaStreamDestination -> <audio srcObject>
     if (!speakGainRef.current) {
       speakGainRef.current = acRef.current.createGain();
       speakGainRef.current.gain.value = 1.0;
-      speakGainRef.current.connect(acRef.current.destination);
+    }
+    if (!outDestRef.current) {
+      outDestRef.current = acRef.current.createMediaStreamDestination();
+      speakGainRef.current.connect(outDestRef.current);
+      // Bind the audio element to our output stream
+      if (audioElementRef.current!.srcObject !== outDestRef.current.stream) {
+        audioElementRef.current!.srcObject = outDestRef.current.stream;
+      }
     }
 
-    // Optional: tiny inaudible keepalive tone to hold BT route during pauses
+    // Keep iOS audio route alive during pauses (very low level)
     if (!routeKeepaliveRef.current) {
       const osc = acRef.current.createOscillator();
       const g = acRef.current.createGain();
-      g.gain.value = 0.0001; // essentially inaudible
-      osc.frequency.value = 20; // sub-audible
-      osc.connect(g).connect(acRef.current.destination);
+      g.gain.value = 0.0001; // inaudible
+      osc.frequency.value = 20;
+      osc.connect(g).connect(speakGainRef.current); // keepalive goes through the same output chain
       osc.start();
       routeKeepaliveRef.current = osc;
     }
 
-    // iOS BT priming beep
+    // iOS BT priming beep (ensures route is available)
     await playBluetoothBeepOnce();
 
+    // IMPORTANT: start the hidden audio element once; it will keep playing our stream
+    try {
+      await audioElementRef.current!.play();
+      log("[Audio] ▶️ Output element playing (stream mode)");
+    } catch (e) {
+      log("[Audio] ⚠️ Could not start output element yet (needs user gesture)");
+    }
+
+    // Mic
     if (!micStreamRef.current) {
       const constraints = {
         audio: {
@@ -323,6 +331,7 @@ export default function CallClient() {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
+          // sampleRate: 16000, // uncomment if your server prefers HFP-friendly rate
         } as MediaTrackConstraints,
       };
       try {
@@ -341,12 +350,10 @@ export default function CallClient() {
     return acRef.current!;
   }, [log, playBluetoothBeepOnce]);
 
-  // ---------- WebSocket + pipelines ----------
-  // Schedule one received AudioBuffer for playback with tight timing.
+  // ---------- playback scheduling ----------
   const schedulePlayback = useCallback((buffer: AudioBuffer) => {
     const ac = acRef.current!;
     const speakGain = speakGainRef.current!;
-    // Start after currentTime (with tiny padding) or append after the queued tail
     const startTime = Math.max(ac.currentTime + lookaheadPaddingSec, nextPlayTimeRef.current);
     const src = ac.createBufferSource();
     src.buffer = buffer;
@@ -355,13 +362,14 @@ export default function CallClient() {
     nextPlayTimeRef.current = startTime + buffer.duration;
   }, []);
 
+  // ---------- call start ----------
   const startCall = useCallback(async () => {
     try {
       setStatus("connecting");
       log("[Call] 📞 Starting call…");
       log(`[Call] Device: ${navigator.userAgent.slice(0, 120)}`);
 
-      // iOS try wake lock (best effort)
+      // wake lock (best effort)
       if ("wakeLock" in navigator) {
         try {
           const nav = navigator as { wakeLock?: { request: (type: string) => Promise<unknown> } };
@@ -372,13 +380,11 @@ export default function CallClient() {
         }
       }
 
-      // visibility handler
-      const onVis = () => {
+      document.addEventListener("visibilitychange", () => {
         if (!document.hidden && acRef.current?.state === "suspended") {
           acRef.current.resume();
         }
-      };
-      document.addEventListener("visibilitychange", onVis);
+      });
 
       const ac = await ensureAudio();
 
@@ -411,9 +417,7 @@ export default function CallClient() {
             const me = await meRes.json();
             realUserId = me.userId || "default-user";
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
 
         const storedLang = localStorage.getItem("ellie_language") || "en";
         ws.send(
@@ -426,7 +430,7 @@ export default function CallClient() {
         );
         log("[WS] ➡️ Sent hello");
 
-        // mic capture pipeline
+        // mic capture -> encode -> ws
         const stream = micStreamRef.current!;
         const src = ac.createMediaStreamSource(stream);
         micNodeRef.current = src;
@@ -437,17 +441,16 @@ export default function CallClient() {
         src.connect(gn);
         startMeter(gn);
 
-        // NOTE: ScriptProcessor is used here to match your existing code path
         const contextSampleRate = ac.sampleRate;
         const proc = ac.createScriptProcessor(4096, 1, 1);
         processorRef.current = proc;
         gn.connect(proc);
 
-        // Important for iOS: connect a muted node to destination so onaudioprocess fires
-        const mutedGain = ac.createGain();
-        mutedGain.gain.value = 0;
-        proc.connect(mutedGain);
-        mutedGain.connect(ac.destination);
+        // connect to destination (muted) so onaudioprocess fires on iOS
+        const muted = ac.createGain();
+        muted.gain.value = 0;
+        proc.connect(muted);
+        muted.connect(ac.destination);
 
         let audioChunksSent = 0;
         let lastLogTime = performance.now();
@@ -459,10 +462,10 @@ export default function CallClient() {
           const mono24k: Float32Array =
             contextSampleRate !== 24000
               ? resampleTo24k(inputCh, contextSampleRate)
-              : new Float32Array(inputCh); // copy to plain Float32Array to avoid generic buffer typing issues
+              : new Float32Array(inputCh);
 
           const pcm16 = floatTo16BitPCM(mono24k);
-          const b64 = abToBase64(pcm16.buffer); // now accepts ArrayBufferLike
+          const b64 = abToBase64(pcm16.buffer);
           ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
           audioChunksSent++;
 
@@ -487,18 +490,15 @@ export default function CallClient() {
           const obj = JSON.parse(String(ev.data));
 
           if (obj?.type === "audio.delta" && obj.audio) {
-            // Incoming PCM16 mono @ 24k (from server’s realtime pipe)
             const ab = base64ToArrayBuffer(obj.audio);
             const pcm16 = new Int16Array(ab);
             const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
-            schedulePlayback(audioBuffer); // tight, gapless scheduling
+            schedulePlayback(audioBuffer);
           } else if (obj?.type === "pong") {
             // noop
           } else if (obj?.type === "error") {
             show(`Error: ${obj.message || "Unknown error"}`);
             log(`[Server] ❌ ${obj.message}`);
-          } else {
-            // other messages ignored
           }
         } catch (err) {
           log(`[WS] Parse error: ${err}`);
