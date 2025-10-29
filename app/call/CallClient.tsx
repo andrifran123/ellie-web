@@ -659,9 +659,9 @@ export default function CallClient() {
 
       <details className="w-full max-w-xl" open>
         <summary className="cursor-pointer text-sm text-gray-700 font-semibold">📋 Logs (WATCH FOR &ldquo;PAUSE EVENT&rdquo;!)</summary>
-        <div className="mt-2 max-h-64 overflow-auto rounded border p-2 text-xs font-mono bg-white">
+        <div className="mt-2 max-h-64 overflow-auto rounded border p-2 text-xs font-mono bg-white text-gray-900">
           {logs.map((l, i) => (
-            <div key={i} className={l.includes('PAUSE') || l.includes('ENDED') ? 'text-red-600 font-bold' : ''}>{l}</div>
+            <div key={i} className={l.includes('PAUSE') || l.includes('ENDED') ? 'text-red-600 font-bold' : 'text-gray-800'}>{l}</div>
           ))}
         </div>
       </details>
