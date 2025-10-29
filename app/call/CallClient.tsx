@@ -189,7 +189,7 @@ export default function CallClient() {
   // ---------- Audio setup ----------
   const ensureAudio = useCallback(async () => {
     if (!acRef.current) {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       acRef.current = new AudioCtx({ sampleRate: 48000, latencyHint: "interactive" });
     }
 
