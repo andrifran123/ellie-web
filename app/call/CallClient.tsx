@@ -293,7 +293,7 @@ export default function CallClient() {
       audio.setAttribute("x-webkit-airplay", "allow");
       
       // Add ALL possible event listeners to catch iOS switching audio
-      audio.addEventListener('pause', (e) => {
+      audio.addEventListener('pause', () => {
         log("[Audio] ❌ PAUSE EVENT - iOS switched route!");
         audio.play().catch(err => log(`[Audio] Resume failed: ${err}`));
       });
@@ -455,7 +455,7 @@ export default function CallClient() {
 
         try {
           await ensureAudio();
-        } catch (e) {
+        } catch {
           log("[Audio] ❌ ensureAudio failed");
         }
 
@@ -603,7 +603,7 @@ export default function CallClient() {
       <div className="w-full max-w-xl p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
         <div className="font-semibold text-yellow-900 mb-1">🔊 Testing Mode Active</div>
         <div className="text-yellow-700">
-          You should hear a low hum during the call (keepalive signal). Check logs for "PAUSE EVENT" - that's when iOS switches the route!
+          You should hear a low hum during the call (keepalive signal). Check logs for &ldquo;PAUSE EVENT&rdquo; - that&rsquo;s when iOS switches the route!
         </div>
       </div>
 
@@ -658,7 +658,7 @@ export default function CallClient() {
       </div>
 
       <details className="w-full max-w-xl" open>
-        <summary className="cursor-pointer text-sm text-gray-700 font-semibold">📋 Logs (WATCH FOR "PAUSE EVENT"!)</summary>
+        <summary className="cursor-pointer text-sm text-gray-700 font-semibold">📋 Logs (WATCH FOR &ldquo;PAUSE EVENT&rdquo;!)</summary>
         <div className="mt-2 max-h-64 overflow-auto rounded border p-2 text-xs font-mono bg-white">
           {logs.map((l, i) => (
             <div key={i} className={l.includes('PAUSE') || l.includes('ENDED') ? 'text-red-600 font-bold' : ''}>{l}</div>
