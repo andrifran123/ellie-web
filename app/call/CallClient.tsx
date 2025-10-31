@@ -6,7 +6,35 @@ import { motion, AnimatePresence } from "framer-motion";
 
 type Status = "ready" | "connecting" | "connected" | "closed" | "error";
 
+interface RelationshipStatus {
+  level: number;
+  stage: string;
+  streak: number;
+  mood: string;
+  emotionalInvestment?: number;
+  totalInteractions?: number;
+}
+
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+
+// Relationship stage colors and emojis
+const STAGE_STYLES = {
+  "Curious Stranger": { color: "#94a3b8", emoji: "👀", bg: "from-slate-500/20" },
+  "Friend with Tension": { color: "#fbbf24", emoji: "😊", bg: "from-amber-500/20" },
+  "It's Complicated": { color: "#f87171", emoji: "😰", bg: "from-red-500/20" },
+  "Almost Together": { color: "#c084fc", emoji: "💕", bg: "from-purple-500/20" },
+  "Exclusive": { color: "#f472b6", emoji: "❤️", bg: "from-pink-500/20" }
+};
+
+// Mood indicators
+const MOOD_INDICATORS = {
+  flirty: "😘 Flirty",
+  playful: "😊 Playful", 
+  distant: "😔 Distant",
+  vulnerable: "🥺 Vulnerable",
+  normal: "😌 Normal",
+  mysterious: "🤔 Mysterious"
+};
 
 export default function CallClient() {
   const { show } = useToasts();
@@ -18,6 +46,10 @@ export default function CallClient() {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
   });
+
+  // Relationship status
+  const [relationship, setRelationship] = useState<RelationshipStatus | null>(null);
+  const [showRelationshipDetails, setShowRelationshipDetails] = useState(false);
 
   // --- Core refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -44,6 +76,28 @@ export default function CallClient() {
 
   // Detect iOS
   const isIOS = typeof window !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  // Fetch relationship status
+  const fetchRelationshipStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/relationship-status", {
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRelationship(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch relationship status:", err);
+    }
+  }, []);
+
+  // Fetch on mount and periodically
+  useEffect(() => {
+    fetchRelationshipStatus();
+    const interval = setInterval(fetchRelationshipStatus, 30000); // Every 30 seconds
+    return () => clearInterval(interval);
+  }, [fetchRelationshipStatus]);
 
   // ---------- helpers ----------
   function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
@@ -182,432 +236,395 @@ export default function CallClient() {
   const cleanupAll = useCallback(() => {
     stopPinger();
     cleanupAudio();
-    try { wsRef.current?.close(); } catch {}
+    try {
+      wsRef.current?.close();
+    } catch {}
     wsRef.current = null;
+    setStatus("closed");
   }, [cleanupAudio]);
 
-  // ---------- Audio setup ----------
+  // ---------- ensureAudio ----------
   const ensureAudio = useCallback(async () => {
-    if (!acRef.current) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      acRef.current = new AudioCtx({ sampleRate: 48000, latencyHint: "interactive" });
+    if (acRef.current && acRef.current.state === "running") return;
+
+    const ac = acRef.current || new (window.AudioContext || (window as any).webkitAudioContext)();
+    acRef.current = ac;
+
+    if (ac.state === "suspended") {
+      await ac.resume();
     }
 
-    const ac = acRef.current;
-    if (ac.state === "suspended") await ac.resume();
-
     if (!speakGainRef.current) {
-      const speakGain = ac.createGain();
-      speakGain.gain.value = 1.0;
-      speakGain.connect(ac.destination);
-      speakGainRef.current = speakGain;
+      const g = ac.createGain();
+      g.gain.value = 1.0;
+      g.connect(ac.destination);
+      speakGainRef.current = g;
+    }
 
+    // iOS routing keepalive
+    if (isIOS && !routeKeepaliveRef.current) {
       const osc = ac.createOscillator();
       osc.frequency.value = 20;
       const oscGain = ac.createGain();
-      oscGain.gain.value = 0.0001;
+      oscGain.gain.value = 0.00001;
       osc.connect(oscGain);
       oscGain.connect(ac.destination);
       osc.start();
       routeKeepaliveRef.current = osc;
     }
+  }, [isIOS]);
 
-    if (!micStreamRef.current) {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false,
-          sampleRate: { ideal: 48000 },
-        },
-      });
-      micStreamRef.current = stream;
-    }
-  }, []);
+  // ---------- captureMic ----------
+  const captureMic = useCallback(async () => {
+    const ac = acRef.current!;
 
-  const schedulePlayback = useCallback((audioBuffer: AudioBuffer) => {
-    const ac = acRef.current;
-    const speakGain = speakGainRef.current;
-    if (!ac || !speakGain) return;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        sampleRate: 48000,
+      },
+    });
+    micStreamRef.current = stream;
+
+    const source = ac.createMediaStreamSource(stream);
+    micNodeRef.current = source;
+
+    const g = ac.createGain();
+    g.gain.value = 1.5;
+    gainRef.current = g;
+    source.connect(g);
+
+    const processor = ac.createScriptProcessor(2048, 1, 1);
+    processorRef.current = processor;
+    g.connect(processor);
+    processor.connect(ac.destination);
+
+    const stopMeter = startMeter(g);
+
+    processor.onaudioprocess = (ev) => {
+      const inputData = ev.inputBuffer.getChannelData(0);
+      const resampled = resampleTo24k(inputData, ac.sampleRate);
+      const pcm16 = floatTo16BitPCM(resampled);
+      const b64 = abToBase64(pcm16.buffer);
+
+      if (
+        wsRef.current &&
+        wsRef.current.readyState === WebSocket.OPEN &&
+        !muted
+      ) {
+        wsRef.current.send(JSON.stringify({ type: "audio", data: b64 }));
+      }
+    };
+
+    return () => {
+      stopMeter();
+      processor.onaudioprocess = null;
+    };
+  }, [muted, startMeter]);
+
+  // ---------- queueAudio ----------
+  const queueAudio = useCallback((pcm16: Int16Array) => {
+    const ac = acRef.current!;
+    const speakGain = speakGainRef.current!;
+
+    const audioBuf = pcm16ToAudioBuffer(pcm16);
+    const src = ac.createBufferSource();
+    src.buffer = audioBuf;
+    src.connect(speakGain);
 
     const now = ac.currentTime;
-    if (nextPlayTimeRef.current < now) {
-      nextPlayTimeRef.current = now + lookaheadPaddingSec;
-    }
-
-    const src = ac.createBufferSource();
-    src.buffer = audioBuffer;
-    src.connect(speakGain);
-    src.start(nextPlayTimeRef.current);
-    nextPlayTimeRef.current += audioBuffer.duration;
+    const next = nextPlayTimeRef.current;
+    const startTime = Math.max(now + lookaheadPaddingSec, next);
+    src.start(startTime);
+    nextPlayTimeRef.current = startTime + audioBuf.duration;
   }, []);
 
-  // ---------- Call logic ----------
-  const startCall = useCallback(async () => {
-    try {
-      setStatus("connecting");
+  // ---------- connectWS ----------
+  const connectWS = useCallback(async () => {
+    cleanupAll();
+    setStatus("connecting");
 
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
+    await ensureAudio();
+    const cleanupMic = await captureMic();
 
-      const connectionTimeout = setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          ws.close();
-          setStatus("error");
-          show("Connection timeout");
+    const ws = new WebSocket(WS_URL);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setStatus("connected");
+      show("Connected to Ellie", "success");
+      nextPlayTimeRef.current = acRef.current!.currentTime;
+
+      wsPingRef.current = window.setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping" }));
         }
-      }, 15000);
+      }, 10000);
+    };
 
-      ws.onopen = async () => {
-        clearTimeout(connectionTimeout);
-        setStatus("connected");
-        show("Connected!");
-
-        try {
-          await ensureAudio();
-        } catch {
-          // Silent failure
+    ws.onmessage = async (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "audio" && msg.data) {
+          const ab = base64ToArrayBuffer(msg.data);
+          const pcm16 = new Int16Array(ab);
+          queueAudio(pcm16);
         }
+      } catch (err) {
+        console.error("onmessage error:", err);
+      }
+    };
 
-        let realUserId = "default-user";
-        try {
-          const meRes = await fetch("/api/auth/me", { credentials: "include" });
-          if (meRes.ok) {
-            const me = await meRes.json();
-            realUserId = me.userId || "default-user";
-          }
-        } catch {}
-
-        const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
-        ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
-
-        const ac = acRef.current!;
-        const stream = micStreamRef.current!;
-        const src = ac.createMediaStreamSource(stream);
-        micNodeRef.current = src;
-
-        const gn = ac.createGain();
-        gn.gain.value = gain;
-        gainRef.current = gn;
-        src.connect(gn);
-        startMeter(gn);
-
-        const contextSampleRate = ac.sampleRate;
-        const proc = ac.createScriptProcessor(4096, 1, 1);
-        processorRef.current = proc;
-        gn.connect(proc);
-
-        const mutedNode = ac.createGain();
-        mutedNode.gain.value = 0;
-        proc.connect(mutedNode);
-        mutedNode.connect(ac.destination);
-
-        proc.onaudioprocess = (ev) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-
-          const inputCh = ev.inputBuffer.getChannelData(0);
-          const mono24k: Float32Array =
-            contextSampleRate !== 24000
-              ? resampleTo24k(inputCh, contextSampleRate)
-              : new Float32Array(inputCh);
-
-          const pcm16 = floatTo16BitPCM(mono24k);
-          const b64 = abToBase64(pcm16.buffer);
-          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-        };
-
-        wsPingRef.current = window.setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ping" }));
-          }
-        }, 10000);
-      };
-
-      ws.onmessage = (ev) => {
-        try {
-          const obj = JSON.parse(String(ev.data));
-
-          if (obj?.type === "audio.delta" && obj.audio) {
-            const ab = base64ToArrayBuffer(obj.audio);
-            const pcm16 = new Int16Array(ab);
-            const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
-            schedulePlayback(audioBuffer);
-          } else if (obj?.type === "error") {
-            show(`Error: ${obj.message || "Unknown error"}`);
-          }
-        } catch {}
-      };
-
-      ws.onerror = () => {
-        clearTimeout(connectionTimeout);
-        setStatus("error");
-        show("Connection error");
-      };
-
-      ws.onclose = () => {
-        clearTimeout(connectionTimeout);
-        stopPinger();
-        setStatus("closed");
-        cleanupAudio();
-        wsRef.current = null;
-      };
-    } catch {
+    ws.onerror = (err) => {
+      console.error("WS error:", err);
       setStatus("error");
-      show("Failed to start call");
-    }
-  }, [cleanupAudio, ensureAudio, schedulePlayback, show, startMeter, gain]);
+      show("Connection error", "error");
+    };
 
-  // ---------- UI helpers ----------
-  useEffect(() => {
-    return () => cleanupAll();
-  }, [cleanupAll]);
+    ws.onclose = () => {
+      console.log("WS closed");
+      stopPinger();
+      cleanupMic();
+      setStatus("closed");
+    };
+  }, [cleanupAll, ensureAudio, captureMic, queueAudio, show]);
 
-  useEffect(() => {
-    if (gainRef.current) gainRef.current.gain.value = gain;
-    if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
-  }, [gain]);
+  // ---------- hangUp ----------
+  const hangUp = useCallback(() => {
+    cleanupAll();
+    show("Call ended", "info");
+  }, [cleanupAll, show]);
 
   const toggleMute = useCallback(() => {
-    const s = micStreamRef.current;
-    if (!s) return;
-    const next = !muted;
-    s.getAudioTracks().forEach((t) => (t.enabled = !next));
-    setMuted(next);
-  }, [muted]);
-
-  const hangUp = useCallback(() => {
-    try { wsRef.current?.close(); } catch {}
-    setStatus("ready");
+    setMuted((prev) => !prev);
   }, []);
 
-  const handleStartClick = () => {
-    if (isIOS && status === "ready") {
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cleanupAll();
+    };
+  }, [cleanupAll]);
+
+  // Store gain in localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ellie_call_gain", String(gain));
+    }
+    if (speakGainRef.current) {
+      speakGainRef.current.gain.value = gain;
+    }
+  }, [gain]);
+
+  // Visual effects
+  const pulseScale = 1 + level * 0.2;
+  const glowIntensity = `0 0 ${20 + level * 40}px rgba(168, 85, 247, ${0.4 + level * 0.4})`;
+
+  // iOS specific handling
+  const handleStartClick = useCallback(async () => {
+    if (isIOS) {
       setShowBluetoothGuide(true);
     } else {
-      startCall();
+      connectWS();
     }
-  };
+  }, [isIOS, connectWS]);
 
-  const proceedWithCall = () => {
+  const proceedWithCall = useCallback(() => {
     setShowBluetoothGuide(false);
-    startCall();
-  };
+    connectWS();
+  }, [connectWS]);
 
-  // Visual calculations
-  const vibes = Math.min(100, level * 100);
-  const pulseScale = 1 + vibes * 0.015;
-  const glowIntensity = speaking ? 60 + vibes * 0.8 : 30;
-  const ringCount = 3;
+  // Get current stage style
+  const currentStageStyle = relationship 
+    ? STAGE_STYLES[relationship.stage as keyof typeof STAGE_STYLES] || STAGE_STYLES["Curious Stranger"]
+    : null;
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      {/* Animated background elements */}
-      <div className="absolute inset-0 overflow-hidden">
-        <motion.div
-          className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.5, 0.3],
-          }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1.2, 1, 1.2],
-            opacity: [0.5, 0.3, 0.5],
-          }}
-          transition={{
-            duration: 10,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute top-1/2 left-1/2 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.3, 1],
-            x: [-50, 50, -50],
-            y: [-50, 50, -50],
-          }}
-          transition={{
-            duration: 12,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white overflow-hidden relative">
+      {/* Animated background */}
+      <div className="absolute inset-0 opacity-30">
+        <div className="absolute top-0 -left-4 w-96 h-96 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob" />
+        <div className="absolute top-0 -right-4 w-96 h-96 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-2000" />
+        <div className="absolute -bottom-8 left-20 w-96 h-96 bg-purple-700 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-4000" />
       </div>
 
-      {/* Main content */}
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen p-8">
-        {/* Status text */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-12 text-center"
-        >
-          <h1 className="text-5xl font-bold mb-3 bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 bg-clip-text text-transparent">
-            {status === "ready" && "Ready to Connect"}
-            {status === "connecting" && "Establishing Connection..."}
-            {status === "connected" && "Connected"}
-            {status === "closed" && "Call Ended"}
-            {status === "error" && "Connection Error"}
-          </h1>
-          <p className="text-purple-300 text-lg">
-            {status === "ready" && "Start a conversation whenever you're ready"}
-            {status === "connecting" && "Just a moment..."}
-            {status === "connected" && "Your conversation is live"}
-            {status === "closed" && "Thanks for talking"}
-            {status === "error" && "Something went wrong"}
-          </p>
-        </motion.div>
-
-        {/* Central orb visualization */}
-        <div className="relative flex items-center justify-center mb-16">
-          {/* Outer rings */}
-          {Array.from({ length: ringCount }).map((_, i) => (
+      {/* Relationship status card */}
+      {relationship && (
+        <div className="absolute top-4 left-4 right-4 z-20 flex justify-center">
+          <div className="w-full max-w-md">
             <motion.div
-              key={i}
-              className="absolute rounded-full border-2 border-purple-400/30"
-              style={{
-                width: 200 + i * 80,
-                height: 200 + i * 80,
-              }}
-              animate={{
-                scale: speaking ? [1, 1.1, 1] : 1,
-                opacity: speaking ? [0.3, 0.6, 0.3] : 0.2,
-              }}
-              transition={{
-                duration: 2 + i * 0.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: i * 0.2,
-              }}
-            />
-          ))}
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="bg-black/40 backdrop-blur-xl rounded-2xl p-4 border border-white/10 shadow-2xl cursor-pointer hover:bg-black/50 transition-colors"
+              onClick={() => setShowRelationshipDetails(!showRelationshipDetails)}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{currentStageStyle?.emoji}</span>
+                  <div>
+                    <h3 
+                      className="font-semibold text-lg"
+                      style={{ color: currentStageStyle?.color }}
+                    >
+                      {relationship.stage}
+                    </h3>
+                    <p className="text-xs text-white/50">
+                      {MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS] || relationship.mood}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold" style={{ color: currentStageStyle?.color }}>
+                    {relationship.level}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    🔥 {relationship.streak}
+                  </div>
+                </div>
+              </div>
 
-          {/* Main orb */}
-          <motion.div
-            animate={{
-              scale: pulseScale,
-              boxShadow: `0 0 ${glowIntensity}px rgba(167, 139, 250, 0.8), 0 0 ${glowIntensity * 1.5}px rgba(236, 72, 153, 0.4)`,
-            }}
-            transition={{
-              type: "spring",
-              stiffness: 150,
-              damping: 15,
-            }}
-            className="relative w-48 h-48 rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-purple-600 flex items-center justify-center shadow-2xl"
-          >
-            {/* Inner glow */}
-            <motion.div
-              animate={{
-                opacity: speaking ? [0.4, 0.8, 0.4] : 0.3,
-              }}
-              transition={{
-                duration: 1.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="absolute inset-4 rounded-full bg-white/20 blur-xl"
-            />
-
-            {/* Status icon */}
-            <div className="relative z-10 text-white">
-              {status === "ready" && (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              )}
-              {status === "connecting" && (
-                <motion.svg
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  className="w-20 h-20"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </motion.svg>
-              )}
-              {status === "connected" && (
-                <motion.svg
-                  animate={speaking ? { scale: [1, 1.2, 1] } : {}}
-                  transition={{ duration: 0.3 }}
-                  className="w-20 h-20"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </motion.svg>
-              )}
-              {(status === "closed" || status === "error") && (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              )}
-            </div>
-          </motion.div>
-
-          {/* Audio level indicator bars */}
-          {status === "connected" && (
-            <div className="absolute -bottom-16 flex gap-2">
-              {Array.from({ length: 5 }).map((_, i) => (
+              {/* Progress bar */}
+              <div className="relative h-2 bg-white/10 rounded-full overflow-hidden">
                 <motion.div
-                  key={i}
-                  className="w-2 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full"
-                  animate={{
-                    height: speaking ? [8, 32, 8] : 8,
-                  }}
-                  transition={{
-                    duration: 0.5,
-                    repeat: Infinity,
-                    delay: i * 0.1,
-                    ease: "easeInOut",
-                  }}
+                  className={`absolute inset-y-0 left-0 bg-gradient-to-r ${currentStageStyle?.bg} to-transparent`}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${relationship.level}%` }}
+                  transition={{ duration: 0.5, ease: "easeOut" }}
                 />
-              ))}
-            </div>
-          )}
-        </div>
+              </div>
 
-        {/* Controls */}
+              {/* Expanded details */}
+              <AnimatePresence>
+                {showRelationshipDetails && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="mt-3 pt-3 border-t border-white/10"
+                  >
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-white/60">Total Interactions:</span>
+                        <span className="ml-2 text-white/90">{relationship.totalInteractions || 0}</span>
+                      </div>
+                      <div>
+                        <span className="text-white/60">Emotional Bond:</span>
+                        <span className="ml-2 text-white/90">
+                          {Math.round((relationship.emotionalInvestment || 0) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-white/50 mt-2">
+                      {relationship.level < 20 && "She's still getting to know you. Keep talking!"}
+                      {relationship.level >= 20 && relationship.level < 40 && "There's definitely chemistry building..."}
+                      {relationship.level >= 40 && relationship.level < 60 && "Things are getting complicated. She has feelings."}
+                      {relationship.level >= 60 && relationship.level < 80 && "You're so close! Don't give up now."}
+                      {relationship.level >= 80 && "You did it! But keep the spark alive..."}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          </div>
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-4">
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="flex flex-col items-center gap-6"
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="flex flex-col items-center"
         >
-          <div className="flex gap-4">
-            {(status === "ready" || status === "closed" || status === "error") && (
+          <h1 className="text-6xl md:text-7xl font-bold mb-2 bg-gradient-to-r from-purple-300 via-pink-300 to-purple-300 bg-clip-text text-transparent">
+            Ellie
+          </h1>
+          <p className="text-purple-200 text-sm mb-12">
+            {relationship 
+              ? `${relationship.stage} • ${MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS]}`
+              : "Voice Chat"
+            }
+          </p>
+
+          {/* Main circle button */}
+          <div className="relative mb-8">
+            <motion.div
+              className="relative w-48 h-48"
+              animate={{ scale: status === "connected" ? pulseScale : 1 }}
+              transition={{ duration: 0.3 }}
+            >
+              {/* Glow effect */}
+              <div
+                className="absolute inset-0 rounded-full bg-gradient-to-br from-purple-600 to-pink-600"
+                style={{ boxShadow: glowIntensity }}
+              />
+              
+              {/* Main button */}
               <motion.button
+                onClick={status === "ready" ? handleStartClick : hangUp}
+                className="relative w-full h-full rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center shadow-2xl hover:shadow-purple-500/50 transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={status === "connecting"}
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={handleStartClick}
-                className="px-8 py-4 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold text-lg shadow-lg hover:shadow-purple-500/50 transition-shadow flex items-center gap-2"
               >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Start Call
+                {status === "ready" && (
+                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                  </svg>
+                )}
+                {status === "connecting" && (
+                  <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                {status === "connected" && (
+                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                  </svg>
+                )}
+                {status === "closed" && (
+                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                  </svg>
+                )}
               </motion.button>
-            )}
 
-            {(status === "connected" || status === "connecting") && (
+              {/* Speaking indicator */}
+              {speaking && (
+                <motion.div
+                  className="absolute inset-0 rounded-full border-4 border-white/30"
+                  initial={{ scale: 1, opacity: 0.5 }}
+                  animate={{ scale: 1.2, opacity: 0 }}
+                  transition={{ duration: 0.5, repeat: Infinity }}
+                />
+              )}
+            </motion.div>
+
+            {/* Status text */}
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="text-center mt-6 text-purple-200 font-medium"
+            >
+              {status === "ready" && "Tap to call"}
+              {status === "connecting" && "Connecting..."}
+              {status === "connected" && "Connected"}
+              {status === "closed" && "Call ended"}
+              {status === "error" && "Connection error"}
+            </motion.p>
+          </div>
+
+          {/* Controls */}
+          <div className="flex flex-col items-center gap-4">
+            {status === "connected" && (
               <>
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={toggleMute}
-                  disabled={status !== "connected"}
-                  className={`px-6 py-4 rounded-full font-semibold shadow-lg transition-all ${
+                  className={`px-6 py-4 rounded-full transition-all shadow-lg ${
                     muted
                       ? "bg-red-500 hover:bg-red-600 text-white"
                       : "bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white"
@@ -644,7 +661,7 @@ export default function CallClient() {
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10"
+              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10 mt-4"
             >
               <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
