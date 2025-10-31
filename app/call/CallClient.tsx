@@ -143,7 +143,7 @@ export default function CallClient() {
     return buffer;
   }
 
-  function abToBase64(buffer: ArrayBuffer): string {
+  function abToBase64(buffer: ArrayBufferLike): string {
     const bytes = new Uint8Array(buffer);
     let binary = "";
     for (let i = 0; i < bytes.byteLength; i++) {
