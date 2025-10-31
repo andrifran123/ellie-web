@@ -355,7 +355,7 @@ export default function CallClient() {
 
     ws.onopen = () => {
       setStatus("connected");
-      show("Connected to Ellie", "success");
+      show("Connected to Ellie");
       nextPlayTimeRef.current = acRef.current!.currentTime;
 
       wsPingRef.current = window.setInterval(() => {
@@ -381,7 +381,7 @@ export default function CallClient() {
     ws.onerror = (err) => {
       console.error("WS error:", err);
       setStatus("error");
-      show("Connection error", "error");
+      show("Connection error");
     };
 
     ws.onclose = () => {
@@ -395,7 +395,7 @@ export default function CallClient() {
   // ---------- hangUp ----------
   const hangUp = useCallback(() => {
     cleanupAll();
-    show("Call ended", "info");
+    show("Call ended");
   }, [cleanupAll, show]);
 
   const toggleMute = useCallback(() => {
