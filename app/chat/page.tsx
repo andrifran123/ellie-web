@@ -179,7 +179,6 @@ export default function ChatPage() {
   // NEW: Relationship tracking
   const [relationship, setRelationship] = useState<RelationshipStatus | null>(null);
   const [showRelDetails, setShowRelDetails] = useState(false);
-  const [lastSeen, setLastSeen] = useState<Date | null>(null);
 
   // NEW: Fetch relationship status
   const fetchRelationshipStatus = useCallback(async () => {
@@ -194,15 +193,6 @@ export default function ChatPage() {
     } catch (err) {
       console.error("Failed to fetch relationship status:", err);
     }
-  }, []);
-
-  // NEW: Track last seen
-  useEffect(() => {
-    const lastSeenStr = localStorage.getItem("ellie_last_seen");
-    if (lastSeenStr) {
-      setLastSeen(new Date(lastSeenStr));
-    }
-    localStorage.setItem("ellie_last_seen", new Date().toISOString());
   }, []);
 
   // NEW: Fetch relationship on mount and periodically
@@ -343,10 +333,12 @@ export default function ChatPage() {
           // Refresh session before voice request
           await refreshSession().catch(() => {});
           
-          const data = await apiPostForm<VoiceResponse>("/api/voice", {
-            audio: new File([blob], "voice.webm", { type: "audio/webm" }),
-            userId: USER_ID,
-          });
+          // Create proper FormData
+          const formData = new FormData();
+          formData.append("audio", new File([blob], "voice.webm", { type: "audio/webm" }));
+          formData.append("userId", USER_ID);
+          
+          const data = await apiPostForm<VoiceResponse>("/api/voice", formData);
           
           if (data?.text) append("you", data.text);
           if (data?.reply) append("ellie", data.reply);
