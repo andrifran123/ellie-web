@@ -236,206 +236,222 @@ export default function CallClient() {
   const cleanupAll = useCallback(() => {
     stopPinger();
     cleanupAudio();
-    try {
-      wsRef.current?.close();
-    } catch {}
+    try { wsRef.current?.close(); } catch {}
     wsRef.current = null;
-    setStatus("closed");
   }, [cleanupAudio]);
 
-  // ---------- ensureAudio ----------
+  // ---------- Audio setup ----------
   const ensureAudio = useCallback(async () => {
-    if (acRef.current && acRef.current.state === "running") return;
-
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ac = acRef.current || new AudioContextClass();
-    acRef.current = ac;
-
-    if (ac.state === "suspended") {
-      await ac.resume();
+    if (!acRef.current) {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      acRef.current = new AudioCtx({ sampleRate: 48000, latencyHint: "interactive" });
     }
+
+    const ac = acRef.current;
+    if (ac.state === "suspended") await ac.resume();
 
     if (!speakGainRef.current) {
-      const g = ac.createGain();
-      g.gain.value = 1.0;
-      g.connect(ac.destination);
-      speakGainRef.current = g;
-    }
+      const speakGain = ac.createGain();
+      speakGain.gain.value = 1.0;
+      speakGain.connect(ac.destination);
+      speakGainRef.current = speakGain;
 
-    // iOS routing keepalive
-    if (isIOS && !routeKeepaliveRef.current) {
       const osc = ac.createOscillator();
       osc.frequency.value = 20;
       const oscGain = ac.createGain();
-      oscGain.gain.value = 0.00001;
+      oscGain.gain.value = 0.0001;
       osc.connect(oscGain);
       oscGain.connect(ac.destination);
       osc.start();
       routeKeepaliveRef.current = osc;
     }
-  }, [isIOS]);
 
-  // ---------- captureMic ----------
-  const captureMic = useCallback(async () => {
-    const ac = acRef.current!;
+    if (!micStreamRef.current) {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          sampleRate: { ideal: 48000 },
+        },
+      });
+      micStreamRef.current = stream;
+    }
+  }, []);
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-        sampleRate: 48000,
-      },
-    });
-    micStreamRef.current = stream;
-
-    const source = ac.createMediaStreamSource(stream);
-    micNodeRef.current = source;
-
-    const g = ac.createGain();
-    g.gain.value = 1.5;
-    gainRef.current = g;
-    source.connect(g);
-
-    const processor = ac.createScriptProcessor(2048, 1, 1);
-    processorRef.current = processor;
-    g.connect(processor);
-    processor.connect(ac.destination);
-
-    const stopMeter = startMeter(g);
-
-    processor.onaudioprocess = (ev) => {
-      const inputData = ev.inputBuffer.getChannelData(0);
-      const resampled = resampleTo24k(inputData, ac.sampleRate);
-      const pcm16 = floatTo16BitPCM(resampled);
-      const b64 = abToBase64(pcm16.buffer);
-
-      if (
-        wsRef.current &&
-        wsRef.current.readyState === WebSocket.OPEN &&
-        !muted
-      ) {
-        wsRef.current.send(JSON.stringify({ type: "audio", data: b64 }));
-      }
-    };
-
-    return () => {
-      stopMeter();
-      processor.onaudioprocess = null;
-    };
-  }, [muted, startMeter]);
-
-  // ---------- queueAudio ----------
-  const queueAudio = useCallback((pcm16: Int16Array) => {
-    const ac = acRef.current!;
-    const speakGain = speakGainRef.current!;
-
-    const audioBuf = pcm16ToAudioBuffer(pcm16);
-    const src = ac.createBufferSource();
-    src.buffer = audioBuf;
-    src.connect(speakGain);
+  const schedulePlayback = useCallback((audioBuffer: AudioBuffer) => {
+    const ac = acRef.current;
+    const speakGain = speakGainRef.current;
+    if (!ac || !speakGain) return;
 
     const now = ac.currentTime;
-    const next = nextPlayTimeRef.current;
-    const startTime = Math.max(now + lookaheadPaddingSec, next);
-    src.start(startTime);
-    nextPlayTimeRef.current = startTime + audioBuf.duration;
+    if (nextPlayTimeRef.current < now) {
+      nextPlayTimeRef.current = now + lookaheadPaddingSec;
+    }
+
+    const src = ac.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(speakGain);
+    src.start(nextPlayTimeRef.current);
+    nextPlayTimeRef.current += audioBuffer.duration;
   }, []);
 
-  // ---------- connectWS ----------
-  const connectWS = useCallback(async () => {
-    cleanupAll();
-    setStatus("connecting");
+  // ---------- Call logic ----------
+  const startCall = useCallback(async () => {
+    try {
+      setStatus("connecting");
 
-    await ensureAudio();
-    const cleanupMic = await captureMic();
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
 
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setStatus("connected");
-      show("Connected to Ellie");
-      nextPlayTimeRef.current = acRef.current!.currentTime;
-
-      wsPingRef.current = window.setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "ping" }));
+      const connectionTimeout = setTimeout(() => {
+        if (ws.readyState !== WebSocket.OPEN) {
+          ws.close();
+          setStatus("error");
+          show("Connection timeout");
         }
-      }, 10000);
-    };
+      }, 15000);
 
-    ws.onmessage = async (evt) => {
-      try {
-        const msg = JSON.parse(evt.data);
-        if (msg.type === "audio" && msg.data) {
-          const ab = base64ToArrayBuffer(msg.data);
-          const pcm16 = new Int16Array(ab);
-          queueAudio(pcm16);
+      ws.onopen = async () => {
+        clearTimeout(connectionTimeout);
+        setStatus("connected");
+        show("Connected!");
+
+        try {
+          await ensureAudio();
+        } catch {
+          // Silent failure
         }
-      } catch (err) {
-        console.error("onmessage error:", err);
-      }
-    };
 
-    ws.onerror = (err) => {
-      console.error("WS error:", err);
+        let realUserId = "default-user";
+        try {
+          const meRes = await fetch("/api/auth/me", { credentials: "include" });
+          if (meRes.ok) {
+            const me = await meRes.json();
+            realUserId = me.userId || "default-user";
+          }
+        } catch {}
+
+        const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
+        ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
+
+        const ac = acRef.current!;
+        const stream = micStreamRef.current!;
+        const src = ac.createMediaStreamSource(stream);
+        micNodeRef.current = src;
+
+        const gn = ac.createGain();
+        gn.gain.value = gain;
+        gainRef.current = gn;
+        src.connect(gn);
+        startMeter(gn);
+
+        const contextSampleRate = ac.sampleRate;
+        const proc = ac.createScriptProcessor(4096, 1, 1);
+        processorRef.current = proc;
+        gn.connect(proc);
+
+        const mutedNode = ac.createGain();
+        mutedNode.gain.value = 0;
+        proc.connect(mutedNode);
+        mutedNode.connect(ac.destination);
+
+        proc.onaudioprocess = (ev) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+
+          const inputCh = ev.inputBuffer.getChannelData(0);
+          const mono24k: Float32Array =
+            contextSampleRate !== 24000
+              ? resampleTo24k(inputCh, contextSampleRate)
+              : new Float32Array(inputCh);
+
+          const pcm16 = floatTo16BitPCM(mono24k);
+          const b64 = abToBase64(pcm16.buffer);
+          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
+        };
+
+        wsPingRef.current = window.setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ping" }));
+          }
+        }, 10000);
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const obj = JSON.parse(String(ev.data));
+
+          if (obj?.type === "audio.delta" && obj.audio) {
+            const ab = base64ToArrayBuffer(obj.audio);
+            const pcm16 = new Int16Array(ab);
+            const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
+            schedulePlayback(audioBuffer);
+          } else if (obj?.type === "error") {
+            show(`Error: ${obj.message || "Unknown error"}`);
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {
+        clearTimeout(connectionTimeout);
+        setStatus("error");
+        show("Connection error");
+      };
+
+      ws.onclose = () => {
+        clearTimeout(connectionTimeout);
+        stopPinger();
+        setStatus("closed");
+        cleanupAudio();
+        wsRef.current = null;
+      };
+    } catch {
       setStatus("error");
-      show("Connection error");
-    };
+      show("Failed to start call");
+    }
+  }, [cleanupAudio, ensureAudio, schedulePlayback, show, startMeter, gain]);
 
-    ws.onclose = () => {
-      console.log("WS closed");
-      stopPinger();
-      cleanupMic();
-      setStatus("closed");
-    };
-  }, [cleanupAll, ensureAudio, captureMic, queueAudio, show]);
-
-  // ---------- hangUp ----------
-  const hangUp = useCallback(() => {
-    cleanupAll();
-    show("Call ended");
-  }, [cleanupAll, show]);
-
-  const toggleMute = useCallback(() => {
-    setMuted((prev) => !prev);
-  }, []);
-
-  // Cleanup on unmount
+  // ---------- UI helpers ----------
   useEffect(() => {
-    return () => {
-      cleanupAll();
-    };
+    return () => cleanupAll();
   }, [cleanupAll]);
 
-  // Store gain in localStorage
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("ellie_call_gain", String(gain));
-    }
-    if (speakGainRef.current) {
-      speakGainRef.current.gain.value = gain;
-    }
+    if (gainRef.current) gainRef.current.gain.value = gain;
+    if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
   }, [gain]);
 
-  // Visual effects
-  const pulseScale = 1 + level * 0.2;
-  const glowIntensity = `0 0 ${20 + level * 40}px rgba(168, 85, 247, ${0.4 + level * 0.4})`;
+  const toggleMute = useCallback(() => {
+    const s = micStreamRef.current;
+    if (!s) return;
+    const next = !muted;
+    s.getAudioTracks().forEach((t) => (t.enabled = !next));
+    setMuted(next);
+  }, [muted]);
 
-  // iOS specific handling
-  const handleStartClick = useCallback(async () => {
-    if (isIOS) {
+  const hangUp = useCallback(() => {
+    try { wsRef.current?.close(); } catch {}
+    setStatus("ready");
+  }, []);
+
+  const handleStartClick = () => {
+    if (isIOS && status === "ready") {
       setShowBluetoothGuide(true);
     } else {
-      connectWS();
+      startCall();
     }
-  }, [isIOS, connectWS]);
+  };
 
-  const proceedWithCall = useCallback(() => {
+  const proceedWithCall = () => {
     setShowBluetoothGuide(false);
-    connectWS();
-  }, [connectWS]);
+    startCall();
+  };
+
+  // Visual calculations
+  const vibes = Math.min(100, level * 100);
+  const pulseScale = 1 + vibes * 0.015;
+  const glowIntensity = speaking ? 60 + vibes * 0.8 : 30;
+  const ringCount = 3;
 
   // Get current stage style
   const currentStageStyle = relationship 
@@ -443,12 +459,46 @@ export default function CallClient() {
     : null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white overflow-hidden relative">
-      {/* Animated background */}
-      <div className="absolute inset-0 opacity-30">
-        <div className="absolute top-0 -left-4 w-96 h-96 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob" />
-        <div className="absolute top-0 -right-4 w-96 h-96 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-2000" />
-        <div className="absolute -bottom-8 left-20 w-96 h-96 bg-purple-700 rounded-full mix-blend-multiply filter blur-3xl animate-blob animation-delay-4000" />
+    <div className="relative min-h-screen w-full overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      {/* Animated background elements */}
+      <div className="absolute inset-0 overflow-hidden">
+        <motion.div
+          className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl"
+          animate={{
+            scale: [1, 1.2, 1],
+            opacity: [0.3, 0.5, 0.3],
+          }}
+          transition={{
+            duration: 8,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        />
+        <motion.div
+          className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-500/20 rounded-full blur-3xl"
+          animate={{
+            scale: [1.2, 1, 1.2],
+            opacity: [0.5, 0.3, 0.5],
+          }}
+          transition={{
+            duration: 10,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        />
+        <motion.div
+          className="absolute top-1/2 left-1/2 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl"
+          animate={{
+            scale: [1, 1.3, 1],
+            x: [-50, 50, -50],
+            y: [-50, 50, -50],
+          }}
+          transition={{
+            duration: 12,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        />
       </div>
 
       {/* Relationship status card */}
@@ -534,98 +584,177 @@ export default function CallClient() {
       )}
 
       {/* Main content */}
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-4">
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen p-8">
+        {/* Status text */}
         <motion.div
-          initial={{ scale: 0.9, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.5 }}
-          className="flex flex-col items-center"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-12 text-center"
         >
-          <h1 className="text-6xl md:text-7xl font-bold mb-2 bg-gradient-to-r from-purple-300 via-pink-300 to-purple-300 bg-clip-text text-transparent">
-            Ellie
+          <h1 className="text-5xl font-bold mb-3 bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 bg-clip-text text-transparent">
+            {status === "ready" && "Ready to Connect"}
+            {status === "connecting" && "Establishing Connection..."}
+            {status === "connected" && "Connected"}
+            {status === "closed" && "Call Ended"}
+            {status === "error" && "Connection Error"}
           </h1>
-          <p className="text-purple-200 text-sm mb-12">
-            {relationship 
+          <p className="text-purple-300 text-lg">
+            {status === "ready" && (relationship 
               ? `${relationship.stage} • ${MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS]}`
-              : "Voice Chat"
-            }
+              : "Start a conversation whenever you're ready"
+            )}
+            {status === "connecting" && "Just a moment..."}
+            {status === "connected" && (relationship
+              ? `${relationship.stage} • ${MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS]}`
+              : "Your conversation is live"
+            )}
+            {status === "closed" && "Thanks for talking"}
+            {status === "error" && "Something went wrong"}
           </p>
+        </motion.div>
 
-          {/* Main circle button */}
-          <div className="relative mb-8">
+        {/* Central orb visualization */}
+        <div className="relative flex items-center justify-center mb-16">
+          {/* Outer rings */}
+          {Array.from({ length: ringCount }).map((_, i) => (
             <motion.div
-              className="relative w-48 h-48"
-              animate={{ scale: status === "connected" ? pulseScale : 1 }}
-              transition={{ duration: 0.3 }}
-            >
-              {/* Glow effect */}
-              <div
-                className="absolute inset-0 rounded-full bg-gradient-to-br from-purple-600 to-pink-600"
-                style={{ boxShadow: glowIntensity }}
-              />
-              
-              {/* Main button */}
+              key={i}
+              className="absolute rounded-full border-2 border-purple-400/30"
+              style={{
+                width: 200 + i * 80,
+                height: 200 + i * 80,
+              }}
+              animate={{
+                scale: speaking ? [1, 1.1, 1] : 1,
+                opacity: speaking ? [0.3, 0.6, 0.3] : 0.2,
+              }}
+              transition={{
+                duration: 2 + i * 0.5,
+                repeat: Infinity,
+                ease: "easeInOut",
+                delay: i * 0.2,
+              }}
+            />
+          ))}
+
+          {/* Main orb */}
+          <motion.div
+            animate={{
+              scale: pulseScale,
+              boxShadow: `0 0 ${glowIntensity}px rgba(167, 139, 250, 0.8), 0 0 ${glowIntensity * 1.5}px rgba(236, 72, 153, 0.4)`,
+            }}
+            transition={{
+              type: "spring",
+              stiffness: 150,
+              damping: 15,
+            }}
+            className="relative w-48 h-48 rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-purple-600 flex items-center justify-center shadow-2xl"
+          >
+            {/* Inner glow */}
+            <motion.div
+              animate={{
+                opacity: speaking ? [0.4, 0.8, 0.4] : 0.3,
+              }}
+              transition={{
+                duration: 1.5,
+                repeat: Infinity,
+                ease: "easeInOut",
+              }}
+              className="absolute inset-4 rounded-full bg-white/20 blur-xl"
+            />
+
+            {/* Status icon */}
+            <div className="relative z-10 text-white">
+              {status === "ready" && (
+                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </svg>
+              )}
+              {status === "connecting" && (
+                <motion.svg
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                  className="w-20 h-20"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </motion.svg>
+              )}
+              {status === "connected" && (
+                <motion.svg
+                  animate={speaking ? { scale: [1, 1.2, 1] } : {}}
+                  transition={{ duration: 0.3 }}
+                  className="w-20 h-20"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                </motion.svg>
+              )}
+              {(status === "closed" || status === "error") && (
+                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Audio level indicator bars */}
+          {status === "connected" && (
+            <div className="absolute -bottom-16 flex gap-2">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <motion.div
+                  key={i}
+                  className="w-2 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full"
+                  animate={{
+                    height: speaking ? [8, 32, 8] : 8,
+                  }}
+                  transition={{
+                    duration: 0.5,
+                    repeat: Infinity,
+                    delay: i * 0.1,
+                    ease: "easeInOut",
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Controls */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="flex flex-col items-center gap-6"
+        >
+          <div className="flex gap-4">
+            {(status === "ready" || status === "closed" || status === "error") && (
               <motion.button
-                onClick={status === "ready" ? handleStartClick : hangUp}
-                className="relative w-full h-full rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center shadow-2xl hover:shadow-purple-500/50 transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={status === "connecting"}
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
+                onClick={handleStartClick}
+                className="px-8 py-4 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold text-lg shadow-lg hover:shadow-purple-500/50 transition-shadow flex items-center gap-2"
               >
-                {status === "ready" && (
-                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                  </svg>
-                )}
-                {status === "connecting" && (
-                  <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
-                )}
-                {status === "connected" && (
-                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                  </svg>
-                )}
-                {status === "closed" && (
-                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-                  </svg>
-                )}
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Start Call
               </motion.button>
+            )}
 
-              {/* Speaking indicator */}
-              {speaking && (
-                <motion.div
-                  className="absolute inset-0 rounded-full border-4 border-white/30"
-                  initial={{ scale: 1, opacity: 0.5 }}
-                  animate={{ scale: 1.2, opacity: 0 }}
-                  transition={{ duration: 0.5, repeat: Infinity }}
-                />
-              )}
-            </motion.div>
-
-            {/* Status text */}
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-center mt-6 text-purple-200 font-medium"
-            >
-              {status === "ready" && "Tap to call"}
-              {status === "connecting" && "Connecting..."}
-              {status === "connected" && "Connected"}
-              {status === "closed" && "Call ended"}
-              {status === "error" && "Connection error"}
-            </motion.p>
-          </div>
-
-          {/* Controls */}
-          <div className="flex flex-col items-center gap-4">
-            {status === "connected" && (
+            {(status === "connected" || status === "connecting") && (
               <>
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={toggleMute}
-                  className={`px-6 py-4 rounded-full transition-all shadow-lg ${
+                  disabled={status !== "connected"}
+                  className={`px-6 py-4 rounded-full font-semibold shadow-lg transition-all ${
                     muted
                       ? "bg-red-500 hover:bg-red-600 text-white"
                       : "bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white"
@@ -662,7 +791,7 @@ export default function CallClient() {
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10 mt-4"
+              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10"
             >
               <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
