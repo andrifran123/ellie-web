@@ -7,9 +7,21 @@ import { refreshSession, apiPost, apiPostForm } from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 
 /* ─────────────────────────────────────────────────────────────
-   Types & constants (unchanged logic)
+   Types & constants (UPDATED WITH RELATIONSHIP)
 ───────────────────────────────────────────────────────────── */
 type ChatMsg = { from: "you" | "ellie"; text: string; ts: number };
+
+// NEW: Relationship types
+interface RelationshipStatus {
+  level: number;
+  stage: string;
+  streak: number;
+  mood: string;
+  emotionalInvestment?: number;
+  totalInteractions?: number;
+  longestStreak?: number;
+  lastInteraction?: string;
+}
 
 type LangCode =
   | "en" | "is" | "pt" | "es" | "fr" | "de" | "it" | "sv"
@@ -19,13 +31,22 @@ type LangOption = { code: LangCode; name: string };
 
 type GetLanguageResponse = { language?: LangCode | null };
 type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string };
-type ChatResponse = { reply?: string; language?: LangCode; voiceMode?: string };
+
+// UPDATED: Chat response now includes relationship status
+type ChatResponse = { 
+  reply?: string; 
+  language?: LangCode; 
+  voiceMode?: string;
+  relationshipStatus?: RelationshipStatus; // NEW
+};
+
 type VoiceResponse = {
-  text?: string; // we do NOT render this in the chat bubbles
+  text?: string;
   reply?: string;
   language?: LangCode;
   voiceMode?: string;
   audioMp3Base64?: string | null;
+  relationshipStatus?: RelationshipStatus; // NEW
 };
 
 type PresetItem = { key: string; label: string; voice: string };
@@ -55,6 +76,25 @@ const LANGS: LangOption[] = [
   { code: "zh", name: "Chinese" },
 ];
 
+// NEW: Relationship stage configurations
+const STAGE_STYLES = {
+  "Curious Stranger": { color: "#94a3b8", emoji: "👀", bg: "from-slate-500/20", hint: "She doesn't know you yet. Be interesting!" },
+  "Friend with Tension": { color: "#fbbf24", emoji: "😊", bg: "from-amber-500/20", hint: "Chemistry is building. Keep the momentum!" },
+  "It's Complicated": { color: "#f87171", emoji: "😰", bg: "from-red-500/20", hint: "She has feelings but she's scared. Be patient." },
+  "Almost Together": { color: "#c084fc", emoji: "💕", bg: "from-purple-500/20", hint: "So close! Show her you're serious." },
+  "Exclusive": { color: "#f472b6", emoji: "❤️", bg: "from-pink-500/20", hint: "You did it! Keep the spark alive." }
+};
+
+// NEW: Mood indicators
+const MOOD_INDICATORS = {
+  flirty: "😘 Flirty",
+  playful: "😊 Playful", 
+  distant: "😔 Distant",
+  vulnerable: "🥺 Vulnerable",
+  normal: "😌 Normal",
+  mysterious: "🤔 Mysterious"
+};
+
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   try { return JSON.stringify(e); } catch { return String(e); }
@@ -78,7 +118,7 @@ function useToasts() {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Visual helpers (new)
+   Visual helpers (unchanged)
 ───────────────────────────────────────────────────────────── */
 const AuroraBG = () => (
   <>
@@ -105,7 +145,7 @@ const AuroraBG = () => (
 );
 
 /* ─────────────────────────────────────────────────────────────
-   Main component (merged features + new look)
+   Main component (WITH RELATIONSHIP PROGRESSION)
 ───────────────────────────────────────────────────────────── */
 export default function ChatPage() {
   const router = useRouter();
@@ -136,10 +176,52 @@ export default function ChatPage() {
   const [currentPreset, setCurrentPreset] = useState<string | null>(null);
   const loadingPresets = useRef(false);
 
-  /* Language picker logic (unchanged) */
+  // NEW: Relationship tracking
+  const [relationship, setRelationship] = useState<RelationshipStatus | null>(null);
+  const [showRelDetails, setShowRelDetails] = useState(false);
+  const [lastSeen, setLastSeen] = useState<Date | null>(null);
+
+  // NEW: Fetch relationship status
+  const fetchRelationshipStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/relationship-status", {
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRelationship(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch relationship status:", err);
+    }
+  }, []);
+
+  // NEW: Track last seen
+  useEffect(() => {
+    const lastSeenStr = localStorage.getItem("ellie_last_seen");
+    if (lastSeenStr) {
+      setLastSeen(new Date(lastSeenStr));
+    }
+    localStorage.setItem("ellie_last_seen", new Date().toISOString());
+  }, []);
+
+  // NEW: Fetch relationship on mount and periodically
+  useEffect(() => {
+    fetchRelationshipStatus();
+    const interval = setInterval(fetchRelationshipStatus, 30000); // Every 30 seconds
+    return () => clearInterval(interval);
+  }, [fetchRelationshipStatus]);
+
+  /* Language picker logic with better session handling */
   useEffect(() => {
     (async () => {
-      await refreshSession().catch(() => {});
+      // Always refresh session first to prevent auth issues
+      try {
+        await refreshSession();
+      } catch (err) {
+        console.error("Session refresh failed:", err);
+      }
+
       const stored = typeof window !== "undefined"
         ? (localStorage.getItem("ellie_language") as LangCode | null)
         : null;
@@ -195,142 +277,149 @@ export default function ChatPage() {
     setTyping(true);
     setLoading(true);
     try {
+      // Refresh session before sending
+      await refreshSession().catch(() => {});
+      
       const data = await apiPost<ChatResponse>("/api/chat", { userId: USER_ID, message: msg });
       if (data?.reply) append("ellie", data.reply);
       if (data?.voiceMode) setVoiceMode(data.voiceMode);
-    } catch (e) {
-      const msgText =
-        e instanceof Error && e.message === "401_NOT_LOGGED_IN"
-          ? "You’re not logged in. Please sign in."
-          : e instanceof Error && e.message === "402_PAYMENT_REQUIRED"
-          ? "Subscription required. Please subscribe."
-          : `Error: ${errorMessage(e)}`;
-      append("ellie", msgText);
-      if (msgText.includes("logged")) router.push("/login");
-      if (msgText.includes("Subscription")) router.push("/pricing");
-      else show("Failed to send. Check your API URL.");
-    } finally {
-      setTyping(false);
-      setLoading(false);
-    }
-  }, [append, input, langReady, show, router]);
-
-  const resetConversation = useCallback(async () => {
-    setMessages([]);
-    setVoiceMode(null);
-    await apiPost("/api/reset", { userId: USER_ID }).catch(() => {});
-    show("Conversation reset");
-  }, [show]);
-
-  /* Voice chat utils (unchanged) */
-  const isTypeSupported = (mime: string): boolean =>
-    typeof MediaRecorder !== "undefined" &&
-    typeof MediaRecorder.isTypeSupported === "function" &&
-    MediaRecorder.isTypeSupported(mime);
-
-  const sendVoiceBlob = useCallback(async (blob: Blob, mimeType?: string) => {
-    if (!langReady) return;
-    setTyping(true);
-    setLoading(true);
-    try {
-      const mt = (mimeType || blob.type || "").toLowerCase();
-      const ext = mt.includes("webm") ? "webm"
-        : mt.includes("ogg") ? "ogg"
-        : mt.includes("mpeg") ? "mp3"
-        : mt.includes("mp4") ? "m4a"
-        : mt.includes("wav") ? "wav"
-        : "webm";
-
-      const fd = new FormData();
-      fd.append("audio", blob, `clip.${ext}`);
-      fd.append("userId", USER_ID);
-      fd.append(
-        "language",
-        (typeof window !== "undefined" && (localStorage.getItem("ellie_language") as LangCode | null)) ||
-          chosenLang ||
-          "en"
-      );
-
-      const data = await apiPostForm<VoiceResponse>("/api/voice-chat", fd);
-
-      if (data?.reply) append("ellie", data.reply);
-      if (data?.voiceMode) setVoiceMode(data.voiceMode);
-
-      if (data?.audioMp3Base64) {
-        const audio = new Audio(`data:audio/mpeg;base64,${data.audioMp3Base64}`);
-        try { await audio.play(); } catch { /* autoplay block */ }
+      
+      // NEW: Update relationship if included in response
+      if (data?.relationshipStatus) {
+        setRelationship(data.relationshipStatus);
       }
     } catch (e) {
       const msgText =
         e instanceof Error && e.message === "401_NOT_LOGGED_IN"
-          ? "You’re not logged in. Please sign in."
-          : e instanceof Error && e.message === "402_PAYMENT_REQUIRED"
-          ? "Subscription required. Please subscribe."
-          : `Voice error: ${errorMessage(e)}`;
-      append("ellie", msgText);
-      if (msgText.includes("logged")) router.push("/login");
-      if (msgText.includes("Subscription")) router.push("/pricing");
-      else show("Voice send failed.");
+          ? "Session expired. Refreshing..."
+          : `Error: ${errorMessage(e)}`;
+      show(msgText);
+      
+      // If auth error, try to refresh session instead of redirecting
+      if (e instanceof Error && e.message === "401_NOT_LOGGED_IN") {
+        try {
+          await refreshSession();
+          show("Session refreshed. Please try sending again.");
+        } catch {
+          show("Please refresh the page and log in again.");
+          setTimeout(() => router.push("/login"), 2000);
+        }
+      }
     } finally {
       setTyping(false);
       setLoading(false);
     }
-  }, [append, chosenLang, langReady, show, router]);
+  }, [langReady, input, append, show, router]);
 
+  // NEW: Handle Enter key to send message
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendText();
+    }
+  }, [sendText]);
+
+  /* Voice recording logic */
   const startRecording = useCallback(async () => {
-    if (!langReady) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferred = "audio/webm;codecs=opus";
-      const fallback = "audio/webm";
-      const picked = isTypeSupported(preferred)
-        ? preferred
-        : isTypeSupported(fallback)
-          ? fallback
-          : "";
-
-      const mr = new MediaRecorder(stream, picked ? { mimeType: picked } : undefined);
-      chunksRef.current = [];
-      mr.ondataavailable = (ev: BlobEvent) => {
-        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
-      };
-      mr.onstop = () => {
-        const uploadType = picked || mr.mimeType || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type: uploadType });
-        void sendVoiceBlob(blob, uploadType);
-        stream.getTracks().forEach((t) => t.stop());
-      };
+      const mr = new MediaRecorder(stream);
       mediaRecorderRef.current = mr;
+      chunksRef.current = [];
+
+      mr.ondataavailable = (ev) => {
+        if (ev.data.size > 0) chunksRef.current.push(ev.data);
+      };
+
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (chunksRef.current.length === 0) return;
+
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        setLoading(true);
+        setTyping(true);
+
+        try {
+          // Refresh session before voice request
+          await refreshSession().catch(() => {});
+          
+          const data = await apiPostForm<VoiceResponse>("/api/voice", {
+            audio: new File([blob], "voice.webm", { type: "audio/webm" }),
+            userId: USER_ID,
+          });
+          
+          if (data?.text) append("you", data.text);
+          if (data?.reply) append("ellie", data.reply);
+          if (data?.voiceMode) setVoiceMode(data.voiceMode);
+          
+          // NEW: Update relationship if included in response
+          if (data?.relationshipStatus) {
+            setRelationship(data.relationshipStatus);
+          }
+
+          if (data?.audioMp3Base64) {
+            try {
+              const audioBlob = await (await fetch(`data:audio/mp3;base64,${data.audioMp3Base64}`)).blob();
+              const audioUrl = URL.createObjectURL(audioBlob);
+              const audio = new Audio(audioUrl);
+              audio.play().catch((err) => console.error("Audio playback error:", err));
+            } catch (err) {
+              console.error("Audio decode error:", err);
+            }
+          }
+        } catch (e) {
+          show(`Error: ${errorMessage(e)}`);
+          
+          // Handle auth errors for voice too
+          if (e instanceof Error && e.message === "401_NOT_LOGGED_IN") {
+            try {
+              await refreshSession();
+              show("Session refreshed. Please try recording again.");
+            } catch {
+              show("Please refresh the page and log in again.");
+              setTimeout(() => router.push("/login"), 2000);
+            }
+          }
+        } finally {
+          setLoading(false);
+          setTyping(false);
+        }
+      };
+
       mr.start();
       setRecording(true);
-    } catch {
-      show("Microphone permission required.");
+    } catch (err) {
+      show(`Could not start recording: ${errorMessage(err)}`);
     }
-  }, [langReady, sendVoiceBlob, show]);
+  }, [append, show, router]);
 
   const stopRecording = useCallback(() => {
-    const mr = mediaRecorderRef.current;
-    if (mr && mr.state !== "inactive") mr.stop();
+    mediaRecorderRef.current?.stop();
     setRecording(false);
   }, []);
 
-  const openSettings = useCallback(async () => {
-    setSettingsOpen(true);
+  /* Reset conversation */
+  const resetConversation = useCallback(async () => {
+    try {
+      await apiPost("/api/reset", { userId: USER_ID });
+      setMessages([]);
+      show("Conversation cleared");
+    } catch (e) {
+      show(`Error resetting: ${errorMessage(e)}`);
+    }
+  }, [show]);
+
+  /* Preset logic */
+  const loadPresets = useCallback(async () => {
     if (loadingPresets.current) return;
     loadingPresets.current = true;
     try {
-      const [pr, cr] = await Promise.all([
-        fetch(`/api/get-voice-presets`, { credentials: "include" }).then((r) =>
-          r.json() as Promise<PresetsResponse>
-        ),
-        fetch(`/api/get-voice-preset?userId=${encodeURIComponent(USER_ID)}`, {
-          credentials: "include",
-        }).then((r) => r.json() as Promise<CurrentPresetResponse>),
-      ]);
-      setPresets(pr.presets || []);
-      setCurrentPreset(cr.preset ?? null);
-    } catch {
-      show("Could not load voice presets.");
+      const data = await apiPost<PresetsResponse>("/api/get-presets", { userId: USER_ID });
+      setPresets(data?.presets ?? []);
+      const cur = await apiPost<CurrentPresetResponse>("/api/get-current-preset", { userId: USER_ID });
+      setCurrentPreset(cur?.preset ?? null);
+    } catch (e) {
+      show(`Could not load presets: ${errorMessage(e)}`);
     } finally {
       loadingPresets.current = false;
     }
@@ -338,38 +427,39 @@ export default function ChatPage() {
 
   const applyPreset = useCallback(async (key: string) => {
     try {
-      const r = await fetch(`/api/apply-voice-preset`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: USER_ID, preset: key }),
-        credentials: "include",
-      });
-      const data = (await r.json()) as ApplyPresetResponse;
+      const data = await apiPost<ApplyPresetResponse>("/api/apply-preset", { userId: USER_ID, preset: key });
       if (data?.ok) {
-        setCurrentPreset(key);
-        show(`Voice preset set to “${key}”`);
-      } else {
-        show("Could not apply preset.");
+        setCurrentPreset(data.preset ?? key);
+        show(`Preset applied: ${data.preset}`);
       }
-    } catch {
-      show("Could not apply preset.");
+    } catch (e) {
+      show(`Could not apply preset: ${errorMessage(e)}`);
     }
   }, [show]);
 
-  /* ─────────────────────────────────────────────
-     Language gating screen (restyled)
-  ───────────────────────────────────────────── */
+  useEffect(() => {
+    if (settingsOpen) loadPresets();
+  }, [settingsOpen, loadPresets]);
+
+  // Get current stage style for relationship card
+  const currentStageStyle = relationship 
+    ? STAGE_STYLES[relationship.stage as keyof typeof STAGE_STYLES] || STAGE_STYLES["Curious Stranger"]
+    : null;
+
+  /* ─────────────────────────────────────────────────────────────
+     UI render
+  ───────────────────────────────────────────────────────────── */
   if (!langReady) {
     return (
-      <div className="relative min-h-screen w-full text-white">
+      <div className="relative min-h-screen w-full flex items-center justify-center text-white">
         <AuroraBG />
-        <div className="min-h-screen grid place-items-center px-6">
-          <div className="w-[360px] max-w-full rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_10px_80px_rgba(140,110,255,0.22)] p-6">
-            <h2 className="text-xl font-semibold">Choose your language</h2>
+        <div className="relative z-10 w-full max-w-sm mx-auto p-6">
+          <h2 className="text-3xl font-bold mb-6 text-center">Choose your language</h2>
+          <div className="space-y-4">
             <select
               value={chosenLang}
               onChange={(e) => setChosenLang(e.target.value as LangCode)}
-              className="mt-3 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-[#A78BFA]/40 transition"
+              className="w-full rounded-lg bg-white/10 border border-white/20 px-4 py-3 text-white outline-none focus:ring-2 focus:ring-[#A78BFA]/40"
             >
               {LANGS.map((o) => (
                 <option key={o.code} value={o.code}>
@@ -379,165 +469,242 @@ export default function ChatPage() {
             </select>
             <button
               onClick={confirmLanguage}
-              className="mt-4 w-full rounded-xl bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] text-black font-semibold px-4 py-2 shadow-lg hover:opacity-90 transition"
+              className="w-full rounded-lg bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] text-black font-semibold px-4 py-3 hover:opacity-90 transition"
             >
-              Continue
+              Confirm
             </button>
           </div>
         </div>
-
-        {/* Keyframes (global) */}
-        <StyleKeyframes />
       </div>
     );
   }
 
-  /* ─────────────────────────────────────────────
-     Chat page
-  ───────────────────────────────────────────── */
   return (
-    <div className="relative min-h-screen w-full text-white">
+    <div className="relative min-h-screen w-full overflow-hidden text-white">
       <AuroraBG />
 
-      {/* Header (floating) */}
-      <header className="relative z-10 max-w-5xl mx-auto px-6 pt-6 pb-2 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="size-9 grid place-items-center rounded-xl bg-white/10 ring-1 ring-white/15">✨</div>
-          <h1 className="text-2xl font-semibold">Ellie</h1>
-          <span className="sr-only">voiceMode:{voiceMode ?? "unknown"}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={openSettings}
-            className="rounded-xl border border-white/15 bg-white/5 backdrop-blur px-3 py-1.5 text-sm hover:bg-white/10 transition"
-          >
-            Settings
-          </button>
-          <Link
-            href="/"
-            className="rounded-xl border border-white/15 bg-white/5 backdrop-blur px-3 py-1.5 text-sm hover:bg-white/10 transition"
-          >
-            Home
-          </Link>
-        </div>
-      </header>
+      {/* NEW: Relationship status card */}
+      {relationship && (
+        <motion.div
+          initial={{ y: -20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="absolute top-4 left-4 right-4 z-30 flex justify-center"
+        >
+          <div className="w-full max-w-2xl">
+            <div 
+              className="bg-black/40 backdrop-blur-xl rounded-2xl p-4 border border-white/10 shadow-2xl cursor-pointer hover:bg-black/50 transition-colors"
+              onClick={() => setShowRelDetails(!showRelDetails)}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{currentStageStyle?.emoji}</span>
+                  <div>
+                    <h3 
+                      className="font-semibold text-lg"
+                      style={{ color: currentStageStyle?.color }}
+                    >
+                      {relationship.stage}
+                    </h3>
+                    <p className="text-xs text-white/50">
+                      {MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS] || relationship.mood}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold" style={{ color: currentStageStyle?.color }}>
+                    {relationship.level}
+                  </div>
+                  <div className="text-xs text-white/50">
+                    🔥 {relationship.streak} day{relationship.streak !== 1 ? 's' : ''}
+                  </div>
+                </div>
+              </div>
 
-      {/* Chat container */}
-      <main className="relative z-10 max-w-3xl mx-auto px-6 pb-28">
-        <div className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-2xl shadow-[0_10px_120px_rgba(140,110,255,0.18)] overflow-hidden animate-drop-in">
-          {/* Chat inner header strip */}
-          <div className="px-6 py-4 border-b border-white/10 text-sm text-white/70 flex items-center justify-between">
-            <span>Futuristic Cozy Lounge</span>
-            <span className="flex items-center gap-2">
-              <span className="inline-block size-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-white/60">Ready</span>
-            </span>
-          </div>
+              {/* Progress bar */}
+              <div className="relative h-2 bg-white/10 rounded-full overflow-hidden mt-3">
+                <motion.div
+                  className={`absolute inset-y-0 left-0 bg-gradient-to-r ${currentStageStyle?.bg} to-transparent`}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${relationship.level}%` }}
+                  transition={{ duration: 0.5, ease: "easeOut" }}
+                />
+              </div>
 
-          {/* Messages */}
-          <div ref={scrollRef} className="h-[64vh] md:h-[58vh] overflow-y-auto px-4 py-5 space-y-4">
-            {messages.length === 0 && (
-              <div className="text-white/60 text-sm px-2">Say hi to Ellie…</div>
-            )}
-
-            <AnimatePresence initial={false}>
-              {messages.map((m, i) => {
-                const isYou = m.from === "you";
-                return (
+              {/* Expanded details */}
+              <AnimatePresence>
+                {showRelDetails && (
                   <motion.div
-                    key={m.ts + ":" + i}
-                    initial={{ opacity: 0, y: 14, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut" }}
-                    className={`flex ${isYou ? "justify-end" : "justify-start"}`}
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
                   >
-                    <div className="flex items-end gap-2 max-w-[85%]">
-                      {!isYou && (
-                        <div className="size-8 rounded-full bg-gradient-to-br from-[#A78BFA]/80 to-[#5EEAD4]/70 grid place-items-center text-[11px] font-bold shadow-[0_0_32px_rgba(140,110,255,0.25)]">
-                          E
+                    <div className="mt-3 pt-3 border-t border-white/10">
+                      <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                        <div>
+                          <span className="text-white/60">Total Interactions:</span>
+                          <span className="ml-2 text-white/90">{relationship.totalInteractions || 0}</span>
                         </div>
-                      )}
-
-                      <div
-                        className={[
-                          "rounded-2xl px-3 py-2 text-sm leading-6",
-                          isYou
-                            ? "bg-white/10 border border-white/10"
-                            : "bg-gradient-to-br from-[#A78BFA]/20 to-[#5EEAD4]/15 border border-[#A78BFA]/25 shadow-[0_10px_40px_rgba(140,110,255,0.15)]",
-                        ].join(" ")}
-                      >
-                        <div>{m.text}</div>
-                        <div className={`mt-1 text-[10px] ${isYou ? "text-white/60" : "text-white/70"}`}>
-                          {fmtTime(m.ts)}
+                        <div>
+                          <span className="text-white/60">Emotional Bond:</span>
+                          <span className="ml-2 text-white/90">
+                            {Math.round((relationship.emotionalInvestment || 0) * 100)}%
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-white/60">Longest Streak:</span>
+                          <span className="ml-2 text-white/90">{relationship.longestStreak || 0} days</span>
+                        </div>
+                        <div>
+                          <span className="text-white/60">Last Interaction:</span>
+                          <span className="ml-2 text-white/90">
+                            {relationship.lastInteraction 
+                              ? new Date(relationship.lastInteraction).toLocaleDateString()
+                              : 'Today'
+                            }
+                          </span>
                         </div>
                       </div>
-
-                      {isYou && (
-                        <div className="size-8 rounded-full bg-white text-black grid place-items-center text-[11px] font-bold">
-                          Y
-                        </div>
-                      )}
+                      <p className="text-xs text-white/50 italic">
+                        {currentStageStyle?.hint}
+                      </p>
                     </div>
                   </motion.div>
-                );
-              })}
-            </AnimatePresence>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+        </motion.div>
+      )}
 
-            {/* Typing indicator */}
-            {typing && (
+      {/* Main content */}
+      <main className="relative z-10 flex flex-col items-center justify-center min-h-screen p-4">
+        <div className="w-full max-w-2xl mx-auto flex flex-col gap-4" style={{ height: "85vh" }}>
+          {/* Top bar */}
+          <div className="flex items-center justify-between px-2">
+            <h1 className="text-2xl font-bold bg-gradient-to-r from-[#A78BFA] via-white to-[#5EEAD4] bg-clip-text text-transparent">
+              Ellie
+            </h1>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 transition"
+            >
+              ⚙️ Settings
+            </button>
+          </div>
+
+          {/* Chat messages */}
+          <div className="flex-1 overflow-y-auto space-y-3 px-2" ref={scrollRef}>
+            {messages.map((m, idx) => (
               <motion.div
-                initial={{ opacity: 0, y: 8 }}
+                key={idx}
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex justify-start"
+                className={`flex ${m.from === "you" ? "justify-end" : "justify-start"}`}
               >
-                <div className="flex items-end gap-2 max-w-[85%]">
-                  <div className="size-8 rounded-full bg-gradient-to-br from-[#A78BFA]/80 to-[#5EEAD4]/70 grid place-items-center text-[11px] font-bold">
-                    E
-                  </div>
-                  <div className="rounded-2xl px-3 py-2 text-sm leading-6 bg-gradient-to-br from-[#A78BFA]/20 to-[#5EEAD4]/15 border border-[#A78BFA]/25">
-                    <span className="inline-flex gap-1">
-                      <span className="typing-dot">•</span>
-                      <span className="typing-dot">•</span>
-                      <span className="typing-dot">•</span>
-                    </span>
+                <div
+                  className={`max-w-[75%] rounded-2xl px-4 py-3 ${
+                    m.from === "you"
+                      ? "bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] text-black"
+                      : "bg-white/10 backdrop-blur-md border border-white/15"
+                  }`}
+                >
+                  <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">{m.text}</div>
+                  <div className={`text-[10px] mt-1 ${m.from === "you" ? "text-black/60" : "text-white/50"}`}>
+                    {fmtTime(m.ts)}
                   </div>
                 </div>
               </motion.div>
+            ))}
+
+            {typing && (
+              <div className="flex justify-start">
+                <div className="bg-white/10 backdrop-blur-md border border-white/15 rounded-2xl px-4 py-3">
+                  <div className="flex gap-1">
+                    <span className="typing-dot bg-white"></span>
+                    <span className="typing-dot bg-white"></span>
+                    <span className="typing-dot bg-white"></span>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 
-          {/* Composer */}
-          <div className="border-t border-white/10 p-3">
-            <div className="flex items-center gap-2 bg-white/5 backdrop-blur-xl rounded-2xl border border-white/10 px-2 py-2 focus-within:ring-2 focus-within:ring-[#A78BFA]/40 transition">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a message…"
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void sendText();
-                }}
-                className="flex-1 bg-transparent px-3 py-2 outline-none text-sm placeholder:text-white/40"
-              />
-              <div className="flex items-center gap-2 pr-1">
-                {!recording ? (
-                  <button
-                    onClick={() => void startRecording()}
-                    disabled={loading}
-                    className="rounded-xl border border-emerald-500/40 bg-emerald-500/20 px-3 py-2 hover:bg-emerald-500/25 transition"
-                    title="Record voice"
-                  >
-                    🎤
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => stopRecording()}
-                    className="rounded-xl border border-rose-500/50 bg-rose-600/80 px-3 py-2 hover:bg-rose-600/90 transition"
-                    title="Stop"
-                  >
-                    ⏹
-                  </button>
+          {/* Voice mode hint */}
+          {voiceMode && (
+            <div className="px-2">
+              <div className="rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-xs text-white/70 text-center">
+                💡 {voiceMode === "suggest_voice" && "Ellie suggests trying voice chat"}
+                {voiceMode === "request_voice" && (
+                  <>
+                    Ellie is asking you to use voice. 
+                    <button
+                      onClick={startRecording}
+                      disabled={recording || loading}
+                      className="ml-2 underline hover:text-white transition"
+                    >
+                      Start recording
+                    </button>
+                    {" or "}
+                    <button
+                      onClick={() => setVoiceMode(null)}
+                      className="underline hover:text-white transition"
+                      title="Dismiss this hint"
+                    >
+                      Ignore
+                    </button>
+                  </>
                 )}
+                {voiceMode === "insist_voice" && (
+                  <>
+                    🎤 Ellie really wants to hear your voice! 
+                    <button
+                      onClick={startRecording}
+                      disabled={recording || loading}
+                      className="ml-2 underline hover:text-white transition"
+                    >
+                      Record now
+                    </button>
+                    {" or "}
+                    <button
+                      onClick={() => append("you", "Can I just type instead?")}
+                      className="underline hover:text-white transition"
+                      title="Ask her"
+                    >
+                      Ask her
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Composer */}
+          <div className="px-2">
+            <div className="rounded-2xl border border-white/15 bg-white/5 backdrop-blur-md p-3">
+              <div className="flex gap-2">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Message Ellie... (Press Enter to send)"
+                  rows={2}
+                  className="flex-1 bg-transparent outline-none resize-none placeholder:text-white/40"
+                  disabled={loading}
+                />
+                <button
+                  onClick={() => void (recording ? stopRecording() : startRecording())}
+                  disabled={loading}
+                  className={`rounded-xl px-4 py-2 font-semibold transition disabled:opacity-60 ${
+                    recording
+                      ? "bg-red-600 text-white"
+                      : "bg-white/10 hover:bg-white/20 border border-white/15"
+                  }`}
+                  title={recording ? "Stop" : "Record"}
+                >
+                  {recording ? "⏹" : "🎤"}
+                </button>
                 <button
                   onClick={() => void sendText()}
                   disabled={loading || !input.trim()}
@@ -556,12 +723,12 @@ export default function ChatPage() {
               >
                 Reset
               </button>
-              <button
-                onClick={() => router.push("/call")}
+              <Link
+                href="/call"
                 className="rounded-lg bg-white text-black px-3 py-2 text-xs font-semibold hover:opacity-90 transition"
               >
                 📞 Call
-              </button>
+              </Link>
             </div>
           </div>
         </div>
@@ -579,7 +746,7 @@ export default function ChatPage() {
         ))}
       </div>
 
-      {/* Settings Drawer (restyled glass + glow) */}
+      {/* Settings Drawer */}
       <AnimatePresence>
         {settingsOpen && (
           <motion.div
@@ -608,6 +775,31 @@ export default function ChatPage() {
               </div>
 
               <div className="mt-5 space-y-6">
+                {/* Relationship Info */}
+                {relationship && (
+                  <section>
+                    <div className="text-sm font-medium mb-2">Relationship Progress</div>
+                    <div className="bg-white/5 rounded-lg p-3 space-y-2">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-white/60">Stage:</span>
+                        <span>{relationship.stage}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-white/60">Level:</span>
+                        <span>{relationship.level}/100</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-white/60">Current Streak:</span>
+                        <span>{relationship.streak} days</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-white/60">Longest Streak:</span>
+                        <span>{relationship.longestStreak || 0} days</span>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
                 {/* Language */}
                 <section>
                   <div className="text-sm font-medium mb-2">Language</div>
