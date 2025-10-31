@@ -6,7 +6,35 @@ import { motion, AnimatePresence } from "framer-motion";
 
 type Status = "ready" | "connecting" | "connected" | "closed" | "error";
 
+interface RelationshipStatus {
+  level: number;
+  stage: string;
+  streak: number;
+  mood: string;
+  emotionalInvestment?: number;
+  totalInteractions?: number;
+}
+
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+
+// Relationship stage colors and emojis
+const STAGE_STYLES = {
+  "Curious Stranger": { color: "#94a3b8", emoji: "👀", bg: "from-slate-500/20" },
+  "Friend with Tension": { color: "#fbbf24", emoji: "😊", bg: "from-amber-500/20" },
+  "It's Complicated": { color: "#f87171", emoji: "😰", bg: "from-red-500/20" },
+  "Almost Together": { color: "#c084fc", emoji: "💕", bg: "from-purple-500/20" },
+  "Exclusive": { color: "#f472b6", emoji: "❤️", bg: "from-pink-500/20" }
+};
+
+// Mood indicators
+const MOOD_INDICATORS = {
+  flirty: "😘 Flirty",
+  playful: "😊 Playful", 
+  distant: "😔 Distant",
+  vulnerable: "🥺 Vulnerable",
+  normal: "😌 Normal",
+  mysterious: "🤔 Mysterious"
+};
 
 export default function CallClient() {
   const { show } = useToasts();
@@ -18,6 +46,10 @@ export default function CallClient() {
     const v = typeof window !== "undefined" ? localStorage.getItem("ellie_call_gain") : null;
     return v ? Math.max(0.2, Math.min(3, Number(v))) : 1.0;
   });
+
+  // Relationship status
+  const [relationship, setRelationship] = useState<RelationshipStatus | null>(null);
+  const [showRelationshipDetails, setShowRelationshipDetails] = useState(false);
 
   // --- Core refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -44,6 +76,28 @@ export default function CallClient() {
 
   // Detect iOS
   const isIOS = typeof window !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  // Fetch relationship status
+  const fetchRelationshipStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/relationship-status", {
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRelationship(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch relationship status:", err);
+    }
+  }, []);
+
+  // Fetch on mount and periodically
+  useEffect(() => {
+    fetchRelationshipStatus();
+    const interval = setInterval(fetchRelationshipStatus, 30000); // Every 30 seconds
+    return () => clearInterval(interval);
+  }, [fetchRelationshipStatus]);
 
   // ---------- helpers ----------
   function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
@@ -74,240 +128,195 @@ export default function CallClient() {
     return out;
   }
 
-  function abToBase64(buf: ArrayBufferLike): string {
-    const bytes = new Uint8Array(buf);
-    const chunk = 0x8000;
+  function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate: number): AudioBuffer {
+    const ac = acRef.current!;
+    const buffer = ac.createBuffer(1, pcm16.length, sampleRate);
+    const channel = buffer.getChannelData(0);
+    for (let i = 0; i < pcm16.length; i++) {
+      channel[i] = pcm16[i] / 32768;
+    }
+    return buffer;
+  }
+
+  function abToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
     let binary = "";
-    for (let i = 0; i < bytes.length; i += chunk) {
-      const chunkArray = Array.from(bytes.subarray(i, i + chunk));
-      binary += String.fromCharCode(...chunkArray);
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
     }
     return btoa(binary);
   }
 
-  function base64ToArrayBuffer(b64: string): ArrayBuffer {
-    const binary = atob(b64);
-    const len = binary.length;
+  function base64ToArrayBuffer(base64: string): ArrayBuffer {
+    const binaryString = atob(base64);
+    const len = binaryString.length;
     const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
     return bytes.buffer;
   }
 
-  function pcm16ToAudioBuffer(pcm16: Int16Array, sampleRate = 24000): AudioBuffer {
-    const ac = acRef.current!;
-    const float = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) {
-      float[i] = Math.max(-1, Math.min(1, pcm16[i] / 32768));
-    }
-    const buffer = ac.createBuffer(1, float.length, sampleRate);
-    buffer.copyToChannel(float, 0);
-    return buffer;
-  }
-
-  // ---------- Visual meter ----------
-  const startMeter = useCallback((nodeAfterGain: AudioNode) => {
-    const ac = acRef.current!;
-    const analyser = ac.createAnalyser();
-    analyser.fftSize = 1024;
-    analyserRef.current = analyser;
-    nodeAfterGain.connect(analyser);
-
-    const buf = new Float32Array(analyser.fftSize);
-    let raf = 0;
-    let calmTimer: number | null = null;
-
-    const loop = () => {
-      analyser.getFloatTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-      const rms = Math.sqrt(sum / buf.length);
-      const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
-      setLevel((prev) => prev * 0.65 + boosted * 0.35);
-
-      const speakingNow = boosted > 0.07;
-      if (speakingNow) {
-        setSpeaking(true);
-        if (calmTimer) window.clearTimeout(calmTimer);
-        calmTimer = window.setTimeout(() => setSpeaking(false), 160);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      try {
-        nodeAfterGain.disconnect(analyser);
-      } catch {}
-      try {
-        analyser.disconnect();
-      } catch {}
-      analyserRef.current = null;
-    };
-  }, []);
-
-  // ---------- cleanup ----------
-  const stopPinger = () => {
-    if (wsPingRef.current) {
-      window.clearInterval(wsPingRef.current);
-      wsPingRef.current = null;
-    }
-  };
-
+  // Audio cleanup
   const cleanupAudio = useCallback(() => {
-    try { processorRef.current?.disconnect(); } catch {}
-    processorRef.current = null;
-    
-    try { gainRef.current?.disconnect(); } catch {}
-    gainRef.current = null;
-    
-    try { micNodeRef.current?.disconnect(); } catch {}
-    micNodeRef.current = null;
-    
-    try { 
-      micStreamRef.current?.getTracks().forEach((t) => t.stop()); 
-    } catch {}
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
-
-    try { routeKeepaliveRef.current?.stop(); } catch {}
-    try { routeKeepaliveRef.current?.disconnect(); } catch {}
-    routeKeepaliveRef.current = null;
-    
-    try { speakGainRef.current?.disconnect(); } catch {}
-    speakGainRef.current = null;
-
-    nextPlayTimeRef.current = 0;
+    processorRef.current?.disconnect();
+    micNodeRef.current?.disconnect();
+    gainRef.current?.disconnect();
+    analyserRef.current?.disconnect();
+    routeKeepaliveRef.current?.stop();
+    routeKeepaliveRef.current?.disconnect();
   }, []);
 
   const cleanupAll = useCallback(() => {
-    stopPinger();
     cleanupAudio();
     try { wsRef.current?.close(); } catch {}
-    wsRef.current = null;
+    if (wsPingRef.current) {
+      clearInterval(wsPingRef.current);
+      wsPingRef.current = null;
+    }
   }, [cleanupAudio]);
 
-  // ---------- Audio setup ----------
+  // Ensure audio context
   const ensureAudio = useCallback(async () => {
-    if (!acRef.current) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      acRef.current = new AudioCtx({ sampleRate: 48000, latencyHint: "interactive" });
-    }
+    if (acRef.current?.state === "running") return;
 
-    const ac = acRef.current;
+    const ac = acRef.current || new (window.AudioContext || (window as any).webkitAudioContext)();
+    acRef.current = ac;
+
     if (ac.state === "suspended") await ac.resume();
 
     if (!speakGainRef.current) {
-      const speakGain = ac.createGain();
-      speakGain.gain.value = 1.0;
-      speakGain.connect(ac.destination);
-      speakGainRef.current = speakGain;
+      const g = ac.createGain();
+      g.gain.value = 1.0;
+      g.connect(ac.destination);
+      speakGainRef.current = g;
+    }
 
+    // iOS routing keepalive
+    if (isIOS && !routeKeepaliveRef.current) {
       const osc = ac.createOscillator();
-      osc.frequency.value = 20;
-      const oscGain = ac.createGain();
-      oscGain.gain.value = 0.0001;
-      osc.connect(oscGain);
-      oscGain.connect(ac.destination);
+      const g = ac.createGain();
+      g.gain.value = 0.0001;
+      osc.connect(g).connect(ac.destination);
+      osc.frequency.value = 20000;
       osc.start();
       routeKeepaliveRef.current = osc;
     }
+  }, [isIOS]);
 
-    if (!micStreamRef.current) {
+  // Schedule playback
+  const schedulePlayback = useCallback((audioBuffer: AudioBuffer) => {
+    if (!acRef.current || !speakGainRef.current) return;
+    const ac = acRef.current;
+    const source = ac.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(speakGainRef.current);
+
+    const now = ac.currentTime;
+    const startTime = Math.max(now + lookaheadPaddingSec, nextPlayTimeRef.current);
+    source.start(startTime);
+    nextPlayTimeRef.current = startTime + audioBuffer.duration;
+
+    setSpeaking(true);
+    source.onended = () => {
+      if (ac.currentTime >= nextPlayTimeRef.current - 0.1) {
+        setSpeaking(false);
+      }
+    };
+  }, []);
+
+  // Start metering
+  const startMeter = useCallback(() => {
+    if (!analyserRef.current) return;
+    const analyser = analyserRef.current;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    
+    const measure = () => {
+      if (!analyserRef.current) return;
+      analyser.getByteFrequencyData(dataArray);
+      const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+      setLevel(avg / 255);
+      requestAnimationFrame(measure);
+    };
+    measure();
+  }, []);
+
+  // Stop pinger
+  const stopPinger = useCallback(() => {
+    if (wsPingRef.current) {
+      clearInterval(wsPingRef.current);
+      wsPingRef.current = null;
+    }
+  }, []);
+
+  // Start call
+  const startCall = useCallback(async () => {
+    try {
+      cleanupAll();
+      setStatus("connecting");
+      nextPlayTimeRef.current = 0;
+
+      // Audio setup
+      await ensureAudio();
+      const ac = acRef.current!;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: false,
-          sampleRate: { ideal: 48000 },
-        },
+          autoGainControl: true,
+          sampleRate: { ideal: 24000 }
+        }
       });
       micStreamRef.current = stream;
-    }
-  }, []);
 
-  const schedulePlayback = useCallback((audioBuffer: AudioBuffer) => {
-    const ac = acRef.current;
-    const speakGain = speakGainRef.current;
-    if (!ac || !speakGain) return;
+      const micNode = ac.createMediaStreamSource(stream);
+      const gainNode = ac.createGain();
+      gainNode.gain.value = gain;
+      const analyser = ac.createAnalyser();
+      analyser.fftSize = 256;
+      
+      micNode.connect(gainNode).connect(analyser);
+      micNodeRef.current = micNode;
+      gainRef.current = gainNode;
+      analyserRef.current = analyser;
 
-    const now = ac.currentTime;
-    if (nextPlayTimeRef.current < now) {
-      nextPlayTimeRef.current = now + lookaheadPaddingSec;
-    }
+      const processor = ac.createScriptProcessor(4096, 1, 1);
+      gainNode.connect(processor);
+      processor.connect(ac.destination);
+      processorRef.current = processor;
 
-    const src = ac.createBufferSource();
-    src.buffer = audioBuffer;
-    src.connect(speakGain);
-    src.start(nextPlayTimeRef.current);
-    nextPlayTimeRef.current += audioBuffer.duration;
-  }, []);
+      startMeter();
 
-  // ---------- Call logic ----------
-  const startCall = useCallback(async () => {
-    try {
-      setStatus("connecting");
-
+      // WebSocket
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
+      // Connection timeout
       const connectionTimeout = setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
+        if (ws.readyState === WebSocket.CONNECTING) {
           ws.close();
           setStatus("error");
-          show("Connection timeout");
+          show("Connection timed out. Please try again.");
         }
-      }, 15000);
+      }, 10000);
 
-      ws.onopen = async () => {
+      ws.onopen = () => {
         clearTimeout(connectionTimeout);
         setStatus("connected");
-        show("Connected!");
-
-        try {
-          await ensureAudio();
-        } catch {
-          // Silent failure
-        }
-
-        let realUserId = "default-user";
-        try {
-          const meRes = await fetch("/api/auth/me", { credentials: "include" });
-          if (meRes.ok) {
-            const me = await meRes.json();
-            realUserId = me.userId || "default-user";
-          }
-        } catch {}
-
-        const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
-        ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
-
-        const ac = acRef.current!;
-        const stream = micStreamRef.current!;
-        const src = ac.createMediaStreamSource(stream);
-        micNodeRef.current = src;
-
-        const gn = ac.createGain();
-        gn.gain.value = gain;
-        gainRef.current = gn;
-        src.connect(gn);
-        startMeter(gn);
+        show("Call connected! Start speaking...");
+        
+        // Refresh relationship status on connection
+        fetchRelationshipStatus();
+        
+        ws.send(JSON.stringify({ type: "session.start" }));
 
         const contextSampleRate = ac.sampleRate;
-        const proc = ac.createScriptProcessor(4096, 1, 1);
-        processorRef.current = proc;
-        gn.connect(proc);
-
-        const mutedNode = ac.createGain();
-        mutedNode.gain.value = 0;
-        proc.connect(mutedNode);
-        mutedNode.connect(ac.destination);
-
-        proc.onaudioprocess = (ev) => {
+        processor.onaudioprocess = (e) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-
-          const inputCh = ev.inputBuffer.getChannelData(0);
-          const mono24k: Float32Array =
-            contextSampleRate !== 24000
+          const inputCh = e.inputBuffer.getChannelData(0);
+          const mono24k = contextSampleRate !== 24000
               ? resampleTo24k(inputCh, contextSampleRate)
               : new Float32Array(inputCh);
 
@@ -332,6 +341,9 @@ export default function CallClient() {
             const pcm16 = new Int16Array(ab);
             const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
             schedulePlayback(audioBuffer);
+          } else if (obj?.type === "relationship-update") {
+            // Update relationship status from server
+            setRelationship(obj.relationship);
           } else if (obj?.type === "error") {
             show(`Error: ${obj.message || "Unknown error"}`);
           }
@@ -350,12 +362,15 @@ export default function CallClient() {
         setStatus("closed");
         cleanupAudio();
         wsRef.current = null;
+        
+        // Refresh relationship status after call
+        fetchRelationshipStatus();
       };
     } catch {
       setStatus("error");
       show("Failed to start call");
     }
-  }, [cleanupAudio, ensureAudio, schedulePlayback, show, startMeter, gain]);
+  }, [cleanupAll, cleanupAudio, ensureAudio, schedulePlayback, show, startMeter, gain, stopPinger, fetchRelationshipStatus]);
 
   // ---------- UI helpers ----------
   useEffect(() => {
@@ -396,272 +411,206 @@ export default function CallClient() {
   // Visual calculations
   const vibes = Math.min(100, level * 100);
   const pulseScale = 1 + vibes * 0.015;
-  const glowIntensity = speaking ? 60 + vibes * 0.8 : 30;
-  const ringCount = 3;
+  const glowIntensity = speaking ? "0 0 80px rgba(168,85,247,0.8)" : "0 0 40px rgba(168,85,247,0.3)";
+  const stageStyle = relationship ? STAGE_STYLES[relationship.stage] || STAGE_STYLES["Curious Stranger"] : null;
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      {/* Animated background elements */}
-      <div className="absolute inset-0 overflow-hidden">
-        <motion.div
-          className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.5, 0.3],
-          }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1.2, 1, 1.2],
-            opacity: [0.5, 0.3, 0.5],
-          }}
-          transition={{
-            duration: 10,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute top-1/2 left-1/2 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.3, 1],
-            x: [-50, 50, -50],
-            y: [-50, 50, -50],
-          }}
-          transition={{
-            duration: 12,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
+    <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-gray-950 via-purple-950 to-pink-950">
+      {/* Animated background */}
+      <div className="absolute inset-0">
+        <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-purple-900/20 via-transparent to-transparent" />
       </div>
 
-      {/* Main content */}
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen p-8">
-        {/* Status text */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-12 text-center"
-        >
-          <h1 className="text-5xl font-bold mb-3 bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 bg-clip-text text-transparent">
-            {status === "ready" && "Ready to Connect"}
-            {status === "connecting" && "Establishing Connection..."}
-            {status === "connected" && "Connected"}
-            {status === "closed" && "Call Ended"}
-            {status === "error" && "Connection Error"}
-          </h1>
-          <p className="text-purple-300 text-lg">
-            {status === "ready" && "Start a conversation whenever you're ready"}
-            {status === "connecting" && "Just a moment..."}
-            {status === "connected" && "Your conversation is live"}
-            {status === "closed" && "Thanks for talking"}
-            {status === "error" && "Something went wrong"}
-          </p>
-        </motion.div>
+      {/* Relationship Status Bar */}
+      {relationship && (
+        <div className="absolute top-0 left-0 right-0 p-4 z-20">
+          <div className="max-w-md mx-auto">
+            <motion.div 
+              className={`bg-black/40 backdrop-blur-xl rounded-2xl p-4 border border-white/10 cursor-pointer`}
+              onClick={() => setShowRelationshipDetails(!showRelationshipDetails)}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">{stageStyle?.emoji}</span>
+                  <div>
+                    <h3 className="text-sm font-medium text-white/90">{relationship.stage}</h3>
+                    <p className="text-xs text-white/60">Level {relationship.level}/100</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {/* Streak indicator */}
+                  <div className="text-center">
+                    <div className="text-lg">🔥</div>
+                    <p className="text-xs text-white/60">{relationship.streak}</p>
+                  </div>
+                  {/* Mood indicator */}
+                  <div className="text-center">
+                    <p className="text-xs text-white/90">{MOOD_INDICATORS[relationship.mood]}</p>
+                  </div>
+                </div>
+              </div>
 
-        {/* Central orb visualization */}
-        <div className="relative flex items-center justify-center mb-16">
-          {/* Outer rings */}
-          {Array.from({ length: ringCount }).map((_, i) => (
-            <motion.div
-              key={i}
-              className="absolute rounded-full border-2 border-purple-400/30"
-              style={{
-                width: 200 + i * 80,
-                height: 200 + i * 80,
-              }}
-              animate={{
-                scale: speaking ? [1, 1.1, 1] : 1,
-                opacity: speaking ? [0.3, 0.6, 0.3] : 0.2,
-              }}
-              transition={{
-                duration: 2 + i * 0.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: i * 0.2,
-              }}
-            />
-          ))}
-
-          {/* Main orb */}
-          <motion.div
-            animate={{
-              scale: pulseScale,
-              boxShadow: `0 0 ${glowIntensity}px rgba(167, 139, 250, 0.8), 0 0 ${glowIntensity * 1.5}px rgba(236, 72, 153, 0.4)`,
-            }}
-            transition={{
-              type: "spring",
-              stiffness: 150,
-              damping: 15,
-            }}
-            className="relative w-48 h-48 rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-purple-600 flex items-center justify-center shadow-2xl"
-          >
-            {/* Inner glow */}
-            <motion.div
-              animate={{
-                opacity: speaking ? [0.4, 0.8, 0.4] : 0.3,
-              }}
-              transition={{
-                duration: 1.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="absolute inset-4 rounded-full bg-white/20 blur-xl"
-            />
-
-            {/* Status icon */}
-            <div className="relative z-10 text-white">
-              {status === "ready" && (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              )}
-              {status === "connecting" && (
-                <motion.svg
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  className="w-20 h-20"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </motion.svg>
-              )}
-              {status === "connected" && (
-                <motion.svg
-                  animate={speaking ? { scale: [1, 1.2, 1] } : {}}
-                  transition={{ duration: 0.3 }}
-                  className="w-20 h-20"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </motion.svg>
-              )}
-              {(status === "closed" || status === "error") && (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              )}
-            </div>
-          </motion.div>
-
-          {/* Audio level indicator bars */}
-          {status === "connected" && (
-            <div className="absolute -bottom-16 flex gap-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  className="w-2 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full"
-                  animate={{
-                    height: speaking ? [8, 32, 8] : 8,
+              {/* Progress bar */}
+              <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                <motion.div 
+                  className="h-full rounded-full"
+                  style={{ 
+                    background: `linear-gradient(to right, ${stageStyle?.color}, ${stageStyle?.color}dd)`,
+                    width: `${relationship.level}%`
                   }}
-                  transition={{
-                    duration: 0.5,
-                    repeat: Infinity,
-                    delay: i * 0.1,
-                    ease: "easeInOut",
-                  }}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${relationship.level}%` }}
+                  transition={{ duration: 1, ease: "easeOut" }}
                 />
-              ))}
+              </div>
+
+              {/* Expanded details */}
+              <AnimatePresence>
+                {showRelationshipDetails && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="mt-3 pt-3 border-t border-white/10"
+                  >
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-white/60">Total Interactions:</span>
+                        <span className="ml-2 text-white/90">{relationship.totalInteractions || 0}</span>
+                      </div>
+                      <div>
+                        <span className="text-white/60">Emotional Bond:</span>
+                        <span className="ml-2 text-white/90">
+                          {Math.round((relationship.emotionalInvestment || 0) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-white/50 mt-2">
+                      {relationship.level < 20 && "She's still getting to know you. Keep talking!"}
+                      {relationship.level >= 20 && relationship.level < 40 && "There's definitely chemistry building..."}
+                      {relationship.level >= 40 && relationship.level < 60 && "Things are getting complicated. She has feelings."}
+                      {relationship.level >= 60 && relationship.level < 80 && "You're so close! Don't give up now."}
+                      {relationship.level >= 80 && "You did it! But keep the spark alive..."}
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          </div>
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-4">
+        <div className="text-center">
+          <h1 className="text-6xl font-bold mb-2 bg-gradient-to-r from-purple-300 via-pink-300 to-purple-300 bg-clip-text text-transparent">
+            Ellie
+          </h1>
+          <p className="text-white/60 text-sm mb-12">
+            {relationship 
+              ? `${relationship.stage} • ${MOOD_INDICATORS[relationship.mood]}`
+              : "Voice Chat"
+            }
+          </p>
+
+          {/* Main circle button */}
+          <div className="relative mb-12">
+            <motion.div
+              className="relative w-48 h-48 mx-auto"
+              animate={{ scale: status === "connected" ? pulseScale : 1 }}
+              transition={{ duration: 0.3 }}
+            >
+              {/* Glow effect */}
+              <div
+                className="absolute inset-0 rounded-full bg-gradient-to-br from-purple-600 to-pink-600"
+                style={{ boxShadow: glowIntensity }}
+              />
+              
+              {/* Main button */}
+              <button
+                onClick={status === "ready" ? handleStartClick : hangUp}
+                className="relative w-full h-full rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center hover:from-purple-500 hover:to-pink-500 transition-colors"
+                disabled={status === "connecting"}
+              >
+                {status === "ready" && (
+                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                  </svg>
+                )}
+                {status === "connecting" && (
+                  <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                {status === "connected" && (
+                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                  </svg>
+                )}
+                {status === "closed" && (
+                  <svg className="w-20 h-20 text-white" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                  </svg>
+                )}
+              </button>
+
+              {/* Speaking indicator */}
+              {speaking && (
+                <motion.div
+                  className="absolute inset-0 rounded-full border-4 border-white/30"
+                  initial={{ scale: 1, opacity: 0.5 }}
+                  animate={{ scale: 1.2, opacity: 0 }}
+                  transition={{ duration: 0.5, repeat: Infinity }}
+                />
+              )}
+            </motion.div>
+
+            {/* Status text */}
+            <p className="mt-6 text-white/80">
+              {status === "ready" && "Tap to call"}
+              {status === "connecting" && "Connecting..."}
+              {status === "connected" && "Connected"}
+              {status === "closed" && "Call ended"}
+              {status === "error" && "Connection error"}
+            </p>
+          </div>
+
+          {/* Controls */}
+          {status === "connected" && (
+            <div className="flex items-center justify-center gap-4">
+              <button
+                onClick={toggleMute}
+                className={`p-4 rounded-full transition-colors ${
+                  muted ? "bg-red-600 hover:bg-red-700" : "bg-white/10 hover:bg-white/20"
+                }`}
+              >
+                {muted ? (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15L4.172 13.586A2 2 0 013 11.172V9a6 6 0 0110.82-3.584L19 10.595M12 18v3m0 0l-2-1m2 1l2-1m-2-7v.01" />
+                  </svg>
+                ) : (
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                )}
+              </button>
+              
+              <div className="flex items-center gap-2 bg-white/10 rounded-full px-4 py-2">
+                <span className="text-white/60 text-sm">Volume</span>
+                <input
+                  type="range"
+                  min="0.2"
+                  max="3"
+                  step="0.1"
+                  value={gain}
+                  onChange={(e) => setGain(Number(e.target.value))}
+                  className="w-24"
+                />
+              </div>
             </div>
           )}
         </div>
-
-        {/* Controls */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="flex flex-col items-center gap-6"
-        >
-          <div className="flex gap-4">
-            {(status === "ready" || status === "closed" || status === "error") && (
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleStartClick}
-                className="px-8 py-4 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold text-lg shadow-lg hover:shadow-purple-500/50 transition-shadow flex items-center gap-2"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Start Call
-              </motion.button>
-            )}
-
-            {(status === "connected" || status === "connecting") && (
-              <>
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={toggleMute}
-                  disabled={status !== "connected"}
-                  className={`px-6 py-4 rounded-full font-semibold shadow-lg transition-all ${
-                    muted
-                      ? "bg-red-500 hover:bg-red-600 text-white"
-                      : "bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white"
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
-                >
-                  {muted ? (
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-                    </svg>
-                  ) : (
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                  )}
-                </motion.button>
-
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={hangUp}
-                  className="px-6 py-4 rounded-full bg-red-500 hover:bg-red-600 text-white font-semibold shadow-lg hover:shadow-red-500/50 transition-shadow"
-                >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M5 3a2 2 0 00-2 2v1c0 8.284 6.716 15 15 15h1a2 2 0 002-2v-3.28a1 1 0 00-.684-.948l-4.493-1.498a1 1 0 00-1.21.502l-1.13 2.257a11.042 11.042 0 01-5.516-5.517l2.257-1.128a1 1 0 00.502-1.21L9.228 3.683A1 1 0 008.279 3H5z" />
-                  </svg>
-                </motion.button>
-              </>
-            )}
-          </div>
-
-          {/* Mic gain control - shown only when connected */}
-          {status === "connected" && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10"
-            >
-              <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-              </svg>
-              <input
-                type="range"
-                min={0.2}
-                max={3}
-                step={0.05}
-                value={gain}
-                onChange={(e) => setGain(Number(e.target.value))}
-                className="w-32 accent-purple-500"
-              />
-              <span className="text-purple-200 text-sm font-mono min-w-[3rem]">{gain.toFixed(2)}×</span>
-            </motion.div>
-          )}
-        </motion.div>
       </div>
 
       {/* iOS Bluetooth Guide Modal */}
@@ -671,119 +620,40 @@ export default function CallClient() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
             onClick={() => setShowBluetoothGuide(false)}
           >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-gradient-to-br from-purple-900/90 to-pink-900/90 rounded-2xl p-6 max-w-md w-full border border-white/20"
               onClick={(e) => e.stopPropagation()}
-              className="max-w-md w-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden"
             >
-              {/* Header with gradient */}
-              <div className="bg-gradient-to-r from-purple-500 to-pink-500 p-6">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-                    <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-2xl font-bold text-white">Bluetooth Setup</h2>
-                    <p className="text-purple-100 text-sm">For the best audio experience</p>
-                  </div>
-                </div>
+              <h2 className="text-2xl font-bold text-white mb-4">Before we start...</h2>
+              
+              <div className="space-y-3 mb-6">
+                <p className="text-white/80">For the best experience:</p>
+                <ol className="space-y-2 text-white/70">
+                  <li>1. Make sure you're using speakers or wired headphones</li>
+                  <li>2. Bluetooth audio may have delays</li>
+                  <li>3. Keep your phone close when speaking</li>
+                </ol>
               </div>
 
-              {/* Content */}
-              <div className="p-6 space-y-4">
-                <p className="text-purple-200 text-sm">
-                  iOS Safari requires manual Bluetooth audio routing for web apps. Follow these quick steps:
-                </p>
-
-                <div className="space-y-3">
-                  {[
-                    {
-                      num: "1",
-                      title: "Open Control Center",
-                      desc: "Swipe down from the top-right corner of your screen",
-                      icon: (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                        </svg>
-                      ),
-                    },
-                    {
-                      num: "2",
-                      title: "Long-press Audio Widget",
-                      desc: "Press and hold the music/audio control widget",
-                      icon: (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      ),
-                    },
-                    {
-                      num: "3",
-                      title: "Select Your Device",
-                      desc: "Tap your AirPods or Bluetooth speaker from the list",
-                      icon: (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                      ),
-                    },
-                  ].map((step) => (
-                    <motion.div
-                      key={step.num}
-                      initial={{ x: -20, opacity: 0 }}
-                      animate={{ x: 0, opacity: 1 }}
-                      transition={{ delay: parseInt(step.num) * 0.1 }}
-                      className="flex gap-3 p-3 rounded-xl bg-white/5 border border-white/10"
-                    >
-                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center font-bold text-white">
-                        {step.num}
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="text-purple-300">{step.icon}</div>
-                          <h3 className="font-semibold text-white text-sm">{step.title}</h3>
-                        </div>
-                        <p className="text-purple-300 text-xs">{step.desc}</p>
-                      </div>
-                    </motion.div>
-                  ))}
-                </div>
-
-                <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 border border-blue-500/30">
-                  <svg className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="text-blue-200 text-xs">
-                    This only needs to be done once per session. Your selection will stay active during the call.
-                  </p>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="p-6 pt-0 flex gap-3">
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+              <div className="flex gap-3">
+                <button
                   onClick={() => setShowBluetoothGuide(false)}
-                  className="flex-1 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-purple-200 font-medium transition-colors border border-white/10"
+                  className="flex-1 px-4 py-3 bg-white/10 hover:bg-white/20 rounded-xl text-white transition-colors"
                 >
                   Cancel
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                </button>
+                <button
                   onClick={proceedWithCall}
-                  className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold transition-all shadow-lg"
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 rounded-xl text-white font-medium transition-colors"
                 >
-                  Got it, Start Call
-                </motion.button>
+                  Continue
+                </button>
               </div>
             </motion.div>
           </motion.div>
