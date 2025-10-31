@@ -15,10 +15,15 @@ interface RelationshipStatus {
   totalInteractions?: number;
 }
 
+// Extend Window interface for webkit support
+interface ExtendedWindow extends Window {
+  webkitAudioContext?: typeof AudioContext;
+}
+
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
 
 // Relationship stage colors and emojis
-const STAGE_STYLES = {
+const STAGE_STYLES: Record<string, { color: string; emoji: string; bg: string }> = {
   "Curious Stranger": { color: "#94a3b8", emoji: "👀", bg: "from-slate-500/20" },
   "Friend with Tension": { color: "#fbbf24", emoji: "😊", bg: "from-amber-500/20" },
   "It's Complicated": { color: "#f87171", emoji: "😰", bg: "from-red-500/20" },
@@ -27,7 +32,7 @@ const STAGE_STYLES = {
 };
 
 // Mood indicators
-const MOOD_INDICATORS = {
+const MOOD_INDICATORS: Record<string, string> = {
   flirty: "😘 Flirty",
   playful: "😊 Playful", 
   distant: "😔 Distant",
@@ -182,7 +187,9 @@ export default function CallClient() {
   const ensureAudio = useCallback(async () => {
     if (acRef.current?.state === "running") return;
 
-    const ac = acRef.current || new (window.AudioContext || (window as any).webkitAudioContext)();
+    const extWindow = window as ExtendedWindow;
+    const AudioContextClass = window.AudioContext || extWindow.webkitAudioContext;
+    const ac = acRef.current || new AudioContextClass();
     acRef.current = ac;
 
     if (ac.state === "suspended") await ac.resume();
@@ -635,7 +642,7 @@ export default function CallClient() {
               <div className="space-y-3 mb-6">
                 <p className="text-white/80">For the best experience:</p>
                 <ol className="space-y-2 text-white/70">
-                  <li>1. Make sure you're using speakers or wired headphones</li>
+                  <li>1. Make sure you&apos;re using speakers or wired headphones</li>
                   <li>2. Bluetooth audio may have delays</li>
                   <li>3. Keep your phone close when speaking</li>
                 </ol>
