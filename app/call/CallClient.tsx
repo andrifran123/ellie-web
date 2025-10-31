@@ -247,7 +247,7 @@ export default function CallClient() {
   const ensureAudio = useCallback(async () => {
     if (acRef.current && acRef.current.state === "running") return;
 
-    const AudioContextClass = window.AudioContext || (window as Window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ac = acRef.current || new AudioContextClass();
     acRef.current = ac;
 
