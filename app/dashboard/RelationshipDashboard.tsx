@@ -562,7 +562,7 @@ export default function RelationshipDashboardEnhanced() {
                   <div className="border border-gray-800 rounded p-4">
                     <div className="text-sm text-gray-400">Current Stage</div>
                     <div className="text-xl font-medium">
-                      {STAGE_LABELS[userProfile.user?.current_stage] || "Unknown"}
+                      {userProfile.user?.current_stage ? STAGE_LABELS[userProfile.user.current_stage] : "Unknown"}
                     </div>
                   </div>
                   <div className="border border-gray-800 rounded p-4">
