@@ -551,7 +551,7 @@ export default function RelationshipDashboardEnhanced() {
                       <div className="text-sm text-gray-400">{STAGE_LABELS[stage.current_stage]}</div>
                       <div className="text-3xl font-bold">{stage.user_count}</div>
                       <div className="text-sm text-gray-400 mt-2">
-                        Avg Level: {stage.avg_level.toFixed(1)}
+                        Avg Level: {(Number(stage.avg_level) || 0).toFixed(1)}
                       </div>
                       <div className="text-sm text-gray-400">
                         Max Streak: {stage.max_streak} days
@@ -570,7 +570,7 @@ export default function RelationshipDashboardEnhanced() {
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
                   <div className="text-sm text-gray-400">Avg Relationship Level</div>
                   <div className="text-3xl font-bold text-purple-500">
-                    {overview.totals.avg_relationship_level.toFixed(1)}
+                    {(Number(overview.totals.avg_relationship_level) || 0).toFixed(1)}
                   </div>
                 </div>
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
@@ -580,7 +580,7 @@ export default function RelationshipDashboardEnhanced() {
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
                   <div className="text-sm text-gray-400">Avg Emotional Investment</div>
                   <div className="text-3xl font-bold text-red-500">
-                    {(overview.totals.avg_emotional_investment * 100).toFixed(0)}%
+                    {((Number(overview.totals.avg_emotional_investment) || 0) * 100).toFixed(0)}%
                   </div>
                 </div>
               </div>
@@ -618,7 +618,7 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-gray-800 rounded p-4">
                       <div className="text-sm text-gray-400">Current Month</div>
                       <div className="text-2xl font-bold text-green-500">
-                        ${forecast.current_month.projected_revenue.toFixed(2)}
+                        ${(Number(forecast.current_month.projected_revenue) || 0).toFixed(2)}
                       </div>
                       <div className="text-sm text-gray-400 mt-2">
                         {forecast.current_month.projected_conversions} conversions
@@ -627,7 +627,7 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-gray-800 rounded p-4">
                       <div className="text-sm text-gray-400">Next Month</div>
                       <div className="text-2xl font-bold text-green-500">
-                        ${forecast.next_month.projected_revenue.toFixed(2)}
+                        ${(Number(forecast.next_month.projected_revenue) || 0).toFixed(2)}
                       </div>
                       <div className="text-sm text-gray-400 mt-2">
                         {forecast.next_month.projected_conversions} conversions
@@ -636,7 +636,7 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-gray-800 rounded p-4">
                       <div className="text-sm text-gray-400">6 Month Projection</div>
                       <div className="text-2xl font-bold text-green-500">
-                        ${forecast.six_months.projected_revenue.toFixed(2)}
+                        ${(Number(forecast.six_months.projected_revenue) || 0).toFixed(2)}
                       </div>
                       <div className="text-sm text-gray-400 mt-2">
                         {forecast.six_months.projected_conversions} conversions
@@ -778,7 +778,7 @@ export default function RelationshipDashboardEnhanced() {
                               <span className="text-gray-500">Messages:</span> {user.message_count}
                             </div>
                             <div>
-                              <span className="text-gray-500">Investment:</span> {(user.emotional_investment * 100).toFixed(0)}%
+                              <span className="text-gray-500">Investment:</span> {((Number(user.emotional_investment) || 0) * 100).toFixed(0)}%
                             </div>
                             <div>
                               <span className="text-gray-500">Last Active:</span>{" "}
@@ -849,7 +849,7 @@ export default function RelationshipDashboardEnhanced() {
                             <div className="font-medium">User: {user.user_id}</div>
                             <div className="text-sm text-gray-400">
                               Level {user.level} • {user.days_since_broken} days ago •{" "}
-                              {(user.emotional_investment * 100).toFixed(0)}% invested
+                              {((Number(user.emotional_investment) || 0) * 100).toFixed(0)}% invested
                             </div>
                           </div>
                           <button className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm">
