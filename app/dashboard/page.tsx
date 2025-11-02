@@ -1,4 +1,4 @@
-import RelationshipDashboardEnhanced from "./RelationshipDashboardEnhanced";
+import RelationshipDashboard from "./RelationshipDashboard";
 
 export const metadata = {
   title: "Analytics Dashboard | Ellie",
@@ -6,7 +6,7 @@ export const metadata = {
 };
 
 export default function DashboardPage() {
-  //⚠️ IMPORTANT: Add authentication here before deploying to production
+  // ⚠️ IMPORTANT: Add authentication here before deploying to production
   // For now, this is accessible to anyone who knows the URL
   // 
   // Option 1: Check environment variable
@@ -20,5 +20,5 @@ export default function DashboardPage() {
   //   redirect("/");
   // }
 
-  return <RelationshipDashboardEnhanced />;
+  return <RelationshipDashboard />;
 }
