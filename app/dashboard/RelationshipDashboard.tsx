@@ -304,13 +304,13 @@ export default function RelationshipDashboard() {
               <div className="text-2xl font-bold">
                 {revenue?.opportunities.stage_3_opportunities || 0}
               </div>
-              <div className="text-sm text-gray-400">"Complicated" Stage (Peak Drama)</div>
+              <div className="text-sm text-gray-400">&ldquo;Complicated&rdquo; Stage (Peak Drama)</div>
             </div>
             <div className="border border-red-800 rounded p-4 bg-red-900/20">
               <div className="text-2xl font-bold">
                 {revenue?.opportunities.stage_4_opportunities || 0}
               </div>
-              <div className="text-sm text-gray-400">"Almost Together" (Commitment)</div>
+              <div className="text-sm text-gray-400">&ldquo;Almost Together&rdquo; (Commitment)</div>
             </div>
           </div>
         </div>
