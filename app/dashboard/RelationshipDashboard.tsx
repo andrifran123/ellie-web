@@ -117,13 +117,22 @@ interface UserProfile {
   }>;
 }
 
-interface ActivityEvent {
-  type: string;
+interface ActiveUser {
   user_id: string;
-  level: number;
-  stage: string;
-  message?: string;
-  timestamp: string;
+  relationship_level: number;
+  current_stage: string;
+  last_interaction: string;
+  streak_days: number;
+  emotional_investment: number;
+  last_mood: string;
+  message_count: number;
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
 }
 
 interface StreakRecovery {
@@ -193,10 +202,20 @@ export default function RelationshipDashboardEnhanced() {
   const [revenue, setRevenue] = useState<RevenueData | null>(null);
   const [addiction, setAddiction] = useState<AddictionData | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [activityFeed, setActivityFeed] = useState<ActivityEvent[]>([]);
+  const [activeUsers, setActiveUsers] = useState<ActiveUser[]>([]);
   const [streakRecovery, setStreakRecovery] = useState<StreakRecovery | null>(null);
   const [messageAnalysis, setMessageAnalysis] = useState<MessageAnalysis | null>(null);
   const [forecast, setForecast] = useState<RevenueForecast | null>(null);
+  
+  // Chat View States
+  const [viewingUserId, setViewingUserId] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatViewOpen, setIsChatViewOpen] = useState(false);
+  
+  // Manual Override States
+  const [overrideUserId, setOverrideUserId] = useState<string | null>(null);
+  const [isOverrideActive, setIsOverrideActive] = useState(false);
+  const [manualResponseText, setManualResponseText] = useState("");
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -205,12 +224,11 @@ export default function RelationshipDashboardEnhanced() {
 
   const fetchAnalytics = async () => {
     try {
-      const [overviewRes, engagementRes, revenueRes, addictionRes, activityRes, streakRes, analysisRes, forecastRes] = await Promise.all([
+      const [overviewRes, engagementRes, revenueRes, addictionRes, streakRes, analysisRes, forecastRes] = await Promise.all([
         fetch("/api/analytics/overview"),
         fetch("/api/analytics/engagement"),
         fetch("/api/analytics/revenue"),
         fetch("/api/analytics/addiction"),
-        fetch("/api/analytics/activity-feed"),
         fetch("/api/analytics/streak-recovery"),
         fetch("/api/analytics/message-analysis"),
         fetch("/api/analytics/forecast"),
@@ -220,22 +238,20 @@ export default function RelationshipDashboardEnhanced() {
         throw new Error("Failed to fetch analytics");
       }
 
-      const [overviewData, engagementData, revenueData, addictionData, activityData, streakData, analysisData, forecastData] = await Promise.all([
+      const [overviewData, engagementData, revenueData, addictionData, streakData, analysisData, forecastData] = await Promise.all([
         overviewRes.json(),
         engagementRes.json(),
         revenueRes.json(),
         addictionRes.json(),
-        activityRes.ok ? activityRes.json() : { feed: [] },
-        streakRes.ok ? streakRes.json() : null,
-        analysisRes.ok ? analysisRes.json() : null,
-        forecastRes.ok ? forecastRes.json() : null,
+        streakRes.json(),
+        analysisRes.json(),
+        forecastRes.json(),
       ]);
 
       setOverview(overviewData);
       setEngagement(engagementData);
       setRevenue(revenueData);
       setAddiction(addictionData);
-      setActivityFeed(activityData.feed || []);
       setStreakRecovery(streakData);
       setMessageAnalysis(analysisData);
       setForecast(forecastData);
@@ -246,550 +262,785 @@ export default function RelationshipDashboardEnhanced() {
     }
   };
 
+  const fetchActiveUsers = async () => {
+    try {
+      const res = await fetch("/api/analytics/active-users");
+      if (!res.ok) throw new Error("Failed to fetch active users");
+      const data = await res.json();
+      setActiveUsers(data.users || []);
+    } catch (err) {
+      console.error("Error fetching active users:", err);
+    }
+  };
+
   const searchUser = async () => {
-    if (!searchUserId.trim()) return;
-    
+    if (!searchUserId.trim()) {
+      alert("Please enter a user ID");
+      return;
+    }
+
     try {
       const res = await fetch(`/api/analytics/user/${searchUserId}`);
-      if (!res.ok) throw new Error("User not found");
-      
+      if (!res.ok) {
+        alert("User not found");
+        return;
+      }
       const data = await res.json();
       setUserProfile(data);
-      setActiveTab("users");
-    } catch {
-      alert("User not found or error fetching user data");
+    } catch (err) {
+      alert("Error fetching user profile");
+      console.error(err);
+    }
+  };
+
+  // View Chat Functions
+  const openChatView = async (userId: string) => {
+    setViewingUserId(userId);
+    setIsChatViewOpen(true);
+    await fetchChatMessages(userId);
+    startMessagePolling(userId);
+  };
+
+  const fetchChatMessages = async (userId: string) => {
+    try {
+      const res = await fetch(`/api/chat-view/messages/${userId}`);
+      if (!res.ok) throw new Error("Failed to fetch messages");
+      const data = await res.json();
+      setChatMessages(data.messages || []);
+    } catch (err) {
+      console.error("Error fetching chat messages:", err);
+      setChatMessages([]);
+    }
+  };
+
+  const closeChatView = () => {
+    setIsChatViewOpen(false);
+    setViewingUserId(null);
+    setChatMessages([]);
+    stopMessagePolling();
+  };
+
+  // Manual Override Functions
+  const startManualOverride = async (userId: string) => {
+    try {
+      const res = await fetch("/api/manual-override/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        alert(error.error || "Failed to start manual override");
+        return;
+      }
+
+      setOverrideUserId(userId);
+      setIsOverrideActive(true);
+      
+      // If not already viewing, open chat view
+      if (!isChatViewOpen) {
+        setViewingUserId(userId);
+        setIsChatViewOpen(true);
+        await fetchChatMessages(userId);
+        startMessagePolling(userId);
+      }
+    } catch (err) {
+      alert("Error starting manual override");
+      console.error(err);
+    }
+  };
+
+  const sendManualResponse = async () => {
+    if (!manualResponseText.trim() || !overrideUserId) {
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/manual-override/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: overrideUserId,
+          message: manualResponseText,
+        }),
+      });
+
+      if (!res.ok) {
+        alert("Failed to send message");
+        return;
+      }
+
+      // Refresh chat messages
+      await fetchChatMessages(overrideUserId);
+      setManualResponseText("");
+    } catch (err) {
+      alert("Error sending message");
+      console.error(err);
+    }
+  };
+
+  const endManualOverride = async () => {
+    if (!overrideUserId) return;
+
+    try {
+      const res = await fetch("/api/manual-override/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: overrideUserId }),
+      });
+
+      if (!res.ok) {
+        alert("Failed to end manual override");
+        return;
+      }
+
+      setIsOverrideActive(false);
+      setOverrideUserId(null);
+      setManualResponseText("");
+      
+      alert("Manual override ended. API will resume normal operation.");
+    } catch (err) {
+      alert("Error ending manual override");
+      console.error(err);
+    }
+  };
+
+  // Message polling
+  let messagePollingInterval: NodeJS.Timeout | null = null;
+
+  const startMessagePolling = (userId: string) => {
+    stopMessagePolling(); // Clear any existing interval
+    messagePollingInterval = setInterval(async () => {
+      if (userId) {
+        await fetchChatMessages(userId);
+      }
+    }, 2000); // Poll every 2 seconds
+  };
+
+  const stopMessagePolling = () => {
+    if (messagePollingInterval) {
+      clearInterval(messagePollingInterval);
+      messagePollingInterval = null;
     }
   };
 
   useEffect(() => {
     fetchAnalytics();
-    const interval = setInterval(fetchAnalytics, 30000); // Refresh every 30 seconds
+    const interval = setInterval(fetchAnalytics, 30000); // Refresh every 30s
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "activity") {
+      fetchActiveUsers();
+      const interval = setInterval(fetchActiveUsers, 5000); // Refresh every 5s
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    // Cleanup polling on unmount
+    return () => {
+      stopMessagePolling();
+    };
   }, []);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center">
-        <div className="text-xl">Loading analytics...</div>
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="text-gray-400">Loading Analytics...</p>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center">
-        <div className="text-xl text-red-500">Error: {error}</div>
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-500 text-xl mb-4">Error: {error}</p>
+          <button
+            onClick={fetchAnalytics}
+            className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Header with Search */}
-        <div className="mb-8 flex justify-between items-center">
-          <div>
-            <h1 className="text-4xl font-bold mb-2">📊 Analytics Dashboard</h1>
-            <p className="text-gray-400">
-              Last updated: {overview ? new Date(overview.timestamp).toLocaleString() : "N/A"}
-            </p>
-          </div>
-          
-          {/* User Search */}
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Search User ID..."
-              value={searchUserId}
-              onChange={(e) => setSearchUserId(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && searchUser()}
-              className="bg-gray-900 border border-gray-800 rounded px-4 py-2 text-white"
-            />
-            <button
-              onClick={searchUser}
-              className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded font-medium"
-            >
-              Search
-            </button>
-          </div>
-        </div>
+    <div className="min-h-screen bg-black text-white p-8">
+      <div className="max-w-[1600px] mx-auto">
+        <header className="mb-8">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 bg-clip-text text-transparent">
+            🎯 Ellie Analytics Dashboard
+          </h1>
+          <p className="text-gray-400 mt-2">Progressive Relationship Intelligence & Live Monitoring</p>
+        </header>
 
-        {/* Tab Navigation */}
-        <div className="flex gap-2 mb-8 border-b border-gray-800">
+        {/* Navigation Tabs */}
+        <div className="flex flex-wrap gap-2 mb-6 border-b border-gray-800 pb-4">
           <button
             onClick={() => setActiveTab("overview")}
-            className={`px-6 py-3 font-medium ${
+            className={`px-4 py-2 rounded ${
               activeTab === "overview"
-                ? "border-b-2 border-blue-500 text-blue-500"
-                : "text-gray-400 hover:text-white"
+                ? "bg-blue-600"
+                : "bg-gray-800 hover:bg-gray-700"
             }`}
           >
             📊 Overview
           </button>
           <button
             onClick={() => setActiveTab("users")}
-            className={`px-6 py-3 font-medium ${
+            className={`px-4 py-2 rounded ${
               activeTab === "users"
-                ? "border-b-2 border-blue-500 text-blue-500"
-                : "text-gray-400 hover:text-white"
+                ? "bg-blue-600"
+                : "bg-gray-800 hover:bg-gray-700"
             }`}
           >
-            👤 User Profiles
+            👤 User Lookup
           </button>
           <button
             onClick={() => setActiveTab("activity")}
-            className={`px-6 py-3 font-medium ${
+            className={`px-4 py-2 rounded ${
               activeTab === "activity"
-                ? "border-b-2 border-blue-500 text-blue-500"
-                : "text-gray-400 hover:text-white"
+                ? "bg-blue-600"
+                : "bg-gray-800 hover:bg-gray-700"
             }`}
           >
             🔴 Live Activity
           </button>
           <button
             onClick={() => setActiveTab("recovery")}
-            className={`px-6 py-3 font-medium ${
+            className={`px-4 py-2 rounded ${
               activeTab === "recovery"
-                ? "border-b-2 border-blue-500 text-blue-500"
-                : "text-gray-400 hover:text-white"
+                ? "bg-blue-600"
+                : "bg-gray-800 hover:bg-gray-700"
             }`}
           >
             💔 Streak Recovery
           </button>
           <button
             onClick={() => setActiveTab("analysis")}
-            className={`px-6 py-3 font-medium ${
+            className={`px-4 py-2 rounded ${
               activeTab === "analysis"
-                ? "border-b-2 border-blue-500 text-blue-500"
-                : "text-gray-400 hover:text-white"
+                ? "bg-blue-600"
+                : "bg-gray-800 hover:bg-gray-700"
             }`}
           >
             💬 Message Analysis
           </button>
         </div>
 
-        {/* Tab Content */}
-        {activeTab === "overview" && (
-          <>
-            {/* Overview Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        {/* Content */}
+        <div className="space-y-8">
+          {/* Overview Tab */}
+          {activeTab === "overview" && overview && (
+            <>
+              {/* Stage Distribution */}
               <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                <div className="text-gray-400 text-sm mb-1">Total Users</div>
-                <div className="text-3xl font-bold">{Number(overview?.totals.total_users) || 0}</div>
-              </div>
-              <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                <div className="text-gray-400 text-sm mb-1">Avg Relationship Level</div>
-                <div className="text-3xl font-bold">
-                  {Number(overview?.totals.avg_relationship_level).toFixed(1) || 0}/100
-                </div>
-              </div>
-              <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                <div className="text-gray-400 text-sm mb-1">Active Streaks</div>
-                <div className="text-3xl font-bold">{Number(overview?.totals.active_streaks) || 0}</div>
-              </div>
-              <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                <div className="text-gray-400 text-sm mb-1">Emotional Investment</div>
-                <div className="text-3xl font-bold">
-                  {((Number(overview?.totals.avg_emotional_investment) || 0) * 100).toFixed(0)}%
-                </div>
-              </div>
-            </div>
-
-            {/* Revenue Forecast */}
-            {forecast && (
-              <div className="bg-gray-900 rounded-lg p-6 border border-gray-800 mb-8">
-                <h2 className="text-2xl font-bold mb-4">📈 Revenue Forecast</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400 mb-2">Current Month</div>
-                    <div className="text-3xl font-bold text-green-500 mb-2">
-                      ${Number(forecast.current_month.projected_revenue).toFixed(2)}
-                    </div>
-                    <div className="text-sm text-gray-400">
-                      {Number(forecast.current_month.projected_users)} users →{" "}
-                      {Number(forecast.current_month.projected_conversions)} conversions
-                    </div>
-                  </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400 mb-2">Next Month</div>
-                    <div className="text-3xl font-bold text-blue-500 mb-2">
-                      ${Number(forecast.next_month.projected_revenue).toFixed(2)}
-                    </div>
-                    <div className="text-sm text-gray-400">
-                      {Number(forecast.next_month.projected_users)} users →{" "}
-                      {Number(forecast.next_month.projected_conversions)} conversions
-                    </div>
-                  </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400 mb-2">6 Months</div>
-                    <div className="text-3xl font-bold text-purple-500 mb-2">
-                      ${Number(forecast.six_months.projected_revenue).toFixed(2)}
-                    </div>
-                    <div className="text-sm text-gray-400">
-                      {Number(forecast.six_months.projected_users)} users →{" "}
-                      {Number(forecast.six_months.projected_conversions)} conversions
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-4 pt-4 border-t border-gray-800 text-sm text-gray-400">
-                  <span>Assumptions:</span>{" "}
-                  <span className="text-white">{(Number(forecast.assumptions.growth_rate) * 100).toFixed(0)}%</span> monthly growth,{" "}
-                  <span className="text-white">{(Number(forecast.assumptions.conversion_rate) * 100).toFixed(0)}%</span> conversion rate,{" "}
-                  <span className="text-white">${Number(forecast.assumptions.avg_revenue_per_user).toFixed(2)}</span> ARPU
-                </div>
-              </div>
-            )}
-
-            {/* Stage Distribution */}
-            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800 mb-8">
-              <h2 className="text-2xl font-bold mb-4">👥 Users by Relationship Stage</h2>
-              <div className="space-y-4">
-                {overview?.stages.map((stage) => (
-                  <div key={stage.current_stage}>
-                    <div className="flex justify-between mb-2">
-                      <span className="font-medium">{STAGE_LABELS[stage.current_stage]}</span>
-                      <span className="text-gray-400">{Number(stage.user_count)} users</span>
-                    </div>
-                    <div className="w-full bg-gray-800 rounded-full h-3 overflow-hidden">
-                      <div
-                        className={`h-full ${STAGE_COLORS[stage.current_stage]}`}
-                        style={{
-                          width: `${((Number(stage.user_count) / (Number(overview?.totals.total_users) || 1)) * 100).toFixed(1)}%`,
-                        }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-sm text-gray-500 mt-1">
-                      <span>Avg Level: {Number(stage.avg_level).toFixed(1)}</span>
-                      <span>Avg Streak: {Number(stage.avg_streak).toFixed(1)} days</span>
-                      <span>Max Streak: {Number(stage.max_streak)} days</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Addiction Metrics */}
-            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800 mb-8">
-              <h2 className="text-2xl font-bold mb-4">🔥 Addiction Metrics</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                <div>
-                  <div className="text-gray-400 text-sm">Daily Active</div>
-                  <div className="text-2xl font-bold text-green-500">
-                    {Number(addiction?.metrics.daily_active_users) || 0}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-gray-400 text-sm">Week+ Streaks</div>
-                  <div className="text-2xl font-bold text-blue-500">
-                    {Number(addiction?.metrics.week_plus_streaks) || 0}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-gray-400 text-sm">Heavy Users (100+)</div>
-                  <div className="text-2xl font-bold text-purple-500">
-                    {Number(addiction?.metrics.heavy_users) || 0}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-gray-400 text-sm">Emotionally Invested</div>
-                  <div className="text-2xl font-bold text-red-500">
-                    {Number(addiction?.metrics.emotionally_invested) || 0}
-                  </div>
-                </div>
-              </div>
-              <div>
-                <h3 className="font-medium mb-2">Return Patterns</h3>
-                <div className="space-y-2">
-                  {addiction?.returnPatterns.map((pattern) => (
-                    <div key={pattern.return_window} className="flex justify-between text-sm">
-                      <span className="text-gray-400">{pattern.return_window}</span>
-                      <span className="font-medium">{Number(pattern.user_count)} users</span>
+                <h2 className="text-2xl font-bold mb-4">Relationship Stage Distribution</h2>
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                  {overview.stages.map((stage) => (
+                    <div key={stage.current_stage} className="bg-gray-800 rounded p-4 border-l-4 border-blue-500">
+                      <div className="text-sm text-gray-400">{STAGE_LABELS[stage.current_stage]}</div>
+                      <div className="text-3xl font-bold">{stage.user_count}</div>
+                      <div className="text-sm text-gray-400 mt-2">
+                        Avg Level: {stage.avg_level.toFixed(1)}
+                      </div>
+                      <div className="text-sm text-gray-400">
+                        Max Streak: {stage.max_streak} days
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
-            </div>
 
-            {/* Revenue Analytics */}
-            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800 mb-8">
-              <h2 className="text-2xl font-bold mb-4">💰 Revenue Opportunities</h2>
-              <div className="mb-6">
-                <div className="text-4xl font-bold text-green-500 mb-2">
-                  ${Number(revenue?.totalPotential).toFixed(2) || 0}
+              {/* Key Metrics */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <div className="text-sm text-gray-400">Total Users</div>
+                  <div className="text-3xl font-bold text-blue-500">{overview.totals.total_users}</div>
                 </div>
-                <div className="text-gray-400">Total Revenue Potential</div>
-              </div>
-              <div className="space-y-4">
-                {revenue?.byStage.map((stage) => (
-                  <div key={stage.current_stage} className="border border-gray-800 rounded p-4">
-                    <div className="flex justify-between mb-2">
-                      <span className="font-medium">{STAGE_LABELS[stage.current_stage]}</span>
-                      <span className="text-green-500 font-bold">
-                        ${Number(stage.potential_revenue).toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-4 text-sm text-gray-400">
-                      <div>
-                        Users: {Number(stage.user_count)} ({Number(stage.paid_users)} paid)
-                      </div>
-                      <div>Investment: {(Number(stage.avg_investment) * 100).toFixed(0)}%</div>
-                      <div>Conversion: {(Number(stage.conversion_rate) * 100).toFixed(1)}%</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* User Profile Tab */}
-        {activeTab === "users" && (
-          <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-            <h2 className="text-2xl font-bold mb-4">👤 User Profile</h2>
-            
-            {!userProfile ? (
-              <div className="text-center py-12 text-gray-400">
-                <p>Search for a user ID above to view their profile</p>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {/* User Overview */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Relationship Level</div>
-                    <div className="text-2xl font-bold">{userProfile.user?.relationship_level || 0}</div>
-                  </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Current Stage</div>
-                    <div className="text-xl font-medium">
-                      {userProfile.user?.current_stage ? STAGE_LABELS[userProfile.user.current_stage] : "Unknown"}
-                    </div>
-                  </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Streak</div>
-                    <div className="text-2xl font-bold">{userProfile.user?.streak_days || 0} days</div>
-                  </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Total Interactions</div>
-                    <div className="text-2xl font-bold">{userProfile.user?.total_interactions || 0}</div>
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <div className="text-sm text-gray-400">Avg Relationship Level</div>
+                  <div className="text-3xl font-bold text-purple-500">
+                    {overview.totals.avg_relationship_level.toFixed(1)}
                   </div>
                 </div>
-
-                {/* Emotional Investment */}
-                <div className="border border-gray-800 rounded p-4">
-                  <div className="text-sm text-gray-400 mb-2">Emotional Investment</div>
-                  <div className="w-full bg-gray-800 rounded-full h-4">
-                    <div
-                      className="h-full bg-gradient-to-r from-blue-500 to-red-500 rounded-full"
-                      style={{ width: `${((userProfile.user?.emotional_investment || 0) * 100)}%` }}
-                    />
-                  </div>
-                  <div className="text-right text-sm mt-1">
-                    {((userProfile.user?.emotional_investment || 0) * 100).toFixed(0)}%
-                  </div>
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <div className="text-sm text-gray-400">Active Streaks</div>
+                  <div className="text-3xl font-bold text-pink-500">{overview.totals.active_streaks}</div>
                 </div>
-
-                {/* Recent Events */}
-                <div>
-                  <h3 className="font-bold mb-3">Recent Events</h3>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {userProfile.events.map((event, idx) => (
-                      <div key={idx} className="bg-gray-800 rounded p-3 text-sm">
-                        <div className="flex justify-between">
-                          <span className="font-medium">{event.event_type}</span>
-                          <span className="text-gray-400">
-                            {new Date(event.created_at).toLocaleString()}
-                          </span>
-                        </div>
-                        {event.description && (
-                          <div className="text-gray-400 mt-1">{event.description}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Breakthrough Moments */}
-                <div>
-                  <h3 className="font-bold mb-3">🎯 Breakthrough Moments</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {userProfile.breakthroughs.map((bt, idx) => (
-                      <div key={idx} className="bg-gray-800 rounded p-3">
-                        <div className="font-medium">{bt.moment_type}</div>
-                        <div className="text-sm text-gray-400">
-                          Unlocked: {new Date(bt.unlocked_at).toLocaleDateString()}
-                        </div>
-                      </div>
-                    ))}
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <div className="text-sm text-gray-400">Avg Emotional Investment</div>
+                  <div className="text-3xl font-bold text-red-500">
+                    {(overview.totals.avg_emotional_investment * 100).toFixed(0)}%
                   </div>
                 </div>
               </div>
-            )}
-          </div>
-        )}
 
-        {/* Real-Time Activity Feed */}
-        {activeTab === "activity" && (
-          <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-            <h2 className="text-2xl font-bold mb-4">🔴 Live Activity Feed</h2>
-            <div className="space-y-3 max-h-[600px] overflow-y-auto">
-              {activityFeed.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">
-                  <p>No recent activity</p>
-                </div>
-              ) : (
-                activityFeed.map((event, idx) => (
-                  <div key={idx} className="bg-gray-800 rounded p-4 border-l-4 border-blue-500">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-medium">{event.type}</span>
-                          <span className="text-xs bg-gray-700 px-2 py-1 rounded">
-                            User: {event.user_id}
-                          </span>
-                          <span className="text-xs bg-purple-900 px-2 py-1 rounded">
-                            Level {event.level}
-                          </span>
-                        </div>
-                        {event.message && (
-                          <div className="text-sm text-gray-400">{event.message}</div>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {new Date(event.timestamp).toLocaleTimeString()}
-                      </div>
+              {/* Addiction Metrics */}
+              {addiction && (
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <h2 className="text-2xl font-bold mb-4">🔥 Addiction & Retention Metrics</h2>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Week+ Streaks</div>
+                      <div className="text-2xl font-bold">{addiction.metrics.week_plus_streaks}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Month+ Streaks</div>
+                      <div className="text-2xl font-bold">{addiction.metrics.month_plus_streaks}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Heavy Users</div>
+                      <div className="text-2xl font-bold">{addiction.metrics.heavy_users}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Daily Active</div>
+                      <div className="text-2xl font-bold">{addiction.metrics.daily_active_users}</div>
                     </div>
                   </div>
-                ))
+                </div>
               )}
-            </div>
-          </div>
-        )}
 
-        {/* Streak Recovery Dashboard */}
-        {activeTab === "recovery" && (
-          <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-            <h2 className="text-2xl font-bold mb-4">💔 Streak Recovery Opportunities</h2>
-            
-            {!streakRecovery ? (
-              <div className="text-center py-12 text-gray-400">
-                <p>Loading streak recovery data...</p>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                  <div className="bg-red-900/20 border border-red-800 rounded p-6">
-                    <div className="text-sm text-gray-400">Broken Today</div>
-                    <div className="text-3xl font-bold text-red-500">
-                      {Number(streakRecovery.broken_today) || 0}
+              {/* Revenue Forecast */}
+              {forecast && (
+                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+                  <h2 className="text-2xl font-bold mb-4">💰 Revenue Forecast</h2>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Current Month</div>
+                      <div className="text-2xl font-bold text-green-500">
+                        ${forecast.current_month.projected_revenue.toFixed(2)}
+                      </div>
+                      <div className="text-sm text-gray-400 mt-2">
+                        {forecast.current_month.projected_conversions} conversions
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-orange-900/20 border border-orange-800 rounded p-6">
-                    <div className="text-sm text-gray-400">Broken This Week</div>
-                    <div className="text-3xl font-bold text-orange-500">
-                      {Number(streakRecovery.broken_this_week) || 0}
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Next Month</div>
+                      <div className="text-2xl font-bold text-green-500">
+                        ${forecast.next_month.projected_revenue.toFixed(2)}
+                      </div>
+                      <div className="text-sm text-gray-400 mt-2">
+                        {forecast.next_month.projected_conversions} conversions
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-green-900/20 border border-green-800 rounded p-6">
-                    <div className="text-sm text-gray-400">Recovery Revenue Potential</div>
-                    <div className="text-3xl font-bold text-green-500">
-                      ${Number(streakRecovery.recovery_potential).toFixed(2)}
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">6 Month Projection</div>
+                      <div className="text-2xl font-bold text-green-500">
+                        ${forecast.six_months.projected_revenue.toFixed(2)}
+                      </div>
+                      <div className="text-sm text-gray-400 mt-2">
+                        {forecast.six_months.projected_conversions} conversions
+                      </div>
                     </div>
                   </div>
                 </div>
+              )}
+            </>
+          )}
 
-                <div>
-                  <h3 className="font-bold mb-3">Users to Re-Engage</h3>
-                  <div className="space-y-3">
-                    {streakRecovery.users.map((user, idx) => (
-                      <div key={idx} className="bg-gray-800 rounded p-4 flex justify-between items-center">
-                        <div>
-                          <div className="font-medium">User: {user.user_id}</div>
+          {/* User Lookup Tab */}
+          {activeTab === "users" && (
+            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+              <h2 className="text-2xl font-bold mb-4">👤 User Profile Lookup</h2>
+              <div className="flex gap-2 mb-6">
+                <input
+                  type="text"
+                  placeholder="Enter User ID"
+                  value={searchUserId}
+                  onChange={(e) => setSearchUserId(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && searchUser()}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white"
+                />
+                <button
+                  onClick={searchUser}
+                  className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded"
+                >
+                  Search
+                </button>
+              </div>
+
+              {userProfile?.user && (
+                <div className="space-y-6">
+                  {/* User Stats */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">User ID</div>
+                      <div className="font-mono text-sm">{userProfile.user.user_id}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Stage</div>
+                      <div className="font-bold">{STAGE_LABELS[userProfile.user.current_stage]}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Level</div>
+                      <div className="text-2xl font-bold">{userProfile.user.relationship_level}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Streak</div>
+                      <div className="text-2xl font-bold text-orange-500">
+                        {userProfile.user.streak_days} days
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Emotional Investment */}
+                  <div>
+                    <div className="text-sm text-gray-400 mb-2">Emotional Investment</div>
+                    <div className="w-full bg-gray-800 rounded-full h-4">
+                      <div
+                        className="h-full bg-gradient-to-r from-blue-500 to-red-500 rounded-full"
+                        style={{ width: `${((userProfile.user?.emotional_investment || 0) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="text-right text-sm mt-1">
+                      {((userProfile.user?.emotional_investment || 0) * 100).toFixed(0)}%
+                    </div>
+                  </div>
+
+                  {/* Recent Events */}
+                  <div>
+                    <h3 className="font-bold mb-3">Recent Events</h3>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {userProfile.events.map((event, idx) => (
+                        <div key={idx} className="bg-gray-800 rounded p-3 text-sm">
+                          <div className="flex justify-between">
+                            <span className="font-medium">{event.event_type}</span>
+                            <span className="text-gray-400">
+                              {new Date(event.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                          {event.description && (
+                            <div className="text-gray-400 mt-1">{event.description}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Breakthrough Moments */}
+                  <div>
+                    <h3 className="font-bold mb-3">🎯 Breakthrough Moments</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {userProfile.breakthroughs.map((bt, idx) => (
+                        <div key={idx} className="bg-gray-800 rounded p-3">
+                          <div className="font-medium">{bt.moment_type}</div>
                           <div className="text-sm text-gray-400">
-                            Level {user.level} • {user.days_since_broken} days ago •{" "}
-                            {(user.emotional_investment * 100).toFixed(0)}% invested
+                            Unlocked: {new Date(bt.unlocked_at).toLocaleDateString()}
                           </div>
                         </div>
-                        <button className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm">
-                          Send Re-Engagement
-                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Live Activity Tab - Active Users with Actions */}
+          {activeTab === "activity" && (
+            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+              <h2 className="text-2xl font-bold mb-4">🔴 Live Active Users</h2>
+              <div className="space-y-3 max-h-[700px] overflow-y-auto">
+                {activeUsers.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <p>No active users at the moment</p>
+                  </div>
+                ) : (
+                  activeUsers.map((user) => (
+                    <div key={user.user_id} className="bg-gray-800 rounded p-4 border-l-4 border-green-500">
+                      <div className="flex justify-between items-center">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                            <span className="font-mono text-sm">{user.user_id}</span>
+                            <span className={`text-xs px-2 py-1 rounded ${STAGE_COLORS[user.current_stage]}`}>
+                              {STAGE_LABELS[user.current_stage]}
+                            </span>
+                            <span className="text-xs bg-purple-900 px-2 py-1 rounded">
+                              Level {user.relationship_level}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-400">
+                            <div>
+                              <span className="text-gray-500">Streak:</span> {user.streak_days} days
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Messages:</span> {user.message_count}
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Investment:</span> {(user.emotional_investment * 100).toFixed(0)}%
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Last Active:</span>{" "}
+                              {new Date(user.last_interaction).toLocaleTimeString()}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 ml-4">
+                          <button
+                            onClick={() => openChatView(user.user_id)}
+                            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-medium"
+                          >
+                            👁️ View Chat
+                          </button>
+                          <button
+                            onClick={() => startManualOverride(user.user_id)}
+                            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium"
+                          >
+                            🎮 Manual Override
+                          </button>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Message Content Analysis */}
-        {activeTab === "analysis" && (
-          <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-            <h2 className="text-2xl font-bold mb-4">💬 Message Content Analysis</h2>
-            
-            {!messageAnalysis ? (
-              <div className="text-center py-12 text-gray-400">
-                <p>Loading message analysis...</p>
+                    </div>
+                  ))
+                )}
               </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Total Messages</div>
-                    <div className="text-3xl font-bold">{Number(messageAnalysis.total_messages)}</div>
+            </div>
+          )}
+
+          {/* Streak Recovery Dashboard */}
+          {activeTab === "recovery" && (
+            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+              <h2 className="text-2xl font-bold mb-4">💔 Streak Recovery Opportunities</h2>
+              
+              {!streakRecovery ? (
+                <div className="text-center py-12 text-gray-400">
+                  <p>Loading streak recovery data...</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-red-900/20 border border-red-800 rounded p-6">
+                      <div className="text-sm text-gray-400">Broken Today</div>
+                      <div className="text-3xl font-bold text-red-500">
+                        {Number(streakRecovery.broken_today) || 0}
+                      </div>
+                    </div>
+                    <div className="bg-orange-900/20 border border-orange-800 rounded p-6">
+                      <div className="text-sm text-gray-400">Broken This Week</div>
+                      <div className="text-3xl font-bold text-orange-500">
+                        {Number(streakRecovery.broken_this_week) || 0}
+                      </div>
+                    </div>
+                    <div className="bg-green-900/20 border border-green-800 rounded p-6">
+                      <div className="text-sm text-gray-400">Recovery Revenue Potential</div>
+                      <div className="text-3xl font-bold text-green-500">
+                        ${Number(streakRecovery.recovery_potential).toFixed(2)}
+                      </div>
+                    </div>
                   </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Avg Message Length</div>
-                    <div className="text-3xl font-bold">{Number(messageAnalysis.avg_length).toFixed(0)} chars</div>
+
+                  <div>
+                    <h3 className="font-bold mb-3">Users to Re-Engage</h3>
+                    <div className="space-y-3">
+                      {streakRecovery.users.map((user, idx) => (
+                        <div key={idx} className="bg-gray-800 rounded p-4 flex justify-between items-center">
+                          <div>
+                            <div className="font-medium">User: {user.user_id}</div>
+                            <div className="text-sm text-gray-400">
+                              Level {user.level} • {user.days_since_broken} days ago •{" "}
+                              {(user.emotional_investment * 100).toFixed(0)}% invested
+                            </div>
+                          </div>
+                          <button className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm">
+                            Send Re-Engagement
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="border border-gray-800 rounded p-4">
-                    <div className="text-sm text-gray-400">Question Rate</div>
-                    <div className="text-3xl font-bold">{(Number(messageAnalysis.question_rate) * 100).toFixed(0)}%</div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Message Content Analysis */}
+          {activeTab === "analysis" && (
+            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+              <h2 className="text-2xl font-bold mb-4">💬 Message Content Analysis</h2>
+              
+              {!messageAnalysis ? (
+                <div className="text-center py-12 text-gray-400">
+                  <p>Loading message analysis...</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                    <div className="border border-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Total Messages</div>
+                      <div className="text-3xl font-bold">{Number(messageAnalysis.total_messages)}</div>
+                    </div>
+                    <div className="border border-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Avg Message Length</div>
+                      <div className="text-3xl font-bold">{Number(messageAnalysis.avg_length).toFixed(0)} chars</div>
+                    </div>
+                    <div className="border border-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Question Rate</div>
+                      <div className="text-3xl font-bold">{(Number(messageAnalysis.question_rate) * 100).toFixed(0)}%</div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Top Words */}
+                    <div>
+                      <h3 className="font-bold mb-3">Most Used Words</h3>
+                      <div className="space-y-2">
+                        {messageAnalysis.top_words.map((item, idx) => (
+                          <div key={idx} className="flex justify-between bg-gray-800 rounded p-2">
+                            <span>{item.word}</span>
+                            <span className="text-gray-400">{item.count}x</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Top Topics */}
+                    <div>
+                      <h3 className="font-bold mb-3">Top Topics</h3>
+                      <div className="space-y-2">
+                        {messageAnalysis.top_topics.map((item, idx) => (
+                          <div key={idx} className="flex justify-between bg-gray-800 rounded p-2">
+                            <span>{item.topic}</span>
+                            <span className="text-gray-400">{item.count}x</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Emotional Words */}
+                    <div>
+                      <h3 className="font-bold mb-3">Emotional Words</h3>
+                      <div className="space-y-2">
+                        {messageAnalysis.emotional_words.map((item, idx) => (
+                          <div key={idx} className="flex justify-between bg-gray-800 rounded p-2">
+                            <span>{item.word}</span>
+                            <span className="text-gray-400">{item.count}x</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Chat View Modal */}
+        {isChatViewOpen && viewingUserId && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-900 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col border border-gray-700">
+              {/* Header */}
+              <div className="flex justify-between items-center p-6 border-b border-gray-800">
+                <div>
+                  <h3 className="text-2xl font-bold">
+                    {isOverrideActive ? "🎮 Manual Override Active" : "👁️ Viewing Chat"}
+                  </h3>
+                  <p className="text-sm text-gray-400">User: {viewingUserId}</p>
+                </div>
+                <div className="flex gap-2">
+                  {isOverrideActive ? (
+                    <button
+                      onClick={endManualOverride}
+                      className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded font-medium"
+                    >
+                      End Override
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => startManualOverride(viewingUserId)}
+                      className="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded font-medium"
+                    >
+                      Take Over (Manual Override)
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      closeChatView();
+                      if (isOverrideActive) {
+                        endManualOverride();
+                      }
+                    }}
+                    className="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {chatMessages.length === 0 ? (
+                  <div className="flex items-center justify-center h-full text-gray-400">
+                    <p>No messages yet...</p>
+                  </div>
+                ) : (
+                  chatMessages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
+                    >
+                      <div
+                        className={`max-w-[70%] rounded-lg p-4 ${
+                          msg.role === 'user'
+                            ? 'bg-blue-900/50 border border-blue-800'
+                            : 'bg-purple-900/50 border border-purple-800'
+                        }`}
+                      >
+                        <div className="text-xs text-gray-400 mb-1">
+                          {msg.role === 'user' ? '👤 User' : '💬 Ellie'}
+                        </div>
+                        <div className="text-white whitespace-pre-wrap">{msg.content}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {new Date(msg.created_at).toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Manual Response Input (only when override active) */}
+              {isOverrideActive && (
+                <div className="p-6 border-t border-gray-800 bg-gray-800/50">
+                  <div className="flex gap-2">
+                    <textarea
+                      placeholder="Type your manual response as Ellie..."
+                      value={manualResponseText}
+                      onChange={(e) => setManualResponseText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          sendManualResponse();
+                        }
+                      }}
+                      className="flex-1 bg-gray-900 border border-gray-700 rounded px-4 py-3 text-white resize-none focus:outline-none focus:border-purple-500"
+                      rows={3}
+                    />
+                    <button
+                      onClick={sendManualResponse}
+                      disabled={!manualResponseText.trim()}
+                      className="bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:cursor-not-allowed px-6 rounded font-bold"
+                    >
+                      SEND
+                    </button>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-2">
+                    Press Enter to send • Shift+Enter for new line • Messages stored as normal API responses
                   </div>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {/* Top Words */}
-                  <div>
-                    <h3 className="font-bold mb-3">Most Used Words</h3>
-                    <div className="space-y-2">
-                      {messageAnalysis.top_words.map((item, idx) => (
-                        <div key={idx} className="flex justify-between bg-gray-800 rounded p-2">
-                          <span>{item.word}</span>
-                          <span className="text-gray-400">{item.count}x</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Top Topics */}
-                  <div>
-                    <h3 className="font-bold mb-3">Top Topics</h3>
-                    <div className="space-y-2">
-                      {messageAnalysis.top_topics.map((item, idx) => (
-                        <div key={idx} className="flex justify-between bg-gray-800 rounded p-2">
-                          <span>{item.topic}</span>
-                          <span className="text-gray-400">{item.count}x</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Emotional Words */}
-                  <div>
-                    <h3 className="font-bold mb-3">Emotional Words</h3>
-                    <div className="space-y-2">
-                      {messageAnalysis.emotional_words.map((item, idx) => (
-                        <div key={idx} className="flex justify-between bg-gray-800 rounded p-2">
-                          <span>{item.word}</span>
-                          <span className="text-gray-400">{item.count}x</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
+              )}
+            </div>
           </div>
         )}
       </div>
