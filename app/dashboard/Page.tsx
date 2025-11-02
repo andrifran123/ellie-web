@@ -6,7 +6,7 @@ export const metadata = {
 };
 
 export default function DashboardPage() {
-  // ⚠️ IMPORTANT: Add authentication here before deploying to production
+  // ⚠️ IMPORTANT: Add aFuthentication here before deploying to production
   // For now, this is accessible to anyone who knows the URL
   // 
   // Option 1: Check environment variable
