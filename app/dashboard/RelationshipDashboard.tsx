@@ -177,22 +177,22 @@ export default function RelationshipDashboard() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Total Users</div>
-            <div className="text-3xl font-bold">{overview?.totals.total_users || 0}</div>
+            <div className="text-3xl font-bold">{Number(overview?.totals.total_users) || 0}</div>
           </div>
           <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Avg Relationship Level</div>
             <div className="text-3xl font-bold">
-              {overview?.totals.avg_relationship_level?.toFixed(1) || 0}/100
+              {Number(overview?.totals.avg_relationship_level).toFixed(1) || 0}/100
             </div>
           </div>
           <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Active Streaks</div>
-            <div className="text-3xl font-bold">{overview?.totals.active_streaks || 0}</div>
+            <div className="text-3xl font-bold">{Number(overview?.totals.active_streaks) || 0}</div>
           </div>
           <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Emotional Investment</div>
             <div className="text-3xl font-bold">
-              {((overview?.totals.avg_emotional_investment || 0) * 100).toFixed(0)}%
+              {((Number(overview?.totals.avg_emotional_investment) || 0) * 100).toFixed(0)}%
             </div>
           </div>
         </div>
@@ -205,20 +205,20 @@ export default function RelationshipDashboard() {
               <div key={stage.current_stage}>
                 <div className="flex justify-between mb-2">
                   <span className="font-medium">{STAGE_LABELS[stage.current_stage]}</span>
-                  <span className="text-gray-400">{stage.user_count} users</span>
+                  <span className="text-gray-400">{Number(stage.user_count)} users</span>
                 </div>
                 <div className="w-full bg-gray-800 rounded-full h-3 overflow-hidden">
                   <div
                     className={`h-full ${STAGE_COLORS[stage.current_stage]}`}
                     style={{
-                      width: `${((stage.user_count / (overview?.totals.total_users || 1)) * 100).toFixed(1)}%`,
+                      width: `${((Number(stage.user_count) / (Number(overview?.totals.total_users) || 1)) * 100).toFixed(1)}%`,
                     }}
                   />
                 </div>
                 <div className="flex justify-between text-sm text-gray-500 mt-1">
-                  <span>Avg Level: {stage.avg_level?.toFixed(1)}</span>
-                  <span>Avg Streak: {stage.avg_streak?.toFixed(1)} days</span>
-                  <span>Max Streak: {stage.max_streak} days</span>
+                  <span>Avg Level: {Number(stage.avg_level).toFixed(1)}</span>
+                  <span>Avg Streak: {Number(stage.avg_streak).toFixed(1)} days</span>
+                  <span>Max Streak: {Number(stage.max_streak)} days</span>
                 </div>
               </div>
             ))}
@@ -232,25 +232,25 @@ export default function RelationshipDashboard() {
             <div>
               <div className="text-gray-400 text-sm">Daily Active</div>
               <div className="text-2xl font-bold text-green-500">
-                {addiction?.metrics.daily_active_users || 0}
+                {Number(addiction?.metrics.daily_active_users) || 0}
               </div>
             </div>
             <div>
               <div className="text-gray-400 text-sm">Week+ Streaks</div>
               <div className="text-2xl font-bold text-blue-500">
-                {addiction?.metrics.week_plus_streaks || 0}
+                {Number(addiction?.metrics.week_plus_streaks) || 0}
               </div>
             </div>
             <div>
               <div className="text-gray-400 text-sm">Heavy Users (100+)</div>
               <div className="text-2xl font-bold text-purple-500">
-                {addiction?.metrics.heavy_users || 0}
+                {Number(addiction?.metrics.heavy_users) || 0}
               </div>
             </div>
             <div>
               <div className="text-gray-400 text-sm">Emotionally Invested</div>
               <div className="text-2xl font-bold text-red-500">
-                {addiction?.metrics.emotionally_invested || 0}
+                {Number(addiction?.metrics.emotionally_invested) || 0}
               </div>
             </div>
           </div>
@@ -260,7 +260,7 @@ export default function RelationshipDashboard() {
               {addiction?.returnPatterns.map((pattern) => (
                 <div key={pattern.return_window} className="flex justify-between text-sm">
                   <span className="text-gray-400">{pattern.return_window}</span>
-                  <span className="font-medium">{pattern.user_count} users</span>
+                  <span className="font-medium">{Number(pattern.user_count)} users</span>
                 </div>
               ))}
             </div>
@@ -272,7 +272,7 @@ export default function RelationshipDashboard() {
           <h2 className="text-2xl font-bold mb-4">💰 Revenue Opportunities</h2>
           <div className="mb-6">
             <div className="text-4xl font-bold text-green-500 mb-2">
-              ${revenue?.totalPotential.toFixed(2) || 0}
+              ${Number(revenue?.totalPotential).toFixed(2) || 0}
             </div>
             <div className="text-gray-400">Total Revenue Potential</div>
           </div>
@@ -282,33 +282,33 @@ export default function RelationshipDashboard() {
                 <div className="flex justify-between mb-2">
                   <span className="font-medium">{STAGE_LABELS[stage.current_stage]}</span>
                   <span className="text-green-500 font-bold">
-                    ${stage.potential_revenue.toFixed(2)}
+                    ${Number(stage.potential_revenue).toFixed(2)}
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-4 text-sm text-gray-400">
                   <div>
-                    Users: {stage.user_count} ({stage.paid_users} paid)
+                    Users: {Number(stage.user_count)} ({Number(stage.paid_users)} paid)
                   </div>
-                  <div>Investment: {(stage.avg_investment * 100).toFixed(0)}%</div>
-                  <div>Conversion: {(stage.conversion_rate * 100).toFixed(1)}%</div>
+                  <div>Investment: {(Number(stage.avg_investment) * 100).toFixed(0)}%</div>
+                  <div>Conversion: {(Number(stage.conversion_rate) * 100).toFixed(1)}%</div>
                 </div>
               </div>
             ))}
           </div>
           <div className="mt-6 grid grid-cols-3 gap-4">
             <div className="border border-yellow-800 rounded p-4 bg-yellow-900/20">
-              <div className="text-2xl font-bold">{revenue?.opportunities.total_opportunities || 0}</div>
+              <div className="text-2xl font-bold">{Number(revenue?.opportunities.total_opportunities) || 0}</div>
               <div className="text-sm text-gray-400">Total Conversion Opportunities</div>
             </div>
             <div className="border border-orange-800 rounded p-4 bg-orange-900/20">
               <div className="text-2xl font-bold">
-                {revenue?.opportunities.stage_3_opportunities || 0}
+                {Number(revenue?.opportunities.stage_3_opportunities) || 0}
               </div>
               <div className="text-sm text-gray-400">&ldquo;Complicated&rdquo; Stage (Peak Drama)</div>
             </div>
             <div className="border border-red-800 rounded p-4 bg-red-900/20">
               <div className="text-2xl font-bold">
-                {revenue?.opportunities.stage_4_opportunities || 0}
+                {Number(revenue?.opportunities.stage_4_opportunities) || 0}
               </div>
               <div className="text-sm text-gray-400">&ldquo;Almost Together&rdquo; (Commitment)</div>
             </div>
@@ -325,15 +325,15 @@ export default function RelationshipDashboard() {
                 <div className="flex gap-6 text-sm">
                   <span>
                     <span className="text-gray-500">Active:</span>{" "}
-                    <span className="font-medium">{day.active_users}</span>
+                    <span className="font-medium">{Number(day.active_users)}</span>
                   </span>
                   <span>
                     <span className="text-gray-500">Avg Interactions:</span>{" "}
-                    <span className="font-medium">{day.avg_interactions?.toFixed(1)}</span>
+                    <span className="font-medium">{Number(day.avg_interactions).toFixed(1)}</span>
                   </span>
                   <span>
                     <span className="text-gray-500">Streaks:</span>{" "}
-                    <span className="font-medium">{day.users_with_streak}</span>
+                    <span className="font-medium">{Number(day.users_with_streak)}</span>
                   </span>
                 </div>
               </div>
@@ -349,7 +349,7 @@ export default function RelationshipDashboard() {
               <div key={mood.last_mood} className="border border-gray-800 rounded p-4">
                 <div className="text-xl font-bold capitalize">{mood.last_mood}</div>
                 <div className="text-gray-400 text-sm">
-                  {mood.count} users (Avg Lvl: {mood.avg_level?.toFixed(1)})
+                  {Number(mood.count)} users (Avg Lvl: {Number(mood.avg_level).toFixed(1)})
                 </div>
               </div>
             ))}
@@ -364,7 +364,7 @@ export default function RelationshipDashboard() {
               {engagement.stuck.map((stuck) => (
                 <div key={stuck.current_stage} className="flex justify-between">
                   <span>{STAGE_LABELS[stuck.current_stage]}</span>
-                  <span className="font-bold">{stuck.stuck_count} users</span>
+                  <span className="font-bold">{Number(stuck.stuck_count)} users</span>
                 </div>
               ))}
             </div>
