@@ -90,10 +90,31 @@ interface AddictionData {
 }
 
 interface UserProfile {
-  user: any;
-  events: any[];
-  breakthroughs: any[];
-  emotions: any[];
+  user: {
+    user_id: string;
+    relationship_level: number;
+    current_stage: string;
+    streak_days: number;
+    longest_streak: number;
+    total_interactions: number;
+    emotional_investment: number;
+    last_interaction: string;
+    last_mood: string;
+  } | null;
+  events: Array<{
+    event_type: string;
+    description?: string;
+    created_at: string;
+  }>;
+  breakthroughs: Array<{
+    moment_type: string;
+    unlocked_at: string;
+  }>;
+  emotions: Array<{
+    emotion_type: string;
+    intensity: number;
+    created_at: string;
+  }>;
 }
 
 interface ActivityEvent {
@@ -167,6 +188,7 @@ const STAGE_COLORS: Record<string, string> = {
 
 export default function RelationshipDashboardEnhanced() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [engagement, setEngagement] = useState<EngagementData | null>(null);
   const [revenue, setRevenue] = useState<RevenueData | null>(null);
   const [addiction, setAddiction] = useState<AddictionData | null>(null);
@@ -234,7 +256,7 @@ export default function RelationshipDashboardEnhanced() {
       const data = await res.json();
       setUserProfile(data);
       setActiveTab("users");
-    } catch (err) {
+    } catch {
       alert("User not found or error fetching user data");
     }
   };
