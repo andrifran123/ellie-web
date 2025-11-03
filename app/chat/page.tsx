@@ -190,8 +190,69 @@ export default function ChatPage() {
 
   // NEW: Manual override tracking
   const [inManualOverride, setInManualOverride] = useState(false);
-  const manualOverridePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastFetchTimestampRef = useRef<string>('1970-01-01'); // Track last fetched message timestamp
+  const generalPollIntervalRef = useRef<NodeJS.Timeout | null>(null); // For continuous polling
+
+  // NEW: Continuous polling for new messages (catches manual override messages)
+  const checkForNewMessages = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/manual-override/pending-response/${USER_ID}?since=${encodeURIComponent(lastFetchTimestampRef.current)}`,
+        { credentials: "include" }
+      );
+      
+      if (res.ok) {
+        const data = await res.json();
+        
+        // If there are new messages, add them to chat
+        if (data.has_response && data.messages && data.messages.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            ...data.messages.map((msg: ManualMessage) => ({
+              from: "ellie" as const,
+              text: msg.reply,
+              ts: new Date(msg.timestamp).getTime()
+            }))
+          ]);
+          
+          // Update timestamp
+          const latestTimestamp = data.messages[data.messages.length - 1].timestamp;
+          lastFetchTimestampRef.current = latestTimestamp;
+          
+          // Hide typing if admin stopped typing
+          if (!data.is_admin_typing) {
+            setTyping(false);
+          }
+        }
+        
+        // Update typing indicator if admin is typing
+        if (data.in_override && data.is_admin_typing) {
+          setTyping(true);
+        } else if (!data.in_override) {
+          // Override ended
+          setInManualOverride(false);
+          setTyping(false);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to check for new messages:", err);
+    }
+  }, []);
+
+  // Start continuous polling when component mounts
+  useEffect(() => {
+    // Initialize timestamp to now so we only get future messages
+    lastFetchTimestampRef.current = new Date().toISOString();
+    
+    // Poll every 2 seconds for new messages
+    generalPollIntervalRef.current = setInterval(checkForNewMessages, 2000);
+    
+    return () => {
+      if (generalPollIntervalRef.current) {
+        clearInterval(generalPollIntervalRef.current);
+      }
+    };
+  }, [checkForNewMessages]);
 
   // NEW: Fetch relationship status
   const fetchRelationshipStatus = useCallback(async () => {
@@ -209,73 +270,6 @@ export default function ChatPage() {
   }, []);
 
   // NEW: Poll for manual override responses
-  const checkForManualResponse = useCallback(async () => {
-    if (!inManualOverride) return;
-    
-    try {
-      // Send the last timestamp so we only get new messages
-      // Uses session-based endpoint (no USER_ID needed)
-      const res = await fetch(
-        `/api/manual-override/pending-response-me?since=${encodeURIComponent(lastFetchTimestampRef.current)}`, 
-        { credentials: "include" }
-      );
-      
-      if (res.ok) {
-        const data = await res.json();
-        
-        if (!data.in_override) {
-          // Override ended
-          setInManualOverride(false);
-          setTyping(false);
-          return;
-        }
-        
-        // Update typing indicator based on admin typing status
-        if (data.is_admin_typing !== undefined) {
-          setTyping(data.is_admin_typing);
-        }
-        
-        if (data.has_response && data.messages && data.messages.length > 0) {
-          // Got manual response(s)!
-          // Keep typing indicator if admin is still typing, otherwise hide it
-          if (!data.is_admin_typing) {
-            setTyping(false);
-          }
-          
-          // Add all new messages to chat
-          setMessages((prev) => [
-            ...prev,
-            ...data.messages.map((msg: ManualMessage) => ({
-              from: "ellie" as const,
-              text: msg.reply,
-              ts: new Date(msg.timestamp).getTime()
-            }))
-          ]);
-          
-          // Update last fetch timestamp to the newest message
-          const latestTimestamp = data.messages[data.messages.length - 1].timestamp;
-          lastFetchTimestampRef.current = latestTimestamp;
-          
-          // Don't end override - admin might send more messages
-        }
-      }
-    } catch (err) {
-      console.error("Failed to check for manual response:", err);
-    }
-  }, [inManualOverride]);
-
-  // NEW: Setup polling when in manual override
-  useEffect(() => {
-    if (inManualOverride) {
-      // Poll every 1 second for manual responses
-      manualOverridePollIntervalRef.current = setInterval(checkForManualResponse, 1000);
-      return () => {
-        if (manualOverridePollIntervalRef.current) {
-          clearInterval(manualOverridePollIntervalRef.current);
-        }
-      };
-    }
-  }, [inManualOverride, checkForManualResponse]);
 
   // NEW: Fetch relationship on mount and periodically
   useEffect(() => {
@@ -329,11 +323,10 @@ export default function ChatPage() {
         
         // Check if in manual override
         if (data.in_manual_override) {
-          // Reset timestamp to now so we only fetch messages from this point forward
-          lastFetchTimestampRef.current = new Date().toISOString();
+          // Don't reset timestamp - continuous polling is handling new messages
           setInManualOverride(true);
           setTyping(true); // Keep typing indicator while waiting for response
-          // Polling will handle getting the response (user doesn't know it's admin)
+          // Continuous polling will display admin's response
           setLoading(false);
           return;
         }
