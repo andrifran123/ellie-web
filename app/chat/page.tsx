@@ -334,13 +334,15 @@ export default function ChatPage() {
           }
         }
         
-        // Update typing indicator - keep visible during manual override until message arrives
+        // Update typing indicator - ONLY show when admin is actually typing
         if (data.in_override) {
-          // If waiting for response or admin is typing, keep typing visible
-          if (data.waiting || data.is_admin_typing || !data.has_response) {
-            setTyping(true);
+          // ONLY show typing dots when admin is actively typing
+          if (data.is_admin_typing) {
+            setTypingWithTimeout(true);
+          } else {
+            // Admin not typing - clear the indicator
+            setTyping(false);
           }
-          // Don't hide typing here - only hide when message arrives (above)
         } else {
           // Override ended - clear typing
           setTyping(false);
@@ -465,7 +467,8 @@ export default function ChatPage() {
               signal: abortController.signal
             });
             
-            // Keep typing indicator while waiting for admin response
+            // Clear typing - will show when admin actually starts typing
+            setTyping(false);
             setLoading(false);
             return;
           }
@@ -477,7 +480,7 @@ export default function ChatPage() {
         if (data.in_manual_override) {
           console.log("🎮 Manual override activated during request - ignoring API response");
           setInManualOverride(true);
-          setTyping(true); // Keep typing indicator while waiting for admin response
+          // Don't show typing - will show when admin actually starts typing
           setLoading(false);
           return;
         }
