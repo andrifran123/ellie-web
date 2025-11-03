@@ -749,11 +749,13 @@ export default function RelationshipDashboardEnhanced() {
           {/* Live Activity Tab - Active Users with Actions */}
           {activeTab === "activity" && (
             <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-              <h2 className="text-2xl font-bold mb-4">🔴 Live Active Users</h2>
+              <h2 className="text-2xl font-bold mb-4">🔴 Live Active Users (Last 30 Minutes)</h2>
+              <div className="text-xs text-gray-500 mb-3">Auto-refreshes every 5 seconds</div>
               <div className="space-y-3 max-h-[700px] overflow-y-auto">
                 {activeUsers.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
-                    <p>No active users at the moment</p>
+                    <p>No active users in the last 30 minutes</p>
+                    <p className="text-sm mt-2">Users appear here when they send messages</p>
                   </div>
                 ) : (
                   activeUsers.map((user) => (
