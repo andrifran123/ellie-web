@@ -214,8 +214,9 @@ export default function ChatPage() {
     
     try {
       // Send the last timestamp so we only get new messages
+      // Uses session-based endpoint (no USER_ID needed)
       const res = await fetch(
-        `/api/manual-override/pending-response/${USER_ID}?since=${encodeURIComponent(lastFetchTimestampRef.current)}`, 
+        `/api/manual-override/pending-response-me?since=${encodeURIComponent(lastFetchTimestampRef.current)}`, 
         { credentials: "include" }
       );
       
