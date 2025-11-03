@@ -229,6 +229,13 @@ export default function ChatPage() {
       if (res.ok) {
         const data = await res.json();
         
+        console.log("📡 Polling response:", {
+          in_override: data.in_override,
+          has_response: data.has_response,
+          is_admin_typing: data.is_admin_typing,
+          message_count: data.messages?.length || 0
+        });
+        
         // Update manual override state
         if (data.in_override !== undefined) {
           setInManualOverride(data.in_override);
@@ -236,15 +243,27 @@ export default function ChatPage() {
         
         // If there are new messages, add them to chat (with deduplication)
         if (data.has_response && data.messages && data.messages.length > 0) {
+          console.log("📨 Messages from server:", data.messages.map((m: ManualMessage) => ({
+            id: m.id,
+            text: m.reply.substring(0, 20),
+            timestamp: m.timestamp
+          })));
+          
           const newMessages = data.messages.filter((msg: ManualMessage) => {
-            if (messageIdsRef.current.has(msg.id)) {
+            // Create unique key: use ID if available, otherwise timestamp+content
+            const uniqueKey = msg.id || `${msg.timestamp}-${msg.reply.substring(0, 50)}`;
+            
+            if (messageIdsRef.current.has(uniqueKey)) {
+              console.log("⚠️ Duplicate message blocked:", uniqueKey);
               return false; // Skip duplicate
             }
-            messageIdsRef.current.add(msg.id);
+            messageIdsRef.current.add(uniqueKey);
+            console.log("✅ New message added:", uniqueKey);
             return true;
           });
           
           if (newMessages.length > 0) {
+            console.log(`📨 Adding ${newMessages.length} new message(s) to chat`);
             setMessages((prev) => [
               ...prev,
               ...newMessages.map((msg: ManualMessage) => ({
@@ -257,17 +276,21 @@ export default function ChatPage() {
             // Update timestamp to the latest message
             const latestTimestamp = newMessages[newMessages.length - 1].timestamp;
             lastFetchTimestampRef.current = latestTimestamp;
+            
+            // Hide typing now that message arrived
+            setTyping(false);
           }
         }
         
-        // Update typing indicator if admin is typing
-        if (data.in_override && data.is_admin_typing) {
-          setTyping(true);
-        } else if (data.in_override && !data.is_admin_typing) {
-          // In override but admin not typing
-          setTyping(false);
-        } else if (!data.in_override) {
-          // Override ended
+        // Update typing indicator - keep visible during manual override until message arrives
+        if (data.in_override) {
+          // If waiting for response or admin is typing, keep typing visible
+          if (data.waiting || data.is_admin_typing || !data.has_response) {
+            setTyping(true);
+          }
+          // Don't hide typing here - only hide when message arrives (above)
+        } else {
+          // Override ended - clear typing
           setTyping(false);
         }
       }
