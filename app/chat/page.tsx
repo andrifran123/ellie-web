@@ -163,6 +163,7 @@ export default function ChatPage() {
   // NEW: Real user ID state
   const [userId, setUserId] = useState<string | null>(null);
   const [userIdLoading, setUserIdLoading] = useState(true);
+  const [userIdError, setUserIdError] = useState<string | null>(null);
 
   // messages & composer
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -198,34 +199,57 @@ export default function ChatPage() {
   const lastFetchTimestampRef = useRef<string>('1970-01-01'); // Track last fetched message timestamp
   const generalPollIntervalRef = useRef<NodeJS.Timeout | null>(null); // For continuous polling
 
-  // NEW: Fetch authenticated user ID on mount
-  useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const res = await fetch("/api/auth/me", { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.userId) {
-            setUserId(data.userId);
-            console.log("✅ Authenticated user ID:", data.userId);
-          } else {
-            console.error("❌ No userId in auth response");
-            show("Could not get user ID");
-          }
+  // NEW: Fetch authenticated user ID function (can be retried)
+  const fetchUserId = useCallback(async () => {
+    setUserIdLoading(true);
+    setUserIdError(null);
+    
+    try {
+      console.log("🔄 Fetching user ID from /api/auth/me...");
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+      const res = await fetch("/api/auth/me", { 
+        credentials: "include",
+        signal: controller.signal 
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log("📦 Auth response:", data);
+        
+        if (data.userId) {
+          setUserId(data.userId);
+          setUserIdLoading(false);
+          console.log("✅ Authenticated user ID:", data.userId);
         } else {
-          console.error("❌ Auth check failed");
-          show("Authentication failed");
+          console.error("❌ No userId in auth response:", data);
+          setUserIdError("Server did not return a user ID. Please try again.");
+          setUserIdLoading(false);
         }
-      } catch (err) {
-        console.error("❌ Failed to fetch user ID:", err);
-        show("Could not authenticate");
-      } finally {
+      } else {
+        console.error("❌ Auth check failed with status:", res.status);
+        setUserIdError(`Authentication failed (${res.status}). Please try again.`);
         setUserIdLoading(false);
       }
-    };
+    } catch (err) {
+      console.error("❌ Failed to fetch user ID:", err);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setUserIdError("Server is taking too long to respond. Please check your connection and try again.");
+      } else {
+        setUserIdError("Could not connect to server. Please check your connection and try again.");
+      }
+      setUserIdLoading(false);
+    }
+  }, []);
 
+  // Fetch user ID on mount
+  useEffect(() => {
     fetchUserId();
-  }, [show]);
+  }, [fetchUserId]);
 
   // NEW: Continuous polling for new messages (catches manual override messages)
   // UPDATED: Now uses the real userId instead of hardcoded "default-user"
@@ -361,10 +385,15 @@ export default function ChatPage() {
             `Language set to ${LANGS.find((x) => x.code === r.language)?.name || chosenLang
             }`
           );
-          setLangReady(true);
         }
+        // Always set langReady to true, even if response is unexpected
+        setLangReady(true);
       })
-      .catch((e) => show(errorMessage(e)));
+      .catch((e) => {
+        show(errorMessage(e));
+        // Still proceed even if API call fails
+        setLangReady(true);
+      });
   };
 
   /* Reset conversation */
@@ -569,8 +598,8 @@ export default function ChatPage() {
     );
   }
 
-  // Show loading if user ID is not yet loaded
-  if (userIdLoading || !userId) {
+  // Show loading or error if user ID is not yet loaded
+  if (userIdLoading || userIdError || !userId) {
     return (
       <div className="relative h-screen w-full overflow-hidden text-white">
         <AuroraBG />
@@ -581,8 +610,29 @@ export default function ChatPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6 }}
           >
-            <h1 className="mb-2 text-3xl font-bold">Loading...</h1>
-            <p className="mb-6 text-white/70">Authenticating your session</p>
+            {userIdLoading ? (
+              <>
+                <h1 className="mb-2 text-3xl font-bold">Loading...</h1>
+                <p className="mb-6 text-white/70">Getting your session ready</p>
+                <div className="flex justify-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                </div>
+              </>
+            ) : userIdError ? (
+              <>
+                <h1 className="mb-2 text-3xl font-bold">⚠️ Connection Error</h1>
+                <p className="mb-6 text-white/70">{userIdError}</p>
+                <button
+                  onClick={fetchUserId}
+                  className="w-full rounded-xl bg-gradient-to-r from-white to-white text-black font-bold py-3 hover:opacity-90 transition"
+                >
+                  Try Again
+                </button>
+                <p className="mt-4 text-sm text-white/50 text-center">
+                  If this keeps happening, try logging out and back in.
+                </p>
+              </>
+            ) : null}
           </motion.div>
         </div>
       </div>
@@ -941,13 +991,6 @@ export default function ChatPage() {
                   </div>
                 </section>
 
-                {/* User ID Display (for debugging) */}
-                <section>
-                  <div className="text-sm font-medium mb-2">Debug Info</div>
-                  <div className="text-xs text-white/50 bg-white/5 rounded-lg p-2 font-mono break-all">
-                    User ID: {userId}
-                  </div>
-                </section>
               </div>
             </motion.div>
           </motion.div>
