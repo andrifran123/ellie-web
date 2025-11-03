@@ -381,7 +381,11 @@ export default function RelationshipDashboardEnhanced() {
   };
 
   const endManualOverride = async () => {
-    if (!overrideUserId) return;
+    if (!overrideUserId) {
+      alert("No active override session to end");
+      console.error("endManualOverride called but overrideUserId is null");
+      return;
+    }
 
     try {
       const res = await fetch("/api/manual-override/end", {
@@ -391,7 +395,9 @@ export default function RelationshipDashboardEnhanced() {
       });
 
       if (!res.ok) {
-        alert("Failed to end manual override");
+        const errorData = await res.json().catch(() => ({}));
+        alert(`Failed to end manual override: ${errorData.error || 'Unknown error'}`);
+        console.error("End override error:", errorData);
         return;
       }
 
@@ -401,8 +407,8 @@ export default function RelationshipDashboardEnhanced() {
       
       alert("Manual override ended. API will resume normal operation.");
     } catch (err) {
-      alert("Error ending manual override");
-      console.error(err);
+      alert(`Error ending manual override: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      console.error("Exception in endManualOverride:", err);
     }
   };
 
@@ -941,7 +947,7 @@ export default function RelationshipDashboardEnhanced() {
         {/* Chat View Modal */}
         {isChatViewOpen && viewingUserId && (
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-            <div className="bg-gray-900 rounded-lg w-full max-w-4xl max-h-[90vh] flex flex-col border border-gray-700">
+            <div className="bg-gray-900 rounded-lg w-full max-w-6xl max-h-[95vh] flex flex-col border border-gray-700">
               {/* Header */}
               <div className="flex justify-between items-center p-6 border-b border-gray-800">
                 <div>
@@ -983,8 +989,14 @@ export default function RelationshipDashboardEnhanced() {
               {/* Messages */}
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
                 {chatMessages.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-gray-400">
-                    <p>No messages yet...</p>
+                  <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-3">
+                    <p className="text-lg">No messages yet...</p>
+                    <p className="text-sm text-gray-500">
+                      Messages will appear here once the conversation_history table is created.
+                    </p>
+                    <p className="text-xs text-gray-600">
+                      Run the migration SQL to enable message history.
+                    </p>
                   </div>
                 ) : (
                   chatMessages.map((msg) => (
