@@ -996,7 +996,7 @@ export default function RelationshipDashboardEnhanced() {
                   chatMessages.map((msg) => (
                     <div
                       key={msg.id}
-                      className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
+                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
                       <div
                         className={`max-w-[70%] rounded-lg p-4 ${
