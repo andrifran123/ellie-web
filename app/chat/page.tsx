@@ -62,8 +62,7 @@ type PresetsResponse = { presets: PresetItem[] };
 type CurrentPresetResponse = { preset: string | null };
 type ApplyPresetResponse = { ok?: boolean; preset?: string; voice?: string };
 
-// REMOVED: const USER_ID = "default-user";
-// We'll fetch the real user ID from /api/auth/me instead!
+// User ID is fetched dynamically - see state below
 
 const LANGS: LangOption[] = [
   { code: "en", name: "English" },
@@ -122,7 +121,7 @@ function useToasts() {
     const id = idRef.current++;
     setToasts((t) => [...t, { id, text }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3800);
-  }, []);
+  }, [userId]);
   return { toasts, show };
 }
 
@@ -160,10 +159,8 @@ export default function ChatPage() {
   const router = useRouter();
   const { toasts, show } = useToasts();
 
-  // NEW: Real user ID state
+  // NEW: Real user ID fetched from /api/auth/me
   const [userId, setUserId] = useState<string | null>(null);
-  const [userIdLoading, setUserIdLoading] = useState(true);
-  const [userIdError, setUserIdError] = useState<string | null>(null);
 
   // messages & composer
   const [messages, setMessages] = useState<ChatMsg[]>([]);
@@ -199,63 +196,29 @@ export default function ChatPage() {
   const lastFetchTimestampRef = useRef<string>('1970-01-01'); // Track last fetched message timestamp
   const generalPollIntervalRef = useRef<NodeJS.Timeout | null>(null); // For continuous polling
 
-  // NEW: Fetch authenticated user ID function (can be retried)
-  const fetchUserId = useCallback(async () => {
-    setUserIdLoading(true);
-    setUserIdError(null);
-    
-    try {
-      console.log("🔄 Fetching user ID from /api/auth/me...");
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-
-      const res = await fetch("/api/auth/me", { 
-        credentials: "include",
-        signal: controller.signal 
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json();
-        console.log("📦 Auth response:", data);
-        
-        if (data.userId) {
-          setUserId(data.userId);
-          setUserIdLoading(false);
-          console.log("✅ Authenticated user ID:", data.userId);
-        } else {
-          console.error("❌ No userId in auth response:", data);
-          setUserIdError("Server did not return a user ID. Please try again.");
-          setUserIdLoading(false);
+  // Fetch authenticated user ID on mount
+  useEffect(() => {
+    const fetchUserId = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.userId) {
+            setUserId(data.userId);
+            console.log("✅ User ID fetched:", data.userId);
+          }
         }
-      } else {
-        console.error("❌ Auth check failed with status:", res.status);
-        setUserIdError(`Authentication failed (${res.status}). Please try again.`);
-        setUserIdLoading(false);
+      } catch (err) {
+        console.error("❌ Failed to fetch user ID:", err);
       }
-    } catch (err) {
-      console.error("❌ Failed to fetch user ID:", err);
-      if (err instanceof Error && err.name === 'AbortError') {
-        setUserIdError("Server is taking too long to respond. Please check your connection and try again.");
-      } else {
-        setUserIdError("Could not connect to server. Please check your connection and try again.");
-      }
-      setUserIdLoading(false);
-    }
+    };
+    fetchUserId();
   }, []);
 
-  // Fetch user ID on mount
-  useEffect(() => {
-    fetchUserId();
-  }, [fetchUserId]);
-
   // NEW: Continuous polling for new messages (catches manual override messages)
-  // UPDATED: Now uses the real userId instead of hardcoded "default-user"
   const checkForNewMessages = useCallback(async () => {
-    if (!userId) return; // Don't poll if we don't have a user ID yet
-    
+    if (!userId) return; // Wait for userId to be loaded
+
     try {
       const res = await fetch(
         `/api/manual-override/pending-response/${userId}?since=${encodeURIComponent(lastFetchTimestampRef.current)}`,
@@ -298,11 +261,11 @@ export default function ChatPage() {
     } catch (err) {
       console.error("Failed to check for new messages:", err);
     }
-  }, [userId]); // Added userId to dependencies
+  }, []);
 
   // Start continuous polling when userId is available
   useEffect(() => {
-    if (!userId) return; // Wait for userId to be loaded
+    if (!userId) return; // Wait for userId
     
     // Initialize timestamp to now so we only get future messages
     lastFetchTimestampRef.current = new Date().toISOString();
@@ -315,532 +278,456 @@ export default function ChatPage() {
         clearInterval(generalPollIntervalRef.current);
       }
     };
-  }, [checkForNewMessages, userId]); // Added userId to dependencies
+  }, [checkForNewMessages, userId]);
 
-  // Fetch relationship status on mount
-  useEffect(() => {
-    const fetchRelationship = async () => {
-      try {
-        const res = await fetch("/api/relationship-status", { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          setRelationship(data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch relationship:", err);
+  // NEW: Fetch relationship status
+  const fetchRelationshipStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/relationship-status", {
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setRelationship(data);
       }
-    };
-
-    fetchRelationship();
+    } catch (err) {
+      console.error("Failed to fetch relationship status:", err);
+    }
   }, []);
 
-  /* Language check (we don't let the user chat until they pick) */
-  useEffect(() => {
-    refreshSession()
-      .then(() => apiPost<GetLanguageResponse>("/api/language/get", {}))
-      .then((r) => {
-        if (r.language) {
-          setChosenLang(r.language);
-          setLangReady(true);
-        }
-      })
-      .catch((e) => console.error("lang load error:", errorMessage(e)));
-  }, []);
+  // NEW: Poll for manual override responses
 
-  /* Relationship status polling */
+  // NEW: Fetch relationship on mount and periodically
   useEffect(() => {
-    if (!langReady) return;
-    const poll = setInterval(async () => {
-      try {
-        const res = await fetch("/api/relationship-status", { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          setRelationship(data);
-        }
-      } catch {}
-    }, 30000); // Poll every 30 seconds
-    return () => clearInterval(poll);
-  }, [langReady]);
+    fetchRelationshipStatus();
+    const interval = setInterval(fetchRelationshipStatus, 30000); // Every 30 seconds
+    return () => clearInterval(interval);
+  }, [fetchRelationshipStatus]);
 
-  /* Auto-scroll logic */
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) {
-      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (isNearBottom) el.scrollTop = el.scrollHeight;
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, typing]);
 
-  /* Set language */
-  const confirmLanguage = () => {
+  useEffect(() => {
     refreshSession()
-      .then(() =>
-        apiPost<SetLanguageResponse>("/api/language/set", {
-          language: chosenLang,
+      .then((ok) => {
+        if (!ok) router.push("/");
+      })
+      .catch(() => router.push("/"));
+  }, [router]);
+
+  useEffect(() => {
+    if (!langReady) {
+      fetch("/api/get-language", { credentials: "include" })
+        .then((r) => r.json())
+        .then((d: GetLanguageResponse) => {
+          const code = d?.language;
+          if (code && LANGS.some((o) => o.code === code)) {
+            setChosenLang(code);
+            setLangReady(true);
+            return;
+          }
+          setLangReady(false);
         })
-      )
-      .then((r) => {
-        if (r.ok && r.language) {
-          show(
-            `Language set to ${LANGS.find((x) => x.code === r.language)?.name || chosenLang
-            }`
-          );
-        }
-        // Always set langReady to true, even if response is unexpected
-        setLangReady(true);
-      })
-      .catch((e) => {
-        show(errorMessage(e));
-        // Still proceed even if API call fails
-        setLangReady(true);
-      });
-  };
-
-  /* Reset conversation */
-  const resetConversation = () => {
-    refreshSession()
-      .then(() => apiPost("/api/reset", {}))
-      .then(() => {
-        setMessages([]);
-        show("Conversation cleared (saved facts remain)");
-      })
-      .catch((e) => show("Reset error: " + errorMessage(e)));
-  };
-
-  /* Load presets on demand */
-  const loadPresets = async () => {
-    if (loadingPresets.current) return;
-    loadingPresets.current = true;
-    try {
-      await refreshSession();
-      const r = await apiPost<PresetsResponse>("/api/voice/presets", {});
-      if (r.presets) setPresets(r.presets);
-      const curr = await apiPost<CurrentPresetResponse>("/api/voice/current", {});
-      if (curr.preset) setCurrentPreset(curr.preset);
-    } catch (e) {
-      show("Presets error: " + errorMessage(e));
+        .catch(() => setLangReady(false));
     }
-    loadingPresets.current = false;
-  };
+  }, [langReady]);
 
-  const applyPreset = async (key: string) => {
-    try {
-      await refreshSession();
-      const r = await apiPost<ApplyPresetResponse>("/api/voice/preset", {
-        preset: key,
-      });
-      if (r.ok && r.preset) {
-        setCurrentPreset(r.preset);
-        show(`Voice preset: ${r.preset} (voice: ${r.voice})`);
-      }
-    } catch (e) {
-      show("Preset apply error: " + errorMessage(e));
-    }
-  };
-
-  /* Send text message */
-  const handleSend = async () => {
-    if (loading || !input.trim()) return;
-    const msg = input.trim();
-    setInput("");
-    setLoading(true);
-
-    // Add user message
-    const userMsg: ChatMsg = { from: "you", text: msg, ts: Date.now() };
-    setMessages((m) => [...m, userMsg]);
-
-    try {
-      await refreshSession();
-      setTyping(true);
-      const r = await apiPost<ChatResponse>("/api/chat", {
-        message: msg,
-        language: chosenLang,
-      });
-      setTyping(false);
-      
-      // Update manual override state
-      if (r.in_manual_override) {
-        setInManualOverride(true);
-      }
-      
-      // Update relationship if returned
-      if (r.relationshipStatus) {
-        setRelationship(r.relationshipStatus);
-      }
-      
-      // If we got a reply (not in manual override or admin sent response)
-      if (r.reply) {
-        const ellieMsg: ChatMsg = { from: "ellie", text: r.reply, ts: Date.now() };
-        setMessages((m) => [...m, ellieMsg]);
-      }
-      
-      // Update voice mode hint if present
-      if (r.voiceMode) setVoiceMode(r.voiceMode);
-    } catch (e) {
-      setTyping(false);
-      show("Chat error: " + errorMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* Voice recording (UPDATED WITH RELATIONSHIP) */
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 48000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
-      chunksRef.current = [];
-      const rec = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
-      rec.start();
-      mediaRecorderRef.current = rec;
-      setRecording(true);
-    } catch (e) {
-      show("Microphone error: " + errorMessage(e));
-    }
-  };
-
-  const stopRecording = async () => {
-    const rec = mediaRecorderRef.current;
-    if (!rec) return;
-    if (rec.state === "inactive") return;
-
-    rec.stop();
-    rec.onstop = async () => {
-      setRecording(false);
-      rec.stream.getTracks().forEach((t) => t.stop());
-      if (chunksRef.current.length === 0) return;
-
+  const handleSendText = useCallback(
+    async (txt: string) => {
+      if (!txt.trim() || loading) return;
+      const userMsg: ChatMsg = { from: "you", text: txt, ts: Date.now() };
+      setMessages((m) => [...m, userMsg]);
+      setInput("");
       setLoading(true);
       setTyping(true);
 
-      const blob = new Blob(chunksRef.current, { type: "audio/webm;codecs=opus" });
       try {
-        await refreshSession();
+        const data = await apiPost<ChatResponse>("/api/chat", { message: txt });
+        
+        // Check if in manual override
+        if (data.in_manual_override) {
+          // Don't reset timestamp - continuous polling is handling new messages
+          setInManualOverride(true);
+          setTyping(true); // Keep typing indicator while waiting for response
+          // Continuous polling will display admin's response
+          setLoading(false);
+          return;
+        }
 
-        const fd = new FormData();
-        fd.append("audio", blob, "recording.webm");
-        fd.append("language", chosenLang);
-
-        const r = await apiPostForm<VoiceResponse>("/api/voice", fd);
+        // Add 1 second artificial delay to make responses feel more natural
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
         setTyping(false);
-
-        // Update relationship if returned
-        if (r.relationshipStatus) {
-          setRelationship(r.relationshipStatus);
+        
+        // Update relationship if provided
+        if (data.relationshipStatus) {
+          setRelationship(data.relationshipStatus);
         }
 
-        const userText = r.text || r.reply || "[Voice]";
-        const userMsg: ChatMsg = { from: "you", text: userText, ts: Date.now() };
-        setMessages((m) => [...m, userMsg]);
-
-        if (r.reply) {
-          const ellieMsg: ChatMsg = { from: "ellie", text: r.reply, ts: Date.now() };
-          setMessages((m) => [...m, ellieMsg]);
-
-          // Play TTS audio if present
-          if (r.audioMp3Base64) {
-            const audio = new Audio("data:audio/mp3;base64," + r.audioMp3Base64);
-            audio.play().catch(console.error);
-          }
+        const reply = data.reply || "(No reply)";
+        setMessages((m) => [...m, { from: "ellie", text: reply, ts: Date.now() }]);
+        
+        if (data.language && data.language !== chosenLang) {
+          setChosenLang(data.language);
         }
-
-        if (r.voiceMode) setVoiceMode(r.voiceMode);
+        if (data.voiceMode) {
+          setVoiceMode(data.voiceMode);
+        }
       } catch (e) {
         setTyping(false);
-        show("Voice error: " + errorMessage(e));
+        show("Error: " + errorMessage(e));
       } finally {
         setLoading(false);
       }
-    };
-  };
+    },
+    [loading, chosenLang, show]
+  );
 
-  /* Language not set => show a friendly picker */
+
+  const confirmLanguage = useCallback(async () => {
+    try {
+      const data = await apiPost<SetLanguageResponse>("/api/set-language", {
+        language: chosenLang,
+      });
+      if (data.ok) {
+        setLangReady(true);
+        show(`Language set: ${data.label || chosenLang}`);
+      }
+    } catch (e) {
+      show("Error: " + errorMessage(e));
+    }
+  }, [chosenLang, show]);
+
+  const resetConversation = useCallback(async () => {
+    if (!confirm("Reset conversation? (Facts remain)")) return;
+    try {
+      await apiPost("/api/reset", { userId: USER_ID });
+      setMessages([]);
+      show("Conversation reset (facts remain)");
+    } catch (e) {
+      show("Error: " + errorMessage(e));
+    }
+  }, [show]);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+      chunksRef.current = [];
+      mr.ondataavailable = (ev) => chunksRef.current.push(ev.data);
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        if (!blob.size) {
+          show("No audio recorded");
+          return;
+        }
+        setLoading(true);
+        setTyping(true);
+        try {
+          const form = new FormData();
+          form.append("audio", blob, "rec.webm");
+          form.append("userId", USER_ID);
+          form.append("language", chosenLang);
+
+          const resp = await apiPostForm<VoiceResponse>("/api/voice-chat", form);
+          
+          // Add 1 second artificial delay to make responses feel more natural
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          setTyping(false);
+
+          const userText = resp.text || "";
+          const reply = resp.reply || "(No reply)";
+
+          if (userText) {
+            setMessages((m) => [
+              ...m,
+              { from: "you", text: userText, ts: Date.now() },
+              { from: "ellie", text: reply, ts: Date.now() },
+            ]);
+          }
+
+          if (resp.language && resp.language !== chosenLang) {
+            setChosenLang(resp.language);
+          }
+          if (resp.voiceMode) {
+            setVoiceMode(resp.voiceMode);
+          }
+
+          if (resp.audioMp3Base64) {
+            const b64 = resp.audioMp3Base64;
+            const byteStr = atob(b64);
+            const buf = new Uint8Array(byteStr.length);
+            for (let i = 0; i < byteStr.length; i++) buf[i] = byteStr.charCodeAt(i);
+            const blob2 = new Blob([buf], { type: "audio/mpeg" });
+            const url = URL.createObjectURL(blob2);
+            const audio = new Audio(url);
+            audio.play().catch((e) => console.error("Audio play error:", e));
+          }
+        } catch (e) {
+          setTyping(false);
+          show("Error: " + errorMessage(e));
+        } finally {
+          setLoading(false);
+        }
+      };
+      mr.start();
+      setRecording(true);
+    } catch (e) {
+      show("Mic error: " + errorMessage(e));
+    }
+  }, [chosenLang, show]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop();
+      setRecording(false);
+    }
+  }, [recording]);
+
+  const loadVoicePresets = useCallback(async () => {
+    if (loadingPresets.current || presets.length > 0) return;
+    loadingPresets.current = true;
+    try {
+      const data = await apiPost<PresetsResponse>("/api/presets/list", {});
+      if (data.presets) setPresets(data.presets);
+      const curr = await apiPost<CurrentPresetResponse>("/api/presets/current", {});
+      if (curr.preset) setCurrentPreset(curr.preset);
+    } catch (e) {
+      console.error("Load presets error:", e);
+    } finally {
+      loadingPresets.current = false;
+    }
+  }, [presets.length]);
+
+  const applyPreset = useCallback(
+    async (key: string) => {
+      try {
+        const data = await apiPost<ApplyPresetResponse>("/api/presets/apply", { preset: key });
+        if (data.ok) {
+          setCurrentPreset(key);
+          show(`Voice preset: ${key}`);
+        }
+      } catch (e) {
+        show("Error: " + errorMessage(e));
+      }
+    },
+    [show]
+  );
+
+  useEffect(() => {
+    if (settingsOpen) loadVoicePresets();
+  }, [settingsOpen, loadVoicePresets]);
+
   if (!langReady) {
     return (
-      <div className="relative h-screen w-full overflow-hidden text-white">
+      <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden text-white">
         <AuroraBG />
-        <div className="relative z-10 flex h-full items-center justify-center p-4">
-          <motion.div
-            className="max-w-md rounded-3xl border border-white/15 bg-white/10 p-8 shadow-[0_10px_80px_rgba(140,110,255,0.25)] backdrop-blur-2xl"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
+        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-white/15 bg-white/5 p-6 shadow-2xl backdrop-blur-xl">
+          <h2 className="mb-4 text-center text-xl font-semibold">Select Language</h2>
+          <select
+            value={chosenLang}
+            onChange={(e) => setChosenLang(e.target.value as LangCode)}
+            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 outline-none focus:ring-2 focus:ring-[#A78BFA]/40 transition"
           >
-            <h1 className="mb-2 text-3xl font-bold">Choose your language</h1>
-            <p className="mb-6 text-white/70">Ellie will remember this</p>
-            <select
-              value={chosenLang}
-              onChange={(e) => setChosenLang(e.target.value as LangCode)}
-              className="mb-4 w-full rounded-xl border border-white/15 bg-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-[#A78BFA]/40 transition"
-            >
-              {LANGS.map((o) => (
-                <option key={o.code} value={o.code}>
-                  {o.name} ({o.code})
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={confirmLanguage}
-              className="w-full rounded-xl bg-gradient-to-r from-white to-white text-black font-bold py-3 hover:opacity-90 transition"
-            >
-              Continue
-            </button>
-          </motion.div>
+            {LANGS.map((o) => (
+              <option key={o.code} value={o.code}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={confirmLanguage}
+            className="mt-4 w-full rounded-lg bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] px-4 py-2.5 font-semibold text-black shadow-xl transition hover:shadow-2xl"
+          >
+            Confirm
+          </button>
         </div>
       </div>
     );
   }
-
-  // Show loading or error if user ID is not yet loaded
-  if (userIdLoading || userIdError || !userId) {
-    return (
-      <div className="relative h-screen w-full overflow-hidden text-white">
-        <AuroraBG />
-        <div className="relative z-10 flex h-full items-center justify-center p-4">
-          <motion.div
-            className="max-w-md rounded-3xl border border-white/15 bg-white/10 p-8 shadow-[0_10px_80px_rgba(140,110,255,0.25)] backdrop-blur-2xl"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
-            {userIdLoading ? (
-              <>
-                <h1 className="mb-2 text-3xl font-bold">Loading...</h1>
-                <p className="mb-6 text-white/70">Getting your session ready</p>
-                <div className="flex justify-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-                </div>
-              </>
-            ) : userIdError ? (
-              <>
-                <h1 className="mb-2 text-3xl font-bold">⚠️ Connection Error</h1>
-                <p className="mb-6 text-white/70">{userIdError}</p>
-                <button
-                  onClick={fetchUserId}
-                  className="w-full rounded-xl bg-gradient-to-r from-white to-white text-black font-bold py-3 hover:opacity-90 transition"
-                >
-                  Try Again
-                </button>
-                <p className="mt-4 text-sm text-white/50 text-center">
-                  If this keeps happening, try logging out and back in.
-                </p>
-              </>
-            ) : null}
-          </motion.div>
-        </div>
-      </div>
-    );
-  }
-
-  /* Main chat */
-  const stageData = relationship
-    ? STAGE_STYLES[relationship.stage as keyof typeof STAGE_STYLES] || STAGE_STYLES["Curious Stranger"]
-    : STAGE_STYLES["Curious Stranger"];
-  const moodLabel = relationship?.mood
-    ? MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS] || "😌 Normal"
-    : "😌 Normal";
 
   return (
-    <div className="relative h-screen w-full overflow-hidden text-white">
+    <div className="relative flex min-h-screen flex-col overflow-hidden text-white">
       <AuroraBG />
 
-      <main className="relative z-10 mx-auto flex h-full max-w-3xl flex-col">
-        {/* Header with relationship info */}
-        <header className="flex items-center justify-between border-b border-white/15 bg-black/20 px-4 py-3 backdrop-blur-md">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">Ellie</h1>
-            {relationship && (
-              <div 
-                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition"
-                onClick={() => setShowRelDetails(!showRelDetails)}
-              >
-                <div className="text-2xl">{stageData.emoji}</div>
-                <div className="text-xs">
-                  <div className="font-semibold">{relationship.stage}</div>
-                  <div className="text-white/60">Lvl {relationship.level} • {moodLabel}</div>
+      <main className="relative z-10 flex flex-1 flex-col">
+        {/* NEW: Relationship Header */}
+        {relationship && (
+          <div className="border-b border-white/10 bg-gradient-to-r from-black/20 to-black/30 backdrop-blur-md">
+            <div className="mx-auto max-w-4xl px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="text-2xl">
+                    {STAGE_STYLES[relationship.stage as keyof typeof STAGE_STYLES]?.emoji || "💬"}
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold">
+                      {relationship.stage}
+                    </div>
+                    <div className="text-xs text-white/60">
+                      {MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS] || relationship.mood}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setSettingsOpen(true);
-                loadPresets();
-              }}
-              className="rounded-full border border-white/15 bg-white/5 p-2 hover:bg-white/10 transition"
-              aria-label="Settings"
-            >
-              ⚙️
-            </button>
-            <button
-              onClick={() => router.push("/logout")}
-              className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-sm hover:bg-white/10 transition"
-            >
-              Logout
-            </button>
-          </div>
-        </header>
-
-        {/* Relationship Details Dropdown */}
-        {showRelDetails && relationship && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="border-b border-white/15 bg-gradient-to-br from-black/40 to-black/20 backdrop-blur-xl overflow-hidden"
-          >
-            <div className="p-4 space-y-3">
-              {/* Progress Bar */}
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-white/60">Progress to next stage</span>
-                  <span className="font-semibold">{relationship.level}%</span>
-                </div>
-                <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                  <motion.div
-                    className={`h-full bg-gradient-to-r ${stageData.bg} to-white`}
-                    initial={{ width: 0 }}
-                    animate={{ width: `${relationship.level}%` }}
-                    transition={{ duration: 0.8, ease: "easeOut" }}
-                  />
-                </div>
-              </div>
-
-              {/* Stats Grid */}
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="bg-white/5 rounded-lg p-2">
-                  <div className="text-white/60">Streak</div>
-                  <div className="text-lg font-bold">{relationship.streak} days 🔥</div>
-                </div>
-                <div className="bg-white/5 rounded-lg p-2">
-                  <div className="text-white/60">Total Chats</div>
-                  <div className="text-lg font-bold">{relationship.totalInteractions || 0}</div>
-                </div>
-              </div>
-
-              {/* Stage Hint */}
-              <div className="text-xs text-white/70 italic bg-white/5 rounded-lg p-2">
-                💡 {stageData.hint}
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Voice Mode Hint */}
-        {voiceMode && (
-          <div className="border-b border-white/15 bg-white/5 px-4 py-2 text-center text-sm backdrop-blur-xl">
-            🎙️ Voice mode: <span className="font-semibold">{voiceMode}</span>
-          </div>
-        )}
-
-        {/* Manual Override Banner */}
-        {inManualOverride && (
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="border-b border-yellow-500/30 bg-yellow-900/20 px-4 py-2 text-center text-sm backdrop-blur-xl"
-          >
-            🎮 <span className="font-semibold">Admin is in the chat</span> - responses are coming from a real person
-          </motion.div>
-        )}
-
-        {/* Messages */}
-        <div
-          ref={scrollRef}
-          className="flex-1 space-y-3 overflow-y-auto px-4 py-4 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent"
-        >
-          {messages.map((m, i) => (
-            <motion.div
-              key={i}
-              className={`flex ${m.from === "you" ? "justify-end" : "justify-start"}`}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: i * 0.05 }}
-            >
-              <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                  m.from === "you"
-                    ? "border border-white/15 bg-white text-black"
-                    : "border border-white/15 bg-white/10 backdrop-blur-md"
-                }`}
-              >
-                <div className="whitespace-pre-wrap break-words">{m.text}</div>
-                <div
-                  className={`mt-1 text-xs ${
-                    m.from === "you" ? "text-black/60" : "text-white/50"
-                  }`}
+                <button
+                  onClick={() => setShowRelDetails(!showRelDetails)}
+                  className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-medium hover:bg-white/10 transition"
                 >
-                  {fmtTime(m.ts)}
+                  {showRelDetails ? "Hide" : "Show"} Details
+                </button>
+              </div>
+
+              {showRelDetails && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="mt-3 grid grid-cols-3 gap-3 text-xs"
+                >
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-white/60">Level</div>
+                    <div className="text-lg font-bold">{relationship.level}/100</div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-white/60">Streak</div>
+                    <div className="text-lg font-bold">{relationship.streak} days</div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    <div className="text-white/60">Investment</div>
+                    <div className="text-lg font-bold">
+                      {((relationship.emotionalInvestment || 0) * 100).toFixed(0)}%
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Top bar */}
+        <div className="border-b border-white/10 backdrop-blur-md">
+          <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full border-2 border-[#A78BFA] bg-gradient-to-br from-[#A78BFA] via-[#5EEAD4] to-[#A78BFA] shadow-xl" />
+              <div>
+                <div className="font-semibold leading-tight">Ellie</div>
+                <div className="text-xs text-white/60">
+                  {voiceMode ? `Voice: ${voiceMode}` : "Online"}
                 </div>
               </div>
-            </motion.div>
-          ))}
-
-          {typing && (
-            <div className="flex justify-start">
-              <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-md">
-                <span className="typing-dot">•</span>
-                <span className="typing-dot">•</span>
-                <span className="typing-dot">•</span>
-              </div>
             </div>
-          )}
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="rounded-md border border-white/15 bg-white/5 px-2 py-1 text-sm transition hover:bg-white/10"
+            >
+              Settings
+            </button>
+          </div>
         </div>
 
-        {/* Input */}
-        <div className="border-t border-white/15 bg-black/20 p-4 backdrop-blur-md">
-          <div className="flex gap-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleSend();
-                }
-              }}
-              placeholder="Type a message..."
-              disabled={loading}
-              className="flex-1 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 outline-none placeholder:text-white/40 focus:ring-2 focus:ring-[#A78BFA]/40 disabled:opacity-50 transition"
-            />
-
-            {recording ? (
-              <button
-                onClick={stopRecording}
-                disabled={loading}
-                className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/50 bg-red-500/20 text-2xl hover:bg-red-500/30 disabled:opacity-50 transition"
-                aria-label="Stop recording"
+        {/* Chat area */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="mx-auto max-w-4xl space-y-3">
+            {messages.map((msg, i) => (
+              <div
+                key={i}
+                className={`animate-drop-in flex ${msg.from === "you" ? "justify-end" : "justify-start"}`}
               >
-                ⏹️
-              </button>
-            ) : (
-              <button
-                onClick={startRecording}
-                disabled={loading}
-                className="flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white/10 text-2xl hover:bg-white/20 disabled:opacity-50 transition"
-                aria-label="Record voice"
-              >
-                🎙️
-              </button>
+                <div
+                  className={`max-w-[75%] rounded-2xl px-4 py-2.5 shadow-lg ${
+                    msg.from === "you"
+                      ? "bg-gradient-to-br from-[#A78BFA] to-[#8B5CF6] text-white"
+                      : "border border-white/15 bg-white/5 backdrop-blur"
+                  }`}
+                >
+                  <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
+                  <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
+                </div>
+              </div>
+            ))}
+            {typing && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 shadow-lg backdrop-blur">
+                  <div className="flex items-center gap-1">
+                    <div className="typing-dot bg-white" />
+                    <div className="typing-dot bg-white" />
+                    <div className="typing-dot bg-white" />
+                  </div>
+                </div>
+              </div>
             )}
+          </div>
+        </div>
 
-            <button
-              onClick={handleSend}
-              disabled={loading || !input.trim()}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-r from-white to-white text-2xl text-black hover:opacity-90 disabled:opacity-50 transition"
-              aria-label="Send"
-            >
-              ▶️
-            </button>
+        {/* Composer */}
+        <div className="border-t border-white/10 backdrop-blur-md">
+          <div className="mx-auto max-w-4xl px-4 py-3">
+            <div className="flex items-end gap-2">
+              <div className="relative flex-1">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!loading && input.trim()) {
+                        handleSendText(input.trim());
+                      }
+                    }
+                  }}
+                  rows={1}
+                  placeholder={inManualOverride ? "Ellie is typing..." : "Type a message..."}
+                  disabled={loading || inManualOverride}
+                  className="w-full resize-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none backdrop-blur placeholder:text-white/40 focus:ring-2 focus:ring-[#A78BFA]/40 transition disabled:opacity-50"
+                  style={{ minHeight: "48px", maxHeight: "120px" }}
+                />
+              </div>
+              <button
+                onClick={() => handleSendText(input.trim())}
+                disabled={loading || !input.trim() || inManualOverride}
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] font-semibold text-black shadow-xl transition hover:shadow-2xl disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                  />
+                </svg>
+              </button>
+
+              {!recording ? (
+                <button
+                  onClick={startRecording}
+                  disabled={loading}
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 transition hover:bg-white/10 disabled:opacity-50"
+                >
+                  🎤
+                </button>
+              ) : (
+                <button
+                  onClick={stopRecording}
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-red-500 bg-red-500/20 transition hover:bg-red-500/30"
+                >
+                  ⏹️
+                </button>
+              )}
+
+              <Link
+                href="/call"
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 transition hover:bg-white/10 text-center text-xs"
+              >
+                📞 Call
+              </Link>
+            </div>
           </div>
         </div>
       </main>
@@ -990,7 +877,6 @@ export default function ChatPage() {
                     Mic gain slider is available on the call screen.
                   </div>
                 </section>
-
               </div>
             </motion.div>
           </motion.div>
