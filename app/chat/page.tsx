@@ -505,8 +505,8 @@ export default function ChatPage() {
         trackMessage(reply, ellieMsg.ts);
         console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
         
-        // Small delay to make the transition smooth, then hide typing
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Small delay to make the transition smooth, then hide typing (1 second longer)
+        await new Promise(resolve => setTimeout(resolve, 1200));
         setTyping(false);
         
         if (data.language && data.language !== chosenLang) {
@@ -602,8 +602,8 @@ export default function ChatPage() {
             console.log("✅ Voice chat message tracked:", reply.substring(0, 30));
           }
           
-          // ✅ FIX: Hide typing AFTER message is added
-          await new Promise(resolve => setTimeout(resolve, 200));
+          // ✅ FIX: Hide typing AFTER message is added (1 second longer)
+          await new Promise(resolve => setTimeout(resolve, 1200));
           setTyping(false);
 
           if (resp.language && resp.language !== chosenLang) {
@@ -838,14 +838,14 @@ export default function ChatPage() {
                   }}
                   rows={1}
                   placeholder={inManualOverride ? "Ellie is typing..." : "Type a message..."}
-                  disabled={loading || inManualOverride}
+                  disabled={loading}
                   className="w-full resize-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none backdrop-blur placeholder:text-white/40 focus:ring-2 focus:ring-[#A78BFA]/40 transition disabled:opacity-50"
                   style={{ minHeight: "48px", maxHeight: "120px" }}
                 />
               </div>
               <button
                 onClick={() => handleSendText(input.trim())}
-                disabled={loading || !input.trim() || inManualOverride}
+                disabled={loading || !input.trim()}
                 className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] font-semibold text-black shadow-xl transition hover:shadow-2xl disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
