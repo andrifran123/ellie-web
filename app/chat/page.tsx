@@ -195,6 +195,7 @@ export default function ChatPage() {
   const [inManualOverride, setInManualOverride] = useState(false);
   const lastFetchTimestampRef = useRef<string>('1970-01-01'); // Track last fetched message timestamp
   const generalPollIntervalRef = useRef<NodeJS.Timeout | null>(null); // For continuous polling
+  const messageIdsRef = useRef<Set<string>>(new Set()); // Track message IDs to prevent duplicates
 
   // Fetch authenticated user ID on mount
   useEffect(() => {
@@ -228,33 +229,45 @@ export default function ChatPage() {
       if (res.ok) {
         const data = await res.json();
         
-        // If there are new messages, add them to chat
+        // Update manual override state
+        if (data.in_override !== undefined) {
+          setInManualOverride(data.in_override);
+        }
+        
+        // If there are new messages, add them to chat (with deduplication)
         if (data.has_response && data.messages && data.messages.length > 0) {
-          setMessages((prev) => [
-            ...prev,
-            ...data.messages.map((msg: ManualMessage) => ({
-              from: "ellie" as const,
-              text: msg.reply,
-              ts: new Date(msg.timestamp).getTime()
-            }))
-          ]);
+          const newMessages = data.messages.filter((msg: ManualMessage) => {
+            if (messageIdsRef.current.has(msg.id)) {
+              return false; // Skip duplicate
+            }
+            messageIdsRef.current.add(msg.id);
+            return true;
+          });
           
-          // Update timestamp
-          const latestTimestamp = data.messages[data.messages.length - 1].timestamp;
-          lastFetchTimestampRef.current = latestTimestamp;
-          
-          // Hide typing if admin stopped typing
-          if (!data.is_admin_typing) {
-            setTyping(false);
+          if (newMessages.length > 0) {
+            setMessages((prev) => [
+              ...prev,
+              ...newMessages.map((msg: ManualMessage) => ({
+                from: "ellie" as const,
+                text: msg.reply,
+                ts: new Date(msg.timestamp).getTime()
+              }))
+            ]);
+            
+            // Update timestamp to the latest message
+            const latestTimestamp = newMessages[newMessages.length - 1].timestamp;
+            lastFetchTimestampRef.current = latestTimestamp;
           }
         }
         
         // Update typing indicator if admin is typing
         if (data.in_override && data.is_admin_typing) {
           setTyping(true);
+        } else if (data.in_override && !data.is_admin_typing) {
+          // In override but admin not typing
+          setTyping(false);
         } else if (!data.in_override) {
           // Override ended
-          setInManualOverride(false);
           setTyping(false);
         }
       }
@@ -349,16 +362,16 @@ export default function ChatPage() {
         
         // Check if in manual override
         if (data.in_manual_override) {
-          // Don't reset timestamp - continuous polling is handling new messages
+          // User message stored, admin will respond
           setInManualOverride(true);
-          setTyping(true); // Keep typing indicator while waiting for response
+          setTyping(true); // Keep typing indicator while waiting for admin response
           // Continuous polling will display admin's response
           setLoading(false);
           return;
         }
 
-        // Add 1 second artificial delay to make responses feel more natural
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Small delay to make responses feel more natural (reduced from 1s)
+        await new Promise(resolve => setTimeout(resolve, 300));
         
         setTyping(false);
         
@@ -438,8 +451,8 @@ export default function ChatPage() {
 
           const resp = await apiPostForm<VoiceResponse>("/api/voice-chat", form);
           
-          // Add 1 second artificial delay to make responses feel more natural
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Small delay to make responses feel more natural (reduced from 1s)
+          await new Promise(resolve => setTimeout(resolve, 300));
           
           setTyping(false);
 
