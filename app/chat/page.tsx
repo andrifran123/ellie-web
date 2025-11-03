@@ -184,6 +184,7 @@ export default function ChatPage() {
   // NEW: Manual override tracking
   const [inManualOverride, setInManualOverride] = useState(false);
   const manualOverridePollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastFetchTimestampRef = useRef<string>('1970-01-01'); // Track last fetched message timestamp
 
   // NEW: Fetch relationship status
   const fetchRelationshipStatus = useCallback(async () => {
@@ -205,9 +206,11 @@ export default function ChatPage() {
     if (!inManualOverride) return;
     
     try {
-      const res = await fetch(`/api/manual-override/pending-response/${USER_ID}`, {
-        credentials: "include"
-      });
+      // Send the last timestamp so we only get new messages
+      const res = await fetch(
+        `/api/manual-override/pending-response/${USER_ID}?since=${encodeURIComponent(lastFetchTimestampRef.current)}`, 
+        { credentials: "include" }
+      );
       
       if (res.ok) {
         const data = await res.json();
@@ -219,14 +222,33 @@ export default function ChatPage() {
           return;
         }
         
-        if (data.has_response && data.reply) {
-          // Got a manual response!
-          setTyping(false);
+        // Update typing indicator based on admin typing status
+        if (data.is_admin_typing !== undefined) {
+          setTyping(data.is_admin_typing);
+        }
+        
+        if (data.has_response && data.messages && data.messages.length > 0) {
+          // Got manual response(s)!
+          // Keep typing indicator if admin is still typing, otherwise hide it
+          if (!data.is_admin_typing) {
+            setTyping(false);
+          }
+          
+          // Add all new messages to chat
           setMessages((prev) => [
             ...prev,
-            { from: "ellie", text: data.reply, ts: Date.now() }
+            ...data.messages.map((msg: any) => ({
+              from: "ellie" as const,
+              text: msg.reply,
+              ts: new Date(msg.timestamp).getTime()
+            }))
           ]);
-          setInManualOverride(false); // Reset after getting response
+          
+          // Update last fetch timestamp to the newest message
+          const latestTimestamp = data.messages[data.messages.length - 1].timestamp;
+          lastFetchTimestampRef.current = latestTimestamp;
+          
+          // Don't end override - admin might send more messages
         }
       }
     } catch (err) {
@@ -299,6 +321,8 @@ export default function ChatPage() {
         
         // Check if in manual override
         if (data.in_manual_override) {
+          // Reset timestamp to now so we only fetch messages from this point forward
+          lastFetchTimestampRef.current = new Date().toISOString();
           setInManualOverride(true);
           setTyping(true); // Keep typing indicator while waiting for response
           // Polling will handle getting the response (user doesn't know it's admin)
@@ -306,6 +330,9 @@ export default function ChatPage() {
           return;
         }
 
+        // Add 1 second artificial delay to make responses feel more natural
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
         setTyping(false);
         
         // Update relationship if provided
@@ -345,6 +372,9 @@ export default function ChatPage() {
           message: txt,
           userId: USER_ID,
         });
+
+        // Add 1 second artificial delay to make responses feel more natural
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         setTyping(false);
         
@@ -431,6 +461,10 @@ export default function ChatPage() {
           form.append("language", chosenLang);
 
           const resp = await apiPostForm<VoiceResponse>("/api/voice-chat", form);
+          
+          // Add 1 second artificial delay to make responses feel more natural
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
           setTyping(false);
 
           const userText = resp.text || "";

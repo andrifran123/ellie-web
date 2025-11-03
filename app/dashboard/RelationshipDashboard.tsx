@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 // ============================================
 // INTERFACES
@@ -217,6 +217,9 @@ export default function RelationshipDashboardEnhanced() {
   const [isOverrideActive, setIsOverrideActive] = useState(false);
   const [manualResponseText, setManualResponseText] = useState("");
   
+  // Typing indicator ref
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchUserId, setSearchUserId] = useState("");
@@ -351,6 +354,48 @@ export default function RelationshipDashboardEnhanced() {
     }
   };
 
+
+  // Send typing status to server
+  const updateTypingStatus = async (isTyping: boolean) => {
+    if (!overrideUserId) return;
+
+    try {
+      await fetch("/api/manual-override/typing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: overrideUserId,
+          is_typing: isTyping,
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to update typing status:", err);
+    }
+  };
+
+  // Handle typing in manual response textarea
+  const handleManualResponseChange = (text: string) => {
+    setManualResponseText(text);
+
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    if (text.trim()) {
+      // User is typing - send typing=true
+      updateTypingStatus(true);
+
+      // Set timeout to send typing=false after 2 seconds of no typing
+      typingTimeoutRef.current = setTimeout(() => {
+        updateTypingStatus(false);
+      }, 2000);
+    } else {
+      // Textarea is empty - send typing=false immediately
+      updateTypingStatus(false);
+    }
+  };
+
   const sendManualResponse = async () => {
     if (!manualResponseText.trim() || !overrideUserId) {
       return;
@@ -374,6 +419,12 @@ export default function RelationshipDashboardEnhanced() {
       // Refresh chat messages
       await fetchChatMessages(overrideUserId);
       setManualResponseText("");
+      
+      // Clear typing indicator
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      updateTypingStatus(false);
     } catch (err) {
       alert("Error sending message");
       console.error(err);
@@ -398,6 +449,12 @@ export default function RelationshipDashboardEnhanced() {
       setIsOverrideActive(false);
       setOverrideUserId(null);
       setManualResponseText("");
+      
+      // Clear typing indicator
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      updateTypingStatus(false);
       
       alert("Manual override ended. API will resume normal operation.");
     } catch (err) {
@@ -1025,7 +1082,7 @@ export default function RelationshipDashboardEnhanced() {
                     <textarea
                       placeholder="Type your manual response as Ellie..."
                       value={manualResponseText}
-                      onChange={(e) => setManualResponseText(e.target.value)}
+                      onChange={(e) => handleManualResponseChange(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
