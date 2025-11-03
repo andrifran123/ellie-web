@@ -315,7 +315,7 @@ export default function ChatPage() {
     refreshSession()
       .then(() => apiPost<GetLanguageResponse>("/api/language/get", {}))
       .then((r) => {
-        if (r.language && r.language !== "null") {
+        if (r.language) {
           setChosenLang(r.language);
           setLangReady(true);
         }
