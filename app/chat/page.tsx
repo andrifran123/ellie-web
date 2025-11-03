@@ -198,6 +198,9 @@ export default function ChatPage() {
   const messageIdsRef = useRef<Set<string>>(new Set()); // Track message IDs to prevent duplicates
   const messageContentRef = useRef<Map<string, number>>(new Map()); // Track message content+timestamp
 
+  // NEW: Abort controller for cancelling in-flight requests
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   // Helper to create unique message key and track it
   const trackMessage = (text: string, timestamp?: string | number) => {
     const content = text.substring(0, 100); // Use first 100 chars
@@ -272,7 +275,17 @@ export default function ChatPage() {
         
         // Update manual override state
         if (data.in_override !== undefined) {
+          const wasInOverride = inManualOverride;
           setInManualOverride(data.in_override);
+          
+          // If we just entered manual override, abort any in-flight requests
+          if (data.in_override && !wasInOverride) {
+            console.log("🛑 Entering manual override - aborting in-flight requests");
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+              abortControllerRef.current = null;
+            }
+          }
         }
         
         // If there are new messages, add them to chat (with deduplication)
@@ -336,7 +349,7 @@ export default function ChatPage() {
     } catch (err) {
       console.error("Failed to check for new messages:", err);
     }
-  }, [userId]);
+  }, [userId, inManualOverride, loading]);
 
   // Start continuous polling when userId is available
   useEffect(() => {
@@ -413,6 +426,17 @@ export default function ChatPage() {
   const handleSendText = useCallback(
     async (txt: string) => {
       if (!txt.trim() || loading) return;
+      
+      // Abort any previous in-flight request
+      if (abortControllerRef.current) {
+        console.log("🛑 Aborting previous request");
+        abortControllerRef.current.abort();
+      }
+      
+      // Create new abort controller for this request
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+      
       const userMsg: ChatMsg = { from: "you", text: txt, ts: Date.now() };
       setMessages((m) => [...m, userMsg]);
       setInput("");
@@ -420,23 +444,52 @@ export default function ChatPage() {
       setTyping(true);
 
       try {
+        // Check manual override status before sending
+        const overrideCheckRes = await fetch(`/api/manual-override/status/${userId}`, {
+          credentials: "include",
+          signal: abortController.signal
+        });
+        
+        if (overrideCheckRes.ok) {
+          const overrideData = await overrideCheckRes.json();
+          if (overrideData.in_override) {
+            console.log("🎮 Manual override active - storing message only");
+            setInManualOverride(true);
+            
+            // Send the message to be stored
+            await fetch("/api/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ message: txt }),
+              signal: abortController.signal
+            });
+            
+            // Keep typing indicator while waiting for admin response
+            setLoading(false);
+            return;
+          }
+        }
+        
         const data = await apiPost<ChatResponse>("/api/chat", { message: txt });
         
-        // Check if in manual override
+        // Double-check if manual override was activated during the request
         if (data.in_manual_override) {
-          // User message stored, admin will respond
+          console.log("🎮 Manual override activated during request - ignoring API response");
           setInManualOverride(true);
           setTyping(true); // Keep typing indicator while waiting for admin response
-          // Continuous polling will display admin's response
           setLoading(false);
           return;
         }
 
-        // Small delay to make responses feel more natural (reduced from 1s)
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        setTyping(false);
-        
+        // If request was aborted, don't process response
+        if (abortController.signal.aborted) {
+          console.log("🛑 Request was aborted - skipping response");
+          setTyping(false);
+          setLoading(false);
+          return;
+        }
+
         // Update relationship if provided
         if (data.relationshipStatus) {
           setRelationship(data.relationshipStatus);
@@ -444,11 +497,17 @@ export default function ChatPage() {
 
         const reply = data.reply || "(No reply)";
         const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now() };
+        
+        // ✅ FIX: Add message first, THEN hide typing indicator
         setMessages((m) => [...m, ellieMsg]);
         
         // Track this message to prevent duplicate if polling fetches it later
         trackMessage(reply, ellieMsg.ts);
         console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
+        
+        // Small delay to make the transition smooth, then hide typing
+        await new Promise(resolve => setTimeout(resolve, 200));
+        setTyping(false);
         
         if (data.language && data.language !== chosenLang) {
           setChosenLang(data.language);
@@ -456,14 +515,23 @@ export default function ChatPage() {
         if (data.voiceMode) {
           setVoiceMode(data.voiceMode);
         }
-      } catch (e) {
+      } catch (e: unknown) {
+        // Check if error is due to abort
+        if (e instanceof Error && e.name === 'AbortError') {
+          console.log("🛑 Request aborted");
+          return;
+        }
         setTyping(false);
         show("Error: " + errorMessage(e));
       } finally {
         setLoading(false);
+        // Clear abort controller reference if it's still the current one
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null;
+        }
       }
     },
-    [loading, chosenLang, show]
+    [loading, chosenLang, show, userId]
   );
 
 
@@ -518,11 +586,6 @@ export default function ChatPage() {
 
           const resp = await apiPostForm<VoiceResponse>("/api/voice-chat", form);
           
-          // Small delay to make responses feel more natural (reduced from 1s)
-          await new Promise(resolve => setTimeout(resolve, 300));
-          
-          setTyping(false);
-
           const userText = resp.text || "";
           const reply = resp.reply || "(No reply)";
 
@@ -538,6 +601,10 @@ export default function ChatPage() {
             trackMessage(reply, ellieTs);
             console.log("✅ Voice chat message tracked:", reply.substring(0, 30));
           }
+          
+          // ✅ FIX: Hide typing AFTER message is added
+          await new Promise(resolve => setTimeout(resolve, 200));
+          setTyping(false);
 
           if (resp.language && resp.language !== chosenLang) {
             setChosenLang(resp.language);
