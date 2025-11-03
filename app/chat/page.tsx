@@ -121,7 +121,7 @@ function useToasts() {
     const id = idRef.current++;
     setToasts((t) => [...t, { id, text }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3800);
-  }, [userId]);
+  }, []);
   return { toasts, show };
 }
 
@@ -218,7 +218,7 @@ export default function ChatPage() {
   // NEW: Continuous polling for new messages (catches manual override messages)
   const checkForNewMessages = useCallback(async () => {
     if (!userId) return; // Wait for userId to be loaded
-
+    
     try {
       const res = await fetch(
         `/api/manual-override/pending-response/${userId}?since=${encodeURIComponent(lastFetchTimestampRef.current)}`,
@@ -261,7 +261,7 @@ export default function ChatPage() {
     } catch (err) {
       console.error("Failed to check for new messages:", err);
     }
-  }, []);
+  }, [userId]);
 
   // Start continuous polling when userId is available
   useEffect(() => {
