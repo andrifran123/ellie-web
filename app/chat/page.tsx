@@ -50,6 +50,13 @@ type VoiceResponse = {
   relationshipStatus?: RelationshipStatus;
 };
 
+// Manual override message from server
+interface ManualMessage {
+  reply: string;
+  timestamp: string;
+  id: string;
+}
+
 type PresetItem = { key: string; label: string; voice: string };
 type PresetsResponse = { presets: PresetItem[] };
 type CurrentPresetResponse = { preset: string | null };
@@ -237,7 +244,7 @@ export default function ChatPage() {
           // Add all new messages to chat
           setMessages((prev) => [
             ...prev,
-            ...data.messages.map((msg: any) => ({
+            ...data.messages.map((msg: ManualMessage) => ({
               from: "ellie" as const,
               text: msg.reply,
               ts: new Date(msg.timestamp).getTime()
@@ -359,59 +366,6 @@ export default function ChatPage() {
     [loading, chosenLang, show]
   );
 
-  const handleVoiceText = useCallback(
-    async (txt: string) => {
-      if (!txt.trim() || loading) return;
-      const userMsg: ChatMsg = { from: "you", text: txt, ts: Date.now() };
-      setMessages((m) => [...m, userMsg]);
-      setLoading(true);
-      setTyping(true);
-
-      try {
-        const data = await apiPost<VoiceResponse>("/api/voice-tts", {
-          message: txt,
-          userId: USER_ID,
-        });
-
-        // Add 1 second artificial delay to make responses feel more natural
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        setTyping(false);
-        
-        // Update relationship if provided
-        if (data.relationshipStatus) {
-          setRelationship(data.relationshipStatus);
-        }
-
-        const reply = data.reply || data.text || "(No reply)";
-        setMessages((m) => [...m, { from: "ellie", text: reply, ts: Date.now() }]);
-
-        if (data.language && data.language !== chosenLang) {
-          setChosenLang(data.language);
-        }
-        if (data.voiceMode) {
-          setVoiceMode(data.voiceMode);
-        }
-
-        if (data.audioMp3Base64) {
-          const b64 = data.audioMp3Base64;
-          const byteStr = atob(b64);
-          const buf = new Uint8Array(byteStr.length);
-          for (let i = 0; i < byteStr.length; i++) buf[i] = byteStr.charCodeAt(i);
-          const blob = new Blob([buf], { type: "audio/mpeg" });
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          audio.play().catch((e) => console.error("Audio play error:", e));
-        }
-      } catch (e) {
-        setTyping(false);
-        show("Error: " + errorMessage(e));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [loading, chosenLang, show]
-  );
 
   const confirmLanguage = useCallback(async () => {
     try {

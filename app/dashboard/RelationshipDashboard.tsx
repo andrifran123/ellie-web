@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 
 // ============================================
 // INTERFACES
@@ -199,6 +199,7 @@ export default function RelationshipDashboardEnhanced() {
   const [overview, setOverview] = useState<OverviewData | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [engagement, setEngagement] = useState<EngagementData | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [revenue, setRevenue] = useState<RevenueData | null>(null);
   const [addiction, setAddiction] = useState<AddictionData | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -304,7 +305,7 @@ export default function RelationshipDashboardEnhanced() {
     startMessagePolling(userId);
   };
 
-  const fetchChatMessages = async (userId: string) => {
+  const fetchChatMessages = useCallback(async (userId: string) => {
     try {
       const res = await fetch(`/api/chat-view/messages/${userId}`);
       if (!res.ok) throw new Error("Failed to fetch messages");
@@ -314,7 +315,7 @@ export default function RelationshipDashboardEnhanced() {
       console.error("Error fetching chat messages:", err);
       setChatMessages([]);
     }
-  };
+  }, []);
 
   const closeChatView = () => {
     setIsChatViewOpen(false);
@@ -464,23 +465,23 @@ export default function RelationshipDashboardEnhanced() {
   };
 
   // Message polling
-  let messagePollingInterval: NodeJS.Timeout | null = null;
+  const messagePollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const startMessagePolling = (userId: string) => {
+  const stopMessagePolling = useCallback(() => {
+    if (messagePollingIntervalRef.current) {
+      clearInterval(messagePollingIntervalRef.current);
+      messagePollingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startMessagePolling = useCallback((userId: string) => {
     stopMessagePolling(); // Clear any existing interval
-    messagePollingInterval = setInterval(async () => {
+    messagePollingIntervalRef.current = setInterval(async () => {
       if (userId) {
         await fetchChatMessages(userId);
       }
     }, 2000); // Poll every 2 seconds
-  };
-
-  const stopMessagePolling = () => {
-    if (messagePollingInterval) {
-      clearInterval(messagePollingInterval);
-      messagePollingInterval = null;
-    }
-  };
+  }, [stopMessagePolling, fetchChatMessages]);
 
   useEffect(() => {
     fetchAnalytics();
@@ -501,7 +502,7 @@ export default function RelationshipDashboardEnhanced() {
     return () => {
       stopMessagePolling();
     };
-  }, []);
+  }, [stopMessagePolling]);
 
   if (loading) {
     return (
