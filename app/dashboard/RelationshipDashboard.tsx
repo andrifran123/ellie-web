@@ -335,7 +335,29 @@ export default function RelationshipDashboardEnhanced() {
 
       if (!res.ok) {
         const error = await res.json();
-        alert(error.error || "Failed to start manual override");
+        
+        // Handle "already in override" case
+        if (error.error && error.error.includes("already in manual override")) {
+          const shouldClear = confirm(
+            "This user is already in manual override mode (possibly stale session). " +
+            "Do you want to force-clear and restart?"
+          );
+          
+          if (shouldClear) {
+            // Force clear the session
+            await fetch("/api/manual-override/force-clear", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: userId }),
+            });
+            
+            // Try starting again
+            await startManualOverride(userId);
+            return;
+          }
+        } else {
+          alert(error.error || "Failed to start manual override");
+        }
         return;
       }
 
@@ -857,7 +879,7 @@ export default function RelationshipDashboardEnhanced() {
                             onClick={() => startManualOverride(user.user_id)}
                             className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium"
                           >
-                             Manual Override
+                            🎮 Manual Override
                           </button>
                         </div>
                       </div>
