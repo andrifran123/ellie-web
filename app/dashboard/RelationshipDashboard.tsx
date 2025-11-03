@@ -381,11 +381,7 @@ export default function RelationshipDashboardEnhanced() {
   };
 
   const endManualOverride = async () => {
-    if (!overrideUserId) {
-      alert("No active override session to end");
-      console.error("endManualOverride called but overrideUserId is null");
-      return;
-    }
+    if (!overrideUserId) return;
 
     try {
       const res = await fetch("/api/manual-override/end", {
@@ -395,9 +391,7 @@ export default function RelationshipDashboardEnhanced() {
       });
 
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        alert(`Failed to end manual override: ${errorData.error || 'Unknown error'}`);
-        console.error("End override error:", errorData);
+        alert("Failed to end manual override");
         return;
       }
 
@@ -407,8 +401,8 @@ export default function RelationshipDashboardEnhanced() {
       
       alert("Manual override ended. API will resume normal operation.");
     } catch (err) {
-      alert(`Error ending manual override: ${err instanceof Error ? err.message : 'Unknown error'}`);
-      console.error("Exception in endManualOverride:", err);
+      alert("Error ending manual override");
+      console.error(err);
     }
   };
 
@@ -557,7 +551,7 @@ export default function RelationshipDashboardEnhanced() {
                       <div className="text-sm text-gray-400">{STAGE_LABELS[stage.current_stage]}</div>
                       <div className="text-3xl font-bold">{stage.user_count}</div>
                       <div className="text-sm text-gray-400 mt-2">
-                        Avg Level: {(Number(stage.avg_level) || 0).toFixed(1)}
+                        Avg Level: {stage.avg_level.toFixed(1)}
                       </div>
                       <div className="text-sm text-gray-400">
                         Max Streak: {stage.max_streak} days
@@ -576,7 +570,7 @@ export default function RelationshipDashboardEnhanced() {
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
                   <div className="text-sm text-gray-400">Avg Relationship Level</div>
                   <div className="text-3xl font-bold text-purple-500">
-                    {(Number(overview.totals.avg_relationship_level) || 0).toFixed(1)}
+                    {overview.totals.avg_relationship_level.toFixed(1)}
                   </div>
                 </div>
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
@@ -586,7 +580,7 @@ export default function RelationshipDashboardEnhanced() {
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
                   <div className="text-sm text-gray-400">Avg Emotional Investment</div>
                   <div className="text-3xl font-bold text-red-500">
-                    {((Number(overview.totals.avg_emotional_investment) || 0) * 100).toFixed(0)}%
+                    {(overview.totals.avg_emotional_investment * 100).toFixed(0)}%
                   </div>
                 </div>
               </div>
@@ -624,7 +618,7 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-gray-800 rounded p-4">
                       <div className="text-sm text-gray-400">Current Month</div>
                       <div className="text-2xl font-bold text-green-500">
-                        ${(Number(forecast.current_month.projected_revenue) || 0).toFixed(2)}
+                        ${forecast.current_month.projected_revenue.toFixed(2)}
                       </div>
                       <div className="text-sm text-gray-400 mt-2">
                         {forecast.current_month.projected_conversions} conversions
@@ -633,7 +627,7 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-gray-800 rounded p-4">
                       <div className="text-sm text-gray-400">Next Month</div>
                       <div className="text-2xl font-bold text-green-500">
-                        ${(Number(forecast.next_month.projected_revenue) || 0).toFixed(2)}
+                        ${forecast.next_month.projected_revenue.toFixed(2)}
                       </div>
                       <div className="text-sm text-gray-400 mt-2">
                         {forecast.next_month.projected_conversions} conversions
@@ -642,7 +636,7 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-gray-800 rounded p-4">
                       <div className="text-sm text-gray-400">6 Month Projection</div>
                       <div className="text-2xl font-bold text-green-500">
-                        ${(Number(forecast.six_months.projected_revenue) || 0).toFixed(2)}
+                        ${forecast.six_months.projected_revenue.toFixed(2)}
                       </div>
                       <div className="text-sm text-gray-400 mt-2">
                         {forecast.six_months.projected_conversions} conversions
@@ -760,8 +754,7 @@ export default function RelationshipDashboardEnhanced() {
               <div className="space-y-3 max-h-[700px] overflow-y-auto">
                 {activeUsers.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
-                    <p>No active users in the last 30 minutes</p>
-                    <p className="text-sm mt-2">Users appear here when they send messages</p>
+                    <p>No active users at the moment</p>
                   </div>
                 ) : (
                   activeUsers.map((user) => (
@@ -786,7 +779,7 @@ export default function RelationshipDashboardEnhanced() {
                               <span className="text-gray-500">Messages:</span> {user.message_count}
                             </div>
                             <div>
-                              <span className="text-gray-500">Investment:</span> {((Number(user.emotional_investment) || 0) * 100).toFixed(0)}%
+                              <span className="text-gray-500">Investment:</span> {(user.emotional_investment * 100).toFixed(0)}%
                             </div>
                             <div>
                               <span className="text-gray-500">Last Active:</span>{" "}
@@ -857,7 +850,7 @@ export default function RelationshipDashboardEnhanced() {
                             <div className="font-medium">User: {user.user_id}</div>
                             <div className="text-sm text-gray-400">
                               Level {user.level} • {user.days_since_broken} days ago •{" "}
-                              {((Number(user.emotional_investment) || 0) * 100).toFixed(0)}% invested
+                              {(user.emotional_investment * 100).toFixed(0)}% invested
                             </div>
                           </div>
                           <button className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm">
@@ -987,15 +980,15 @@ export default function RelationshipDashboardEnhanced() {
               </div>
 
               {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              <div className="flex-1 overflow-y-auto p-6 space-y-4 min-h-[400px]">
                 {chatMessages.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-gray-400 space-y-3">
-                    <p className="text-lg">No messages yet...</p>
+                    <p className="text-lg">📭 No messages in history yet</p>
                     <p className="text-sm text-gray-500">
-                      Messages will appear here once the conversation_history table is created.
+                      All conversations will appear here once the conversation_history table is created.
                     </p>
                     <p className="text-xs text-gray-600">
-                      Run the migration SQL to enable message history.
+                      Run the migration SQL to enable full chat history tracking.
                     </p>
                   </div>
                 ) : (
