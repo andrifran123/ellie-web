@@ -857,7 +857,7 @@ export default function RelationshipDashboardEnhanced() {
                             onClick={() => startManualOverride(user.user_id)}
                             className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium"
                           >
-                            🎮 Manual Override
+                             Manual Override
                           </button>
                         </div>
                       </div>
