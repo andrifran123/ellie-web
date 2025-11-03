@@ -402,17 +402,19 @@ export default function ChatPage() {
   }, [chosenLang, show]);
 
   const resetConversation = useCallback(async () => {
+    if (!userId) return; // Wait for userId
     if (!confirm("Reset conversation? (Facts remain)")) return;
     try {
-      await apiPost("/api/reset", { userId: USER_ID });
+      await apiPost("/api/reset", { userId: userId });
       setMessages([]);
       show("Conversation reset (facts remain)");
     } catch (e) {
       show("Error: " + errorMessage(e));
     }
-  }, [show]);
+  }, [show, userId]);
 
   const startRecording = useCallback(async () => {
+    if (!userId) return; // Wait for userId
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mr = new MediaRecorder(stream);
@@ -431,7 +433,7 @@ export default function ChatPage() {
         try {
           const form = new FormData();
           form.append("audio", blob, "rec.webm");
-          form.append("userId", USER_ID);
+          form.append("userId", userId);
           form.append("language", chosenLang);
 
           const resp = await apiPostForm<VoiceResponse>("/api/voice-chat", form);
@@ -481,7 +483,7 @@ export default function ChatPage() {
     } catch (e) {
       show("Mic error: " + errorMessage(e));
     }
-  }, [chosenLang, show]);
+  }, [chosenLang, show, userId]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && recording) {
