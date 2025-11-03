@@ -196,6 +196,40 @@ export default function ChatPage() {
   const lastFetchTimestampRef = useRef<string>('1970-01-01'); // Track last fetched message timestamp
   const generalPollIntervalRef = useRef<NodeJS.Timeout | null>(null); // For continuous polling
   const messageIdsRef = useRef<Set<string>>(new Set()); // Track message IDs to prevent duplicates
+  const messageContentRef = useRef<Map<string, number>>(new Map()); // Track message content+timestamp
+
+  // Helper to create unique message key and track it
+  const trackMessage = (text: string, timestamp?: string | number) => {
+    const content = text.substring(0, 100); // Use first 100 chars
+    const ts = typeof timestamp === 'string' ? new Date(timestamp).getTime() : (timestamp || Date.now());
+    
+    // Store content with its timestamp
+    messageContentRef.current.set(content, ts);
+    
+    // Also track traditional key for backward compatibility
+    const key = `${ts}-${text.substring(0, 50)}`;
+    messageIdsRef.current.add(key);
+    
+    return key;
+  };
+
+  // Helper to check if message is duplicate (same content within 60 seconds)
+  const isDuplicate = (text: string, timestamp: string | number): boolean => {
+    const content = text.substring(0, 100);
+    const newTs = typeof timestamp === 'string' ? new Date(timestamp).getTime() : timestamp;
+    
+    // Check if we've seen this content recently
+    const existingTs = messageContentRef.current.get(content);
+    if (existingTs) {
+      const timeDiff = Math.abs(newTs - existingTs);
+      if (timeDiff < 60000) { // Within 60 seconds
+        console.log("⚠️ Duplicate detected (same content within 60s):", content.substring(0, 30));
+        return true;
+      }
+    }
+    
+    return false;
+  };
 
   // Fetch authenticated user ID on mount
   useEffect(() => {
@@ -250,15 +284,20 @@ export default function ChatPage() {
           })));
           
           const newMessages = data.messages.filter((msg: ManualMessage) => {
-            // Create unique key: use ID if available, otherwise timestamp+content
-            const uniqueKey = msg.id || `${msg.timestamp}-${msg.reply.substring(0, 50)}`;
-            
-            if (messageIdsRef.current.has(uniqueKey)) {
-              console.log("⚠️ Duplicate message blocked:", uniqueKey);
-              return false; // Skip duplicate
+            // Check if duplicate by content (handles normal chat vs polling mismatch)
+            if (isDuplicate(msg.reply, msg.timestamp)) {
+              return false;
             }
-            messageIdsRef.current.add(uniqueKey);
-            console.log("✅ New message added:", uniqueKey);
+            
+            // Also check by ID if available
+            if (msg.id && messageIdsRef.current.has(msg.id)) {
+              console.log("⚠️ Duplicate message blocked (by ID):", msg.id);
+              return false;
+            }
+            
+            // Track this message
+            trackMessage(msg.reply, msg.timestamp);
+            console.log("✅ New message added:", msg.reply.substring(0, 30));
             return true;
           });
           
@@ -404,7 +443,12 @@ export default function ChatPage() {
         }
 
         const reply = data.reply || "(No reply)";
-        setMessages((m) => [...m, { from: "ellie", text: reply, ts: Date.now() }]);
+        const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now() };
+        setMessages((m) => [...m, ellieMsg]);
+        
+        // Track this message to prevent duplicate if polling fetches it later
+        trackMessage(reply, ellieMsg.ts);
+        console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
         
         if (data.language && data.language !== chosenLang) {
           setChosenLang(data.language);
@@ -483,11 +527,16 @@ export default function ChatPage() {
           const reply = resp.reply || "(No reply)";
 
           if (userText) {
+            const ellieTs = Date.now();
             setMessages((m) => [
               ...m,
               { from: "you", text: userText, ts: Date.now() },
-              { from: "ellie", text: reply, ts: Date.now() },
+              { from: "ellie", text: reply, ts: ellieTs },
             ]);
+            
+            // Track voice response to prevent duplicate if polling fetches it later
+            trackMessage(reply, ellieTs);
+            console.log("✅ Voice chat message tracked:", reply.substring(0, 30));
           }
 
           if (resp.language && resp.language !== chosenLang) {
