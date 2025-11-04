@@ -470,11 +470,9 @@ export default function ChatPage() {
       
       // Only show typing if NOT in manual override mode
       // In manual override, typing will be controlled by admin's actual typing
+      // In normal mode, show typing immediately until API responds
       if (!inManualOverride) {
-        // Add 1 second delay before showing typing dots in normal mode
-        setTimeout(() => {
-          setTyping(true);
-        }, 1000);
+        setTyping(true);
       }
 
       // Mark message as seen after 1 second
@@ -626,11 +624,9 @@ export default function ChatPage() {
         setLoading(true);
         
         // Only show typing if NOT in manual override mode
-        // Add 1 second delay before showing typing dots in normal mode
+        // In normal mode, show typing immediately until API responds
         if (!inManualOverride) {
-          setTimeout(() => {
-            setTyping(true);
-          }, 1000);
+          setTyping(true);
         }
         
         try {
