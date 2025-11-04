@@ -819,29 +819,35 @@ export default function ChatPage() {
         {/* Chat area */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
           <div className="mx-auto max-w-4xl space-y-3">
-            {messages.map((msg, i) => (
-              <div
-                key={i}
-                className={`animate-drop-in flex ${msg.from === "you" ? "justify-end" : "justify-start"}`}
-              >
-                {msg.from === "you" ? (
-                  <div className="flex flex-col items-end gap-1">
-                    <div className="max-w-[75%] rounded-2xl px-4 py-2.5 shadow-lg bg-gradient-to-br from-[#A78BFA] to-[#8B5CF6] text-white">
+            {messages.map((msg, i) => {
+              // Find if this is the last user message
+              const isLastUserMessage = msg.from === "you" && 
+                messages.slice(i + 1).every(m => m.from !== "you");
+              
+              return (
+                <div
+                  key={i}
+                  className={`animate-drop-in flex ${msg.from === "you" ? "justify-end" : "justify-start"}`}
+                >
+                  {msg.from === "you" ? (
+                    <div className="flex flex-col items-end gap-1 max-w-[75%]">
+                      <div className="w-full rounded-2xl px-4 py-2.5 shadow-lg bg-gradient-to-br from-[#A78BFA] to-[#8B5CF6] text-white">
+                        <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
+                        <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
+                      </div>
+                      {msg.seen && isLastUserMessage && (
+                        <div className="text-[10px] text-white/40 px-1">Seen</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="max-w-[75%] rounded-2xl px-4 py-2.5 shadow-lg border border-white/15 bg-white/5 backdrop-blur">
                       <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
                       <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
                     </div>
-                    {msg.seen && (
-                      <div className="text-[10px] text-white/40 px-1">Seen</div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="max-w-[75%] rounded-2xl px-4 py-2.5 shadow-lg border border-white/15 bg-white/5 backdrop-blur">
-                    <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
-                    <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              );
+            })}
             {typing && (
               <div className="flex justify-start">
                 <div className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 shadow-lg backdrop-blur">
