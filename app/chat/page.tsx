@@ -468,13 +468,6 @@ export default function ChatPage() {
       setInput("");
       setLoading(true);
       
-      // Only show typing if NOT in manual override mode
-      // In manual override, typing will be controlled by admin's actual typing
-      // In normal mode, show typing immediately until API responds
-      if (!inManualOverride) {
-        setTyping(true);
-      }
-
       // Mark message as seen after 1 second
       setTimeout(() => {
         setMessages((m) => 
@@ -484,6 +477,12 @@ export default function ChatPage() {
               : msg
           )
         );
+        
+        // After "Seen" appears, show typing dots (only in normal mode)
+        // In manual override, typing will be controlled by admin's actual typing
+        if (!inManualOverride) {
+          setTyping(true);
+        }
       }, 1000);
 
       try {
@@ -623,12 +622,6 @@ export default function ChatPage() {
         }
         setLoading(true);
         
-        // Only show typing if NOT in manual override mode
-        // In normal mode, show typing immediately until API responds
-        if (!inManualOverride) {
-          setTyping(true);
-        }
-        
         try {
           const form = new FormData();
           form.append("audio", blob, "rec.webm");
@@ -641,15 +634,15 @@ export default function ChatPage() {
           const reply = resp.reply || "(No reply)";
 
           if (userText) {
-            const ellieTs = Date.now();
             const userTs = Date.now();
+            
+            // First, add only the user's message
             setMessages((m) => [
               ...m,
               { from: "you", text: userText, ts: userTs },
-              { from: "ellie", text: reply, ts: ellieTs },
             ]);
             
-            // Mark the voice message as seen after 1 second
+            // After 1 second: mark as seen and show typing (only in normal mode)
             setTimeout(() => {
               setMessages((m) => 
                 m.map((msg) => 
@@ -658,16 +651,35 @@ export default function ChatPage() {
                     : msg
                 )
               );
+              
+              // Show typing dots after "seen" appears (only if not in manual override)
+              if (!inManualOverride) {
+                setTyping(true);
+              }
+              
+              // Then after a brief moment, add Ellie's response
+              setTimeout(() => {
+                const ellieTs = Date.now();
+                setMessages((m) => [
+                  ...m,
+                  { from: "ellie", text: reply, ts: ellieTs },
+                ]);
+                
+                // Track voice response to prevent duplicate if polling fetches it later
+                trackMessage(reply, ellieTs);
+                console.log("✅ Voice chat message tracked:", reply.substring(0, 30));
+                
+                // Hide typing after message is added
+                setTimeout(() => {
+                  setTyping(false);
+                  setLoading(false);
+                }, 200);
+              }, 500); // Brief delay to show typing before response
             }, 1000);
-            
-            // Track voice response to prevent duplicate if polling fetches it later
-            trackMessage(reply, ellieTs);
-            console.log("✅ Voice chat message tracked:", reply.substring(0, 30));
+          } else {
+            // If no user text, just stop loading
+            setLoading(false);
           }
-          
-          // ✅ FIX: Hide typing AFTER message is added
-          await new Promise(resolve => setTimeout(resolve, 200));
-          setTyping(false);
 
           if (resp.language && resp.language !== chosenLang) {
             setChosenLang(resp.language);
@@ -688,9 +700,8 @@ export default function ChatPage() {
           }
         } catch (e) {
           setTyping(false);
-          show("Error: " + errorMessage(e));
-        } finally {
           setLoading(false);
+          show("Error: " + errorMessage(e));
         }
       };
       mr.start();
