@@ -471,7 +471,10 @@ export default function ChatPage() {
       // Only show typing if NOT in manual override mode
       // In manual override, typing will be controlled by admin's actual typing
       if (!inManualOverride) {
-        setTyping(true);
+        // Add 1 second delay before showing typing dots in normal mode
+        setTimeout(() => {
+          setTyping(true);
+        }, 1000);
       }
 
       // Mark message as seen after 1 second
@@ -621,7 +624,15 @@ export default function ChatPage() {
           return;
         }
         setLoading(true);
-        setTyping(true);
+        
+        // Only show typing if NOT in manual override mode
+        // Add 1 second delay before showing typing dots in normal mode
+        if (!inManualOverride) {
+          setTimeout(() => {
+            setTyping(true);
+          }, 1000);
+        }
+        
         try {
           const form = new FormData();
           form.append("audio", blob, "rec.webm");
@@ -691,7 +702,7 @@ export default function ChatPage() {
     } catch (e) {
       show("Mic error: " + errorMessage(e));
     }
-  }, [chosenLang, show, userId]);
+  }, [chosenLang, show, userId, inManualOverride]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && recording) {
