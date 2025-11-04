@@ -201,6 +201,29 @@ export default function ChatPage() {
   // NEW: Abort controller for cancelling in-flight requests
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Typing timeout ref for auto-clearing typing indicator
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper function to set typing with auto-clear timeout
+  const setTypingWithTimeout = (isTyping: boolean) => {
+    // Clear any existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    // Set typing state
+    setTyping(isTyping);
+
+    // If setting to true, auto-clear after 5 seconds
+    if (isTyping) {
+      typingTimeoutRef.current = setTimeout(() => {
+        setTyping(false);
+        typingTimeoutRef.current = null;
+      }, 5000); // Clear after 5 seconds of no updates
+    }
+  };
+
   // Helper to create unique message key and track it
   const trackMessage = (text: string, timestamp?: string | number) => {
     const content = text.substring(0, 100); // Use first 100 chars
@@ -351,7 +374,7 @@ export default function ChatPage() {
     } catch (err) {
       console.error("Failed to check for new messages:", err);
     }
-  }, [userId, inManualOverride, loading]);
+  }, [userId, inManualOverride]);
 
   // Start continuous polling when userId is available
   useEffect(() => {
