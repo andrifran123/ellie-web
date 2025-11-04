@@ -467,7 +467,12 @@ export default function ChatPage() {
       setMessages((m) => [...m, userMsg]);
       setInput("");
       setLoading(true);
-      setTyping(true);
+      
+      // Only show typing if NOT in manual override mode
+      // In manual override, typing will be controlled by admin's actual typing
+      if (!inManualOverride) {
+        setTyping(true);
+      }
 
       // Mark message as seen after 1 second
       setTimeout(() => {
@@ -516,6 +521,7 @@ export default function ChatPage() {
           console.log("🎮 Manual override activated during request - ignoring API response");
           setInManualOverride(true);
           // Don't show typing - will show when admin actually starts typing
+          setTyping(false);
           setLoading(false);
           return;
         }
@@ -569,7 +575,7 @@ export default function ChatPage() {
         }
       }
     },
-    [loading, chosenLang, show, userId]
+    [loading, chosenLang, show, userId, inManualOverride]
   );
 
 
