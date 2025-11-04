@@ -340,7 +340,7 @@ export default function ChatPage() {
           if (newMessages.length > 0) {
             console.log(`📨 Adding ${newMessages.length} new message(s) to chat`);
             setMessages((prev) => [
-              ...prev.map(msg => msg.from === "you" ? { ...msg, seen: true } : msg),
+              ...prev,
               ...newMessages.map((msg: ManualMessage) => ({
                 from: "ellie" as const,
                 text: msg.reply,
@@ -463,10 +463,22 @@ export default function ChatPage() {
       abortControllerRef.current = abortController;
       
       const userMsg: ChatMsg = { from: "you", text: txt, ts: Date.now() };
+      const userMsgTs = userMsg.ts;
       setMessages((m) => [...m, userMsg]);
       setInput("");
       setLoading(true);
       setTyping(true);
+
+      // Mark message as seen after 1 second
+      setTimeout(() => {
+        setMessages((m) => 
+          m.map((msg) => 
+            msg.ts === userMsgTs && msg.from === "you"
+              ? { ...msg, seen: true } 
+              : msg
+          )
+        );
+      }, 1000);
 
       try {
         // Check manual override status before sending
@@ -525,11 +537,7 @@ export default function ChatPage() {
         const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now() };
         
         // ✅ FIX: Add message first, THEN hide typing indicator
-        // Also mark all user messages as seen
-        setMessages((m) => [
-          ...m.map(msg => msg.from === "you" ? { ...msg, seen: true } : msg),
-          ellieMsg
-        ]);
+        setMessages((m) => [...m, ellieMsg]);
         
         // Track this message to prevent duplicate if polling fetches it later
         trackMessage(reply, ellieMsg.ts);
@@ -621,11 +629,23 @@ export default function ChatPage() {
 
           if (userText) {
             const ellieTs = Date.now();
+            const userTs = Date.now();
             setMessages((m) => [
-              ...m.map(msg => msg.from === "you" ? { ...msg, seen: true } : msg),
-              { from: "you", text: userText, ts: Date.now(), seen: true },
+              ...m,
+              { from: "you", text: userText, ts: userTs },
               { from: "ellie", text: reply, ts: ellieTs },
             ]);
+            
+            // Mark the voice message as seen after 1 second
+            setTimeout(() => {
+              setMessages((m) => 
+                m.map((msg) => 
+                  msg.ts === userTs && msg.from === "you"
+                    ? { ...msg, seen: true }
+                    : msg
+                )
+              );
+            }, 1000);
             
             // Track voice response to prevent duplicate if polling fetches it later
             trackMessage(reply, ellieTs);
