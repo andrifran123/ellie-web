@@ -104,6 +104,27 @@ export default function CallClient() {
 
   const isIOS = typeof window !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
+  // Extract userId from cookies if available
+  const getUserId = useCallback(() => {
+    if (typeof document === 'undefined') return 'guest';
+    
+    const cookies = document.cookie.split(';');
+    for (let cookie of cookies) {
+      const [name, value] = cookie.trim().split('=');
+      if (name === 'auth_token' || name === 'user_id') {
+        try {
+          // If it's a JWT, decode it
+          const decoded = JSON.parse(atob(value.split('.')[1]));
+          return decoded.user_id || decoded.sub || 'guest';
+        } catch {
+          // Otherwise use the value directly
+          return value || 'guest';
+        }
+      }
+    }
+    return 'guest';
+  }, []);
+
   // Fetch relationship status
   const fetchRelationshipStatus = useCallback(async () => {
     try {
@@ -311,8 +332,9 @@ export default function CallClient() {
         const resampled = resampleTo24k(inputData, ac.sampleRate);
         const pcm16 = floatTo16BitPCM(resampled);
         const base64 = abToBase64(pcm16.buffer);
+        // Backend expects "audio.append" not "input_audio_buffer.append"
         wsRef.current.send(JSON.stringify({
-          type: "input_audio_buffer.append",
+          type: "audio.append",
           audio: base64,
         }));
       }
@@ -383,34 +405,27 @@ export default function CallClient() {
       ws.onopen = () => {
         setStatus("connected");
         show("Connected to Ellie");
-        console.log("WebSocket opened, sending session configuration...");
+        console.log("WebSocket opened, sending hello handshake...");
 
-        const sessionUpdate = {
-          type: "session.update",
-          session: {
-            modalities: ["text", "audio"],
-            voice: DEFAULT_VOICE,
-            instructions: `You are Ellie. ${Date.now()}`,
-            input_audio_format: "pcm16",
-            output_audio_format: "pcm16",
-            input_audio_transcription: { model: "whisper-1" },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.7,
-              prefix_padding_ms: 300,
-              silence_duration_ms: 500,
-            },
-          },
+        // Backend expects a "hello" message first to initialize OpenAI connection
+        const userId = getUserId();
+        const helloMessage = {
+          type: "hello",
+          userId: userId,
+          language: "en",
+          sampleRate: 24000
         };
         
-        console.log("Sending session.update:", JSON.stringify(sessionUpdate, null, 2));
-        ws.send(JSON.stringify(sessionUpdate));
+        console.log("Sending hello:", JSON.stringify(helloMessage, null, 2));
+        ws.send(JSON.stringify(helloMessage));
+        
+        console.log("Waiting for session-ready from backend...");
 
-        console.log("Sending response.create...");
-        ws.send(JSON.stringify({
-          type: "response.create",
-          response: { modalities: ["text", "audio"] },
-        }));
+        // The backend will:
+        // 1. Connect to OpenAI Realtime API
+        // 2. Configure the session with personality/facts
+        // 3. Send us "session-ready" when ready
+        // Then we can start sending audio
 
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -418,7 +433,7 @@ export default function CallClient() {
           }
         }, 10000);
 
-        // Wait a bit for the WebSocket to be fully ready
+        // Wait a bit for the backend to establish OpenAI connection
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
             console.log("Setting up microphone, AudioContext state:", acRef.current?.state);
@@ -440,9 +455,20 @@ export default function CallClient() {
         console.log("Received WebSocket message:", msg.type, msg);
 
         switch (msg.type) {
-          case "response.audio.delta":
-            if (msg.delta) {
-              const pcm16 = new Int16Array(base64ToArrayBuffer(msg.delta));
+          case "hello-server":
+            console.log("✅ Server handshake received:", msg.message);
+            break;
+
+          case "session-ready":
+            console.log("✅ OpenAI session ready, can now send audio");
+            // Backend has connected to OpenAI and configured everything
+            // We can now start sending audio
+            break;
+
+          case "audio.delta":
+            // Backend sends "audio.delta" not "response.audio.delta"
+            if (msg.audio) {
+              const pcm16 = new Int16Array(base64ToArrayBuffer(msg.audio));
               const audioBuffer = pcm16ToAudioBuffer(pcm16);
               
               const source = ac.createBufferSource();
@@ -455,10 +481,17 @@ export default function CallClient() {
             }
             break;
 
-          case "error":
-            console.error("WS error:", msg.error);
-            show(`Error: ${msg.error?.message || "Unknown"}`);
+          case "pong":
+            // Keepalive response
             break;
+
+          case "error":
+            console.error("WS error:", msg);
+            show(`Error: ${msg.message || "Unknown"}`);
+            break;
+            
+          default:
+            console.log("Unhandled message type:", msg.type);
         }
       };
 
