@@ -22,7 +22,6 @@ interface Gift {
   price: number;
   emoji: string;
   minLevel: number;
-  cooldownHours?: number;
 }
 
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
@@ -52,11 +51,11 @@ const MOOD_INDICATORS: Record<string, string> = {
 const GIFT_CATALOG: Gift[] = [
   { id: 'emoji_heart', name: 'Heart Emoji', price: 0.99, emoji: '❤️', minLevel: 0 },
   { id: 'virtual_coffee', name: 'Coffee Date', price: 2.99, emoji: '☕', minLevel: 0 },
-  { id: 'flowers', name: 'Roses', price: 9.99, emoji: '🌹', minLevel: 20, cooldownHours: 72 },
-  { id: 'chocolates', name: 'Chocolates', price: 5.99, emoji: '🍫', minLevel: 15, cooldownHours: 48 },
-  { id: 'jewelry', name: 'Necklace', price: 29.99, emoji: '💎', minLevel: 40, cooldownHours: 168 },
-  { id: 'virtual_date', name: 'Date Night', price: 19.99, emoji: '🌙', minLevel: 35, cooldownHours: 96 },
-  { id: 'promise_ring', name: 'Promise Ring', price: 49.99, emoji: '💍', minLevel: 60, cooldownHours: 720 }
+  { id: 'flowers', name: 'Roses', price: 9.99, emoji: '🌹', minLevel: 20 },
+  { id: 'chocolates', name: 'Chocolates', price: 5.99, emoji: '🍫', minLevel: 15 },
+  { id: 'jewelry', name: 'Necklace', price: 29.99, emoji: '💎', minLevel: 40 },
+  { id: 'virtual_date', name: 'Date Night', price: 19.99, emoji: '🌙', minLevel: 35 },
+  { id: 'promise_ring', name: 'Promise Ring', price: 49.99, emoji: '💍', minLevel: 60 }
 ];
 
 export default function CallClient() {
@@ -969,7 +968,7 @@ export default function CallClient() {
 
               <div className="p-6 grid grid-cols-2 gap-4">
                 {availableGifts.map((gift) => {
-                  const isLocked = relationship && relationship.level < gift.minLevel;
+                  const isLocked = !relationship || relationship.level < gift.minLevel;
                   return (
                     <motion.button
                       key={gift.id}
@@ -988,9 +987,6 @@ export default function CallClient() {
                       <p className="text-purple-300 text-sm">${gift.price}</p>
                       {isLocked && (
                         <p className="text-red-400 text-xs mt-2">🔒 Level {gift.minLevel} required</p>
-                      )}
-                      {gift.cooldownHours && !isLocked && (
-                        <p className="text-purple-400 text-xs mt-2">⏰ {gift.cooldownHours}h cooldown</p>
                       )}
                     </motion.button>
                   );
@@ -1117,14 +1113,6 @@ export default function CallClient() {
                 <p className="text-purple-200 text-center">
                   Send this gift to Ellie?
                 </p>
-
-                {selectedGift.cooldownHours && (
-                  <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-3">
-                    <p className="text-purple-300 text-xs text-center">
-                      ⏰ {selectedGift.cooldownHours}h cooldown after sending
-                    </p>
-                  </div>
-                )}
 
                 <div className="flex gap-3">
                   <motion.button
