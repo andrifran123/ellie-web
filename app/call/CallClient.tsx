@@ -79,9 +79,9 @@ export default function CallClient() {
   // Gift system state
   const [showGiftModal, setShowGiftModal] = useState(false);
   const [selectedGift, setSelectedGift] = useState<Gift | null>(null);
+  const [availableGifts, setAvailableGifts] = useState<Gift[]>(GIFT_CATALOG);
   const [isProcessingGift, setIsProcessingGift] = useState(false);
   const [giftResponse, setGiftResponse] = useState<string | null>(null);
-  const [availableGifts, setAvailableGifts] = useState<Gift[]>([]);
   const [showGiftHint, setShowGiftHint] = useState(false);
   const [giftHintMessage, setGiftHintMessage] = useState("");
 
@@ -315,8 +315,11 @@ export default function CallClient() {
     if (isIOS) {
       setShowBluetoothGuide(true);
     } else {
+      // Call will be handled by proceedWithCall button
+      setShowBluetoothGuide(false);
       proceedWithCall();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isIOS]);
 
   const proceedWithCall = useCallback(async () => {
@@ -324,7 +327,8 @@ export default function CallClient() {
     setStatus("connecting");
 
     try {
-      const ac = new ((window as any).AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      const AudioContextClass = (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+      const ac = new AudioContextClass({ sampleRate: 24000 });
       acRef.current = ac;
 
       if (ac.state === "suspended") await ac.resume();
@@ -509,7 +513,8 @@ export default function CallClient() {
         hangUp();
       }
     };
-  }, [status, hangUp]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   // Gift purchase handler
   const handleGiftPurchase = async (gift: Gift) => {
@@ -550,6 +555,13 @@ export default function CallClient() {
     } finally {
       setIsProcessingGift(false);
       setSelectedGift(null);
+    }
+  };
+
+  // Handle gift confirmation
+  const handleConfirmGift = () => {
+    if (selectedGift) {
+      handleGiftPurchase(selectedGift);
     }
   };
 
@@ -609,7 +621,10 @@ export default function CallClient() {
             animate={{ opacity: 1, y: 0 }}
             className="absolute top-4 left-4 right-4 max-w-md mx-auto"
           >
-            <div className={`bg-gradient-to-r ${STAGE_STYLES[relationship.stage]?.bg || 'from-purple-500/20'} to-transparent backdrop-blur-md rounded-2xl p-4 border border-white/10`}>
+            <button 
+              onClick={() => setShowRelationshipDetails(true)}
+              className={`w-full bg-gradient-to-r ${STAGE_STYLES[relationship.stage]?.bg || 'from-purple-500/20'} to-transparent backdrop-blur-md rounded-2xl p-4 border border-white/10 hover:border-white/20 transition-all cursor-pointer`}
+            >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <span className="text-2xl">{STAGE_STYLES[relationship.stage]?.emoji || '💕'}</span>
@@ -627,7 +642,7 @@ export default function CallClient() {
                 </div>
               </div>
               
-              <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+              <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden mb-2">
                 <motion.div
                   className="h-full bg-gradient-to-r from-purple-400 to-pink-400"
                   initial={{ width: 0 }}
@@ -635,7 +650,14 @@ export default function CallClient() {
                   transition={{ duration: 1 }}
                 />
               </div>
-            </div>
+              
+              <p className="text-purple-300/70 text-xs text-center flex items-center justify-center gap-1">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Tap for details
+              </p>
+            </button>
           </motion.div>
         )}
 
@@ -796,7 +818,7 @@ export default function CallClient() {
 
               <div className="p-6">
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {GIFT_CATALOG.map((gift) => {
+                  {availableGifts.map((gift) => {
                     const isLocked = !relationship || relationship.level < gift.minLevel;
                     
                     return (
@@ -804,7 +826,7 @@ export default function CallClient() {
                         key={gift.id}
                         whileHover={!isLocked ? { scale: 1.05 } : {}}
                         whileTap={!isLocked ? { scale: 0.95 } : {}}
-                        onClick={() => !isLocked && handleGiftPurchase(gift)}
+                        onClick={() => !isLocked && setSelectedGift(gift)}
                         disabled={isLocked || isProcessingGift}
                         className={`p-4 rounded-xl transition-all ${
                           isLocked
@@ -835,6 +857,160 @@ export default function CallClient() {
                     </p>
                   </motion.div>
                 )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Relationship Details Modal */}
+      <AnimatePresence>
+        {showRelationshipDetails && relationship && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowRelationshipDetails(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="max-w-md w-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden"
+            >
+              <div className={`bg-gradient-to-r ${STAGE_STYLES[relationship.stage]?.bg || 'from-purple-500'} to-pink-500 p-6`}>
+                <div className="flex items-center gap-3">
+                  <span className="text-4xl">{STAGE_STYLES[relationship.stage]?.emoji || '💕'}</span>
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">{relationship.stage}</h2>
+                    <p className="text-purple-100">Your relationship with Ellie</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Level Progress */}
+                <div>
+                  <div className="flex justify-between mb-2">
+                    <span className="text-purple-200 text-sm font-semibold">Level {relationship.level}/100</span>
+                    <span className="text-purple-300 text-sm">{100 - relationship.level} to next stage</span>
+                  </div>
+                  <div className="w-full h-3 bg-white/10 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-purple-400 to-pink-400"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${relationship.level}%` }}
+                      transition={{ duration: 1 }}
+                    />
+                  </div>
+                </div>
+
+                {/* Stats Grid */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                    <p className="text-purple-300 text-xs">Current Mood</p>
+                    <p className="text-white font-semibold">{MOOD_INDICATORS[relationship.mood] || relationship.mood}</p>
+                  </div>
+                  
+                  <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                    <p className="text-purple-300 text-xs">Streak</p>
+                    <p className="text-white font-semibold">{relationship.streak} days 🔥</p>
+                  </div>
+
+                  {relationship.totalInteractions && (
+                    <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                      <p className="text-purple-300 text-xs">Total Chats</p>
+                      <p className="text-white font-semibold">{relationship.totalInteractions}</p>
+                    </div>
+                  )}
+
+                  {relationship.emotionalInvestment && (
+                    <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                      <p className="text-purple-300 text-xs">Connection</p>
+                      <p className="text-white font-semibold">{Math.round(relationship.emotionalInvestment)}%</p>
+                    </div>
+                  )}
+
+                  {relationship.totalGiftsValue && relationship.totalGiftsValue > 0 && (
+                    <div className="bg-gradient-to-br from-pink-500/20 to-purple-500/20 rounded-xl p-3 border border-pink-500/30 col-span-2">
+                      <p className="text-pink-300 text-xs">Total Gifts Sent</p>
+                      <p className="text-white font-bold text-lg">${relationship.totalGiftsValue.toFixed(2)} 💝</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Close Button */}
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setShowRelationshipDetails(false)}
+                  className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold transition-all shadow-lg"
+                >
+                  Close
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Gift Confirmation Modal */}
+      <AnimatePresence>
+        {selectedGift && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setSelectedGift(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="max-w-sm w-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden"
+            >
+              <div className="bg-gradient-to-r from-pink-500 to-purple-500 p-6 text-center">
+                <div className="text-6xl mb-3">{selectedGift.emoji}</div>
+                <h2 className="text-2xl font-bold text-white">{selectedGift.name}</h2>
+                <p className="text-pink-100 text-lg font-bold mt-2">${selectedGift.price}</p>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <p className="text-purple-200 text-center">
+                  Send this gift to Ellie?
+                </p>
+
+                {selectedGift.cooldownHours && (
+                  <div className="bg-purple-500/10 border border-purple-500/30 rounded-xl p-3">
+                    <p className="text-purple-300 text-xs text-center">
+                      ⏰ {selectedGift.cooldownHours}h cooldown after sending
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex gap-3">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setSelectedGift(null)}
+                    className="flex-1 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-purple-200 font-medium transition-colors border border-white/10"
+                  >
+                    Cancel
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleConfirmGift}
+                    disabled={isProcessingGift}
+                    className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 text-white font-semibold transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isProcessingGift ? 'Sending...' : 'Confirm'}
+                  </motion.button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
