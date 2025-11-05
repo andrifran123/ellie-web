@@ -352,7 +352,7 @@ export default function CallClient() {
 
       ws.onopen = () => {
         setStatus("connected");
-        show({ text: "Connected to Ellie", type: "success" });
+        show("Connected to Ellie");
 
         ws.send(JSON.stringify({
           type: "session.update",
@@ -385,7 +385,7 @@ export default function CallClient() {
 
         setupMicrophone().catch((err) => {
           console.error("Mic setup failed:", err);
-          show({ text: "Microphone access failed", type: "error" });
+          show("Microphone access failed");
           hangUp();
         });
       };
@@ -411,7 +411,7 @@ export default function CallClient() {
 
           case "error":
             console.error("WS error:", msg.error);
-            show({ text: `Error: ${msg.error?.message || "Unknown"}`, type: "error" });
+            show(`Error: ${msg.error?.message || "Unknown"}`);
             break;
         }
       };
@@ -419,7 +419,7 @@ export default function CallClient() {
       ws.onerror = (err) => {
         console.error("WebSocket error:", err);
         setStatus("error");
-        show({ text: "Connection error", type: "error" });
+        show("Connection error");
       };
 
       ws.onclose = () => {
@@ -432,8 +432,10 @@ export default function CallClient() {
     } catch (error) {
       console.error("Failed to start call:", error);
       setStatus("error");
-      show({ text: "Failed to start call", type: "error" });
+      show("Failed to start call");
     }
+  // hangUp is intentionally excluded to avoid circular dependency
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [show, setupMicrophone]);
 
   const hangUp = useCallback(() => {
