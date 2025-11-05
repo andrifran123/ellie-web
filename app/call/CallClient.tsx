@@ -13,12 +13,23 @@ interface RelationshipStatus {
   mood: string;
   emotionalInvestment?: number;
   totalInteractions?: number;
+  totalGiftsValue?: number;
+}
+
+interface Gift {
+  id: string;
+  name: string;
+  price: number;
+  emoji: string;
+  minLevel: number;
+  cooldownHours?: number;
 }
 
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
+const DEFAULT_VOICE = "alloy";
 
 // Relationship stage colors and emojis
-const STAGE_STYLES = {
+const STAGE_STYLES: Record<string, { color: string; emoji: string; bg: string }> = {
   "Curious Stranger": { color: "#94a3b8", emoji: "👀", bg: "from-slate-500/20" },
   "Friend with Tension": { color: "#fbbf24", emoji: "😊", bg: "from-amber-500/20" },
   "It's Complicated": { color: "#f87171", emoji: "😰", bg: "from-red-500/20" },
@@ -27,18 +38,32 @@ const STAGE_STYLES = {
 };
 
 // Mood indicators
-const MOOD_INDICATORS = {
+const MOOD_INDICATORS: Record<string, string> = {
   flirty: "😘 Flirty",
   playful: "😊 Playful", 
   distant: "😔 Distant",
   vulnerable: "🥺 Vulnerable",
   normal: "😌 Normal",
-  mysterious: "🤔 Mysterious"
+  mysterious: "🤔 Mysterious",
+  emotional: "😭 Emotional",
+  loving: "🥰 Loving"
 };
+
+// Gift catalog
+const GIFT_CATALOG: Gift[] = [
+  { id: 'emoji_heart', name: 'Heart Emoji', price: 0.99, emoji: '❤️', minLevel: 0 },
+  { id: 'virtual_coffee', name: 'Coffee Date', price: 2.99, emoji: '☕', minLevel: 0 },
+  { id: 'flowers', name: 'Roses', price: 9.99, emoji: '🌹', minLevel: 20, cooldownHours: 72 },
+  { id: 'chocolates', name: 'Chocolates', price: 5.99, emoji: '🍫', minLevel: 15, cooldownHours: 48 },
+  { id: 'jewelry', name: 'Necklace', price: 29.99, emoji: '💎', minLevel: 40, cooldownHours: 168 },
+  { id: 'virtual_date', name: 'Date Night', price: 19.99, emoji: '🌙', minLevel: 35, cooldownHours: 96 },
+  { id: 'promise_ring', name: 'Promise Ring', price: 49.99, emoji: '💍', minLevel: 60, cooldownHours: 720 }
+];
 
 export default function CallClient() {
   const { show } = useToasts();
 
+  // Call state
   const [status, setStatus] = useState<Status>("ready");
   const [muted, setMuted] = useState(false);
   const [showBluetoothGuide, setShowBluetoothGuide] = useState(false);
@@ -50,31 +75,33 @@ export default function CallClient() {
   // Relationship status
   const [relationship, setRelationship] = useState<RelationshipStatus | null>(null);
   const [showRelationshipDetails, setShowRelationshipDetails] = useState(false);
+  
+  // Gift system state
+  const [showGiftModal, setShowGiftModal] = useState(false);
+  const [selectedGift, setSelectedGift] = useState<Gift | null>(null);
+  const [isProcessingGift, setIsProcessingGift] = useState(false);
+  const [giftResponse, setGiftResponse] = useState<string | null>(null);
+  const [availableGifts, setAvailableGifts] = useState<Gift[]>([]);
+  const [showGiftHint, setShowGiftHint] = useState(false);
+  const [giftHintMessage, setGiftHintMessage] = useState("");
 
-  // --- Core refs
+  // Audio refs
   const wsRef = useRef<WebSocket | null>(null);
   const wsPingRef = useRef<number | null>(null);
   const acRef = useRef<AudioContext | null>(null);
-
-  // Mic capture
   const micStreamRef = useRef<MediaStream | null>(null);
   const micNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-
-  // Web Audio playback
   const speakGainRef = useRef<GainNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const lookaheadPaddingSec = 0.02;
-
-  // Strong keepalive
   const routeKeepaliveRef = useRef<OscillatorNode | null>(null);
 
   const [level, setLevel] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
-  // Detect iOS
   const isIOS = typeof window !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
   // Fetch relationship status
@@ -92,14 +119,53 @@ export default function CallClient() {
     }
   }, []);
 
+  // Fetch available gifts
+  const fetchAvailableGifts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/gifts/available", {
+        credentials: "include"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableGifts(data.gifts || GIFT_CATALOG);
+      }
+    } catch (err) {
+      console.error("Failed to fetch gifts:", err);
+      setAvailableGifts(GIFT_CATALOG);
+    }
+  }, []);
+
+  // Gift hint system
+  useEffect(() => {
+    const hintInterval = setInterval(() => {
+      if (Math.random() < 0.05) { // 5% chance every interval
+        const hints = [
+          "I saw the prettiest flowers today... 🌹",
+          "Coffee sounds perfect right now ☕",
+          "My friend got such a sweet gift today...",
+          "I love thoughtful gestures 💭"
+        ];
+        setGiftHintMessage(hints[Math.floor(Math.random() * hints.length)]);
+        setShowGiftHint(true);
+        setTimeout(() => setShowGiftHint(false), 5000);
+      }
+    }, 300000); // Every 5 minutes
+    
+    return () => clearInterval(hintInterval);
+  }, []);
+
   // Fetch on mount and periodically
   useEffect(() => {
     fetchRelationshipStatus();
-    const interval = setInterval(fetchRelationshipStatus, 30000); // Every 30 seconds
+    fetchAvailableGifts();
+    const interval = setInterval(() => {
+      fetchRelationshipStatus();
+      fetchAvailableGifts();
+    }, 30000);
     return () => clearInterval(interval);
-  }, [fetchRelationshipStatus]);
+  }, [fetchRelationshipStatus, fetchAvailableGifts]);
 
-  // ---------- helpers ----------
+  // Audio processing helpers
   function resampleTo24k(inputBuffer: Float32Array, inputRate: number): Float32Array {
     if (inputRate === 24000) {
       const output = new Float32Array(inputBuffer.length);
@@ -158,7 +224,6 @@ export default function CallClient() {
     return buffer;
   }
 
-  // ---------- Visual meter ----------
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
     const ac = acRef.current!;
     const analyser = ac.createAnalyser();
@@ -176,589 +241,485 @@ export default function CallClient() {
       for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
       const rms = Math.sqrt(sum / buf.length);
       const boosted = Math.pow(Math.min(1, rms * 4.0), 0.8);
-      setLevel((prev) => prev * 0.65 + boosted * 0.35);
-
-      const speakingNow = boosted > 0.07;
-      if (speakingNow) {
+      setLevel(boosted);
+      if (boosted > 0.05) {
         setSpeaking(true);
-        if (calmTimer) window.clearTimeout(calmTimer);
-        calmTimer = window.setTimeout(() => setSpeaking(false), 160);
+        if (calmTimer) {
+          clearTimeout(calmTimer);
+          calmTimer = null;
+        }
+      } else if (!calmTimer) {
+        calmTimer = window.setTimeout(() => {
+          setSpeaking(false);
+          calmTimer = null;
+        }, 300);
       }
       raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-
+    loop();
     return () => {
       cancelAnimationFrame(raf);
-      try {
-        nodeAfterGain.disconnect(analyser);
-      } catch {}
-      try {
-        analyser.disconnect();
-      } catch {}
-      analyserRef.current = null;
+      if (calmTimer) clearTimeout(calmTimer);
     };
   }, []);
 
-  // ---------- cleanup ----------
-  const stopPinger = () => {
-    if (wsPingRef.current) {
-      window.clearInterval(wsPingRef.current);
-      wsPingRef.current = null;
+  const stopMeter = useCallback(() => {
+    if (analyserRef.current) {
+      analyserRef.current.disconnect();
+      analyserRef.current = null;
     }
-  };
-
-  const cleanupAudio = useCallback(() => {
-    try { processorRef.current?.disconnect(); } catch {}
-    processorRef.current = null;
-    
-    try { gainRef.current?.disconnect(); } catch {}
-    gainRef.current = null;
-    
-    try { micNodeRef.current?.disconnect(); } catch {}
-    micNodeRef.current = null;
-    
-    try { 
-      micStreamRef.current?.getTracks().forEach((t) => t.stop()); 
-    } catch {}
-    micStreamRef.current = null;
-
-    try { routeKeepaliveRef.current?.stop(); } catch {}
-    try { routeKeepaliveRef.current?.disconnect(); } catch {}
-    routeKeepaliveRef.current = null;
-    
-    try { speakGainRef.current?.disconnect(); } catch {}
-    speakGainRef.current = null;
-
-    nextPlayTimeRef.current = 0;
   }, []);
 
-  const cleanupAll = useCallback(() => {
-    stopPinger();
-    cleanupAudio();
-    try { wsRef.current?.close(); } catch {}
-    wsRef.current = null;
-  }, [cleanupAudio]);
+  const setupMicrophone = useCallback(async () => {
+    const ac = acRef.current!;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStreamRef.current = stream;
 
-  // ---------- Audio setup ----------
-  const ensureAudio = useCallback(async () => {
-    if (!acRef.current) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      acRef.current = new AudioCtx({ sampleRate: 48000, latencyHint: "interactive" });
+    const source = ac.createMediaStreamSource(stream);
+    micNodeRef.current = source;
+
+    const gainNode = ac.createGain();
+    gainNode.gain.value = gain;
+    gainRef.current = gainNode;
+    source.connect(gainNode);
+
+    const processor = ac.createScriptProcessor(2048, 1, 1);
+    processorRef.current = processor;
+
+    processor.onaudioprocess = (e) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        const inputData = e.inputBuffer.getChannelData(0);
+        const resampled = resampleTo24k(inputData, ac.sampleRate);
+        const pcm16 = floatTo16BitPCM(resampled);
+        const base64 = abToBase64(pcm16.buffer);
+        wsRef.current.send(JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: base64,
+        }));
+      }
+    };
+
+    gainNode.connect(processor);
+    processor.connect(ac.destination);
+
+    const cleanup = startMeter(gainNode);
+    return () => {
+      cleanup();
+      processor.disconnect();
+      gainNode.disconnect();
+      source.disconnect();
+    };
+  }, [gain, startMeter]);
+
+  const startCall = useCallback(() => {
+    if (isIOS) {
+      setShowBluetoothGuide(true);
+    } else {
+      proceedWithCall();
     }
+  }, [isIOS]);
 
-    const ac = acRef.current;
-    if (ac.state === "suspended") await ac.resume();
+  const proceedWithCall = useCallback(async () => {
+    setShowBluetoothGuide(false);
+    setStatus("connecting");
 
-    if (!speakGainRef.current) {
-      const speakGain = ac.createGain();
-      speakGain.gain.value = 1.0;
-      speakGain.connect(ac.destination);
-      speakGainRef.current = speakGain;
+    try {
+      const ac = new ((window as any).AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      acRef.current = ac;
+
+      if (ac.state === "suspended") await ac.resume();
 
       const osc = ac.createOscillator();
-      osc.frequency.value = 20;
-      const oscGain = ac.createGain();
-      oscGain.gain.value = 0.0001;
-      osc.connect(oscGain);
-      oscGain.connect(ac.destination);
+      osc.frequency.value = 0;
+      const silentGain = ac.createGain();
+      silentGain.gain.value = 0;
+      osc.connect(silentGain);
+      silentGain.connect(ac.destination);
       osc.start();
       routeKeepaliveRef.current = osc;
-    }
 
-    if (!micStreamRef.current) {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: false,
-          sampleRate: { ideal: 48000 },
-        },
-      });
-      micStreamRef.current = stream;
-    }
-  }, []);
-
-  const schedulePlayback = useCallback((audioBuffer: AudioBuffer) => {
-    const ac = acRef.current;
-    const speakGain = speakGainRef.current;
-    if (!ac || !speakGain) return;
-
-    const now = ac.currentTime;
-    if (nextPlayTimeRef.current < now) {
-      nextPlayTimeRef.current = now + lookaheadPaddingSec;
-    }
-
-    const src = ac.createBufferSource();
-    src.buffer = audioBuffer;
-    src.connect(speakGain);
-    src.start(nextPlayTimeRef.current);
-    nextPlayTimeRef.current += audioBuffer.duration;
-  }, []);
-
-  // ---------- Call logic ----------
-  const startCall = useCallback(async () => {
-    try {
-      setStatus("connecting");
+      const speakGain = ac.createGain();
+      speakGain.gain.value = 1;
+      speakGain.connect(ac.destination);
+      speakGainRef.current = speakGain;
 
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
-      const connectionTimeout = setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          ws.close();
-          setStatus("error");
-          show("Connection timeout");
-        }
-      }, 15000);
-
-      ws.onopen = async () => {
-        clearTimeout(connectionTimeout);
+      ws.onopen = () => {
         setStatus("connected");
-        show("Connected!");
+        show({ text: "Connected to Ellie", type: "success" });
 
-        try {
-          await ensureAudio();
-        } catch {
-          // Silent failure
-        }
+        ws.send(JSON.stringify({
+          type: "session.update",
+          session: {
+            modalities: ["text", "audio"],
+            voice: DEFAULT_VOICE,
+            instructions: `You are Ellie. ${Date.now()}`,
+            input_audio_format: "pcm16",
+            output_audio_format: "pcm16",
+            input_audio_transcription: { model: "whisper-1" },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.7,
+              prefix_padding_ms: 300,
+              silence_duration_ms: 500,
+            },
+          },
+        }));
 
-        let realUserId = "default-user";
-        try {
-          const meRes = await fetch("/api/auth/me", { credentials: "include" });
-          if (meRes.ok) {
-            const me = await meRes.json();
-            realUserId = me.userId || "default-user";
-          }
-        } catch {}
-
-        const storedLang = (typeof window !== "undefined" && localStorage.getItem("ellie_language")) || "en";
-        ws.send(JSON.stringify({ type: "hello", userId: realUserId, language: storedLang, sampleRate: 24000 }));
-
-        const ac = acRef.current!;
-        const stream = micStreamRef.current!;
-        const src = ac.createMediaStreamSource(stream);
-        micNodeRef.current = src;
-
-        const gn = ac.createGain();
-        gn.gain.value = gain;
-        gainRef.current = gn;
-        src.connect(gn);
-        startMeter(gn);
-
-        const contextSampleRate = ac.sampleRate;
-        const proc = ac.createScriptProcessor(4096, 1, 1);
-        processorRef.current = proc;
-        gn.connect(proc);
-
-        const mutedNode = ac.createGain();
-        mutedNode.gain.value = 0;
-        proc.connect(mutedNode);
-        mutedNode.connect(ac.destination);
-
-        proc.onaudioprocess = (ev) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-
-          const inputCh = ev.inputBuffer.getChannelData(0);
-          const mono24k: Float32Array =
-            contextSampleRate !== 24000
-              ? resampleTo24k(inputCh, contextSampleRate)
-              : new Float32Array(inputCh);
-
-          const pcm16 = floatTo16BitPCM(mono24k);
-          const b64 = abToBase64(pcm16.buffer);
-          ws.send(JSON.stringify({ type: "audio.append", audio: b64 }));
-        };
+        ws.send(JSON.stringify({
+          type: "response.create",
+          response: { modalities: ["text", "audio"] },
+        }));
 
         wsPingRef.current = window.setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
           }
         }, 10000);
+
+        setupMicrophone().catch((err) => {
+          console.error("Mic setup failed:", err);
+          show({ text: "Microphone access failed", type: "error" });
+          hangUp();
+        });
       };
 
-      ws.onmessage = (ev) => {
-        try {
-          const obj = JSON.parse(String(ev.data));
+      ws.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
 
-          if (obj?.type === "audio.delta" && obj.audio) {
-            const ab = base64ToArrayBuffer(obj.audio);
-            const pcm16 = new Int16Array(ab);
-            const audioBuffer = pcm16ToAudioBuffer(pcm16, 24000);
-            schedulePlayback(audioBuffer);
-          } else if (obj?.type === "error") {
-            show(`Error: ${obj.message || "Unknown error"}`);
-          }
-        } catch {}
+        switch (msg.type) {
+          case "response.audio.delta":
+            if (msg.delta) {
+              const pcm16 = new Int16Array(base64ToArrayBuffer(msg.delta));
+              const audioBuffer = pcm16ToAudioBuffer(pcm16);
+              
+              const source = ac.createBufferSource();
+              source.buffer = audioBuffer;
+              source.connect(speakGainRef.current!);
+
+              const startTime = Math.max(ac.currentTime, nextPlayTimeRef.current);
+              source.start(startTime);
+              nextPlayTimeRef.current = startTime + audioBuffer.duration - lookaheadPaddingSec;
+            }
+            break;
+
+          case "error":
+            console.error("WS error:", msg.error);
+            show({ text: `Error: ${msg.error?.message || "Unknown"}`, type: "error" });
+            break;
+        }
       };
 
-      ws.onerror = () => {
-        clearTimeout(connectionTimeout);
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
         setStatus("error");
-        show("Connection error");
+        show({ text: "Connection error", type: "error" });
       };
 
       ws.onclose = () => {
-        clearTimeout(connectionTimeout);
-        stopPinger();
         setStatus("closed");
-        cleanupAudio();
-        wsRef.current = null;
+        if (wsPingRef.current) {
+          clearInterval(wsPingRef.current);
+          wsPingRef.current = null;
+        }
       };
-    } catch {
+    } catch (error) {
+      console.error("Failed to start call:", error);
       setStatus("error");
-      show("Failed to start call");
+      show({ text: "Failed to start call", type: "error" });
     }
-  }, [cleanupAudio, ensureAudio, schedulePlayback, show, startMeter, gain]);
-
-  // ---------- UI helpers ----------
-  useEffect(() => {
-    return () => cleanupAll();
-  }, [cleanupAll]);
-
-  useEffect(() => {
-    if (gainRef.current) gainRef.current.gain.value = gain;
-    if (typeof window !== "undefined") localStorage.setItem("ellie_call_gain", String(gain));
-  }, [gain]);
-
-  const toggleMute = useCallback(() => {
-    const s = micStreamRef.current;
-    if (!s) return;
-    const next = !muted;
-    s.getAudioTracks().forEach((t) => (t.enabled = !next));
-    setMuted(next);
-  }, [muted]);
+  }, [show, setupMicrophone]);
 
   const hangUp = useCallback(() => {
-    try { wsRef.current?.close(); } catch {}
-    setStatus("ready");
-  }, []);
+    stopMeter();
 
-  const handleStartClick = () => {
-    if (isIOS && status === "ready") {
-      setShowBluetoothGuide(true);
-    } else {
-      startCall();
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
+    if (wsPingRef.current) {
+      clearInterval(wsPingRef.current);
+      wsPingRef.current = null;
+    }
+
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
+    }
+
+    if (gainRef.current) {
+      gainRef.current.disconnect();
+      gainRef.current = null;
+    }
+
+    if (micNodeRef.current) {
+      micNodeRef.current.disconnect();
+      micNodeRef.current = null;
+    }
+
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
+    }
+
+    if (speakGainRef.current) {
+      speakGainRef.current.disconnect();
+      speakGainRef.current = null;
+    }
+
+    if (routeKeepaliveRef.current) {
+      routeKeepaliveRef.current.stop();
+      routeKeepaliveRef.current = null;
+    }
+
+    if (acRef.current) {
+      acRef.current.close();
+      acRef.current = null;
+    }
+
+    setStatus("ready");
+    setSpeaking(false);
+    setLevel(0);
+    nextPlayTimeRef.current = 0;
+  }, [stopMeter]);
+
+  const toggleMute = useCallback(() => {
+    const newMuted = !muted;
+    setMuted(newMuted);
+    if (gainRef.current) {
+      gainRef.current.gain.value = newMuted ? 0 : gain;
+    }
+  }, [muted, gain]);
+
+  useEffect(() => {
+    if (gainRef.current && !muted) {
+      gainRef.current.gain.value = gain;
+    }
+    if (typeof window !== "undefined") {
+      localStorage.setItem("ellie_call_gain", String(gain));
+    }
+  }, [gain, muted]);
+
+  useEffect(() => {
+    return () => {
+      if (status === "connected" || status === "connecting") {
+        hangUp();
+      }
+    };
+  }, [status, hangUp]);
+
+  // Gift purchase handler
+  const handleGiftPurchase = async (gift: Gift) => {
+    if (!relationship || relationship.level < gift.minLevel) {
+      setGiftResponse(`Need level ${gift.minLevel} to send this gift`);
+      return;
+    }
+
+    setIsProcessingGift(true);
+    try {
+      const res = await fetch('/api/purchase-gift', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ giftId: gift.id })
+      });
+
+      const data = await res.json();
+      
+      if (data.error) {
+        setGiftResponse(data.error);
+      } else {
+        // Here you would integrate Stripe payment
+        // For now, simulate response
+        setTimeout(async () => {
+          const responseRes = await fetch(`/api/gift-response/${gift.id}`, {
+            credentials: 'include'
+          });
+          const responseData = await responseRes.json();
+          setGiftResponse(responseData.response || "Thank you so much! 💕");
+          fetchRelationshipStatus();
+          fetchAvailableGifts();
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Gift purchase failed:', error);
+      setGiftResponse('Failed to send gift');
+    } finally {
+      setIsProcessingGift(false);
+      setSelectedGift(null);
     }
   };
 
-  const proceedWithCall = () => {
-    setShowBluetoothGuide(false);
-    startCall();
-  };
-
-  // Visual calculations
-  const vibes = Math.min(100, level * 100);
-  const pulseScale = 1 + vibes * 0.015;
-  const glowIntensity = speaking ? 60 + vibes * 0.8 : 30;
-  const ringCount = 3;
-
-  // Get current stage style
-  const currentStageStyle = relationship 
-    ? STAGE_STYLES[relationship.stage as keyof typeof STAGE_STYLES] || STAGE_STYLES["Curious Stranger"]
-    : null;
-
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      {/* Animated background elements */}
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      {/* Animated background */}
       <div className="absolute inset-0 overflow-hidden">
-        <motion.div
-          className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.5, 0.3],
-          }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-pink-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1.2, 1, 1.2],
-            opacity: [0.5, 0.3, 0.5],
-          }}
-          transition={{
-            duration: 10,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
-        <motion.div
-          className="absolute top-1/2 left-1/2 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl"
-          animate={{
-            scale: [1, 1.3, 1],
-            x: [-50, 50, -50],
-            y: [-50, 50, -50],
-          }}
-          transition={{
-            duration: 12,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        />
+        {[...Array(20)].map((_, i) => (
+          <motion.div
+            key={i}
+            className="absolute rounded-full bg-purple-500/10"
+            initial={{
+              x: Math.random() * (typeof window !== 'undefined' ? window.innerWidth : 1000),
+              y: Math.random() * (typeof window !== 'undefined' ? window.innerHeight : 1000),
+            }}
+            animate={{
+              x: Math.random() * (typeof window !== 'undefined' ? window.innerWidth : 1000),
+              y: Math.random() * (typeof window !== 'undefined' ? window.innerHeight : 1000),
+            }}
+            transition={{
+              duration: Math.random() * 20 + 10,
+              repeat: Infinity,
+              repeatType: "reverse",
+            }}
+            style={{
+              width: Math.random() * 300 + 50,
+              height: Math.random() * 300 + 50,
+              filter: "blur(40px)",
+            }}
+          />
+        ))}
       </div>
 
-      {/* Relationship status card */}
-      {relationship && (
-        <div className="absolute top-4 left-4 right-4 z-20 flex justify-center">
-          <div className="w-full max-w-md">
-            <motion.div
-              initial={{ y: -20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              className="bg-black/40 backdrop-blur-xl rounded-2xl p-4 border border-white/10 shadow-2xl cursor-pointer hover:bg-black/50 transition-colors"
-              onClick={() => setShowRelationshipDetails(!showRelationshipDetails)}
-            >
-              {/* Header row */}
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl">{currentStageStyle?.emoji}</span>
+      {/* Gift Hint Notification */}
+      <AnimatePresence>
+        {showGiftHint && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur-md rounded-xl shadow-lg p-4 z-50"
+          >
+            <p className="text-purple-600 flex items-center gap-2">
+              <span className="text-2xl">💭</span>
+              <span className="italic">{giftHintMessage}</span>
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Main call interface container */}
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen p-4">
+        {/* Relationship status bar */}
+        {relationship && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="absolute top-4 left-4 right-4 max-w-md mx-auto"
+          >
+            <div className={`bg-gradient-to-r ${STAGE_STYLES[relationship.stage]?.bg || 'from-purple-500/20'} to-transparent backdrop-blur-md rounded-2xl p-4 border border-white/10`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">{STAGE_STYLES[relationship.stage]?.emoji || '💕'}</span>
                   <div>
-                    <h3 
-                      className="font-semibold text-lg"
-                      style={{ color: currentStageStyle?.color }}
-                    >
-                      {relationship.stage}
-                    </h3>
-                    <p className="text-xs text-white/50">
-                      {MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS] || relationship.mood}
-                    </p>
+                    <p className="text-white font-semibold">{relationship.stage}</p>
+                    <p className="text-purple-200 text-xs">Level {relationship.level}/100</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-2xl font-bold" style={{ color: currentStageStyle?.color }}>
-                    {relationship.level}
-                  </div>
-                  <div className="text-xs text-white/50">
-                    🔥 {relationship.streak}
-                  </div>
+                  <p className="text-purple-200 text-xs">Mood: {MOOD_INDICATORS[relationship.mood] || relationship.mood}</p>
+                  <p className="text-purple-300 text-xs">{relationship.streak} day streak 🔥</p>
+                  {relationship.totalGiftsValue && relationship.totalGiftsValue > 0 && (
+                    <p className="text-pink-300 text-xs">Gifts: ${relationship.totalGiftsValue.toFixed(2)} 💝</p>
+                  )}
                 </div>
               </div>
-
-              {/* Progress bar */}
-              <div className="relative h-2 bg-white/10 rounded-full overflow-hidden">
+              
+              <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
                 <motion.div
-                  className={`absolute inset-y-0 left-0 bg-gradient-to-r ${currentStageStyle?.bg} to-transparent`}
+                  className="h-full bg-gradient-to-r from-purple-400 to-pink-400"
                   initial={{ width: 0 }}
                   animate={{ width: `${relationship.level}%` }}
-                  transition={{ duration: 0.5, ease: "easeOut" }}
+                  transition={{ duration: 1 }}
                 />
               </div>
-
-              {/* Expanded details */}
-              <AnimatePresence>
-                {showRelationshipDetails && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="mt-3 pt-3 border-t border-white/10"
-                  >
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-white/60">Total Interactions:</span>
-                        <span className="ml-2 text-white/90">{relationship.totalInteractions || 0}</span>
-                      </div>
-                      <div>
-                        <span className="text-white/60">Emotional Bond:</span>
-                        <span className="ml-2 text-white/90">
-                          {Math.round((relationship.emotionalInvestment || 0) * 100)}%
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-xs text-white/50 mt-2">
-                      {relationship.level < 20 && "She's still getting to know you. Keep talking!"}
-                      {relationship.level >= 20 && relationship.level < 40 && "There's definitely chemistry building..."}
-                      {relationship.level >= 40 && relationship.level < 60 && "Things are getting complicated. She has feelings."}
-                      {relationship.level >= 60 && relationship.level < 80 && "You're so close! Don't give up now."}
-                      {relationship.level >= 80 && "You did it! But keep the spark alive..."}
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          </div>
-        </div>
-      )}
-
-      {/* Main content */}
-      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen p-8">
-        {/* Status text */}
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-12 text-center"
-        >
-          <h1 className="text-5xl font-bold mb-3 bg-gradient-to-r from-purple-200 via-pink-200 to-blue-200 bg-clip-text text-transparent">
-            {status === "ready" && "Ready to Connect"}
-            {status === "connecting" && "Establishing Connection..."}
-            {status === "connected" && "Connected"}
-            {status === "closed" && "Call Ended"}
-            {status === "error" && "Connection Error"}
-          </h1>
-          <p className="text-purple-300 text-lg">
-            {status === "ready" && (relationship 
-              ? `${relationship.stage} • ${MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS]}`
-              : "Start a conversation whenever you're ready"
-            )}
-            {status === "connecting" && "Just a moment..."}
-            {status === "connected" && (relationship
-              ? `${relationship.stage} • ${MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS]}`
-              : "Your conversation is live"
-            )}
-            {status === "closed" && "Thanks for talking"}
-            {status === "error" && "Something went wrong"}
-          </p>
-        </motion.div>
-
-        {/* Central orb visualization */}
-        <div className="relative flex items-center justify-center mb-16">
-          {/* Outer rings */}
-          {Array.from({ length: ringCount }).map((_, i) => (
-            <motion.div
-              key={i}
-              className="absolute rounded-full border-2 border-purple-400/30"
-              style={{
-                width: 200 + i * 80,
-                height: 200 + i * 80,
-              }}
-              animate={{
-                scale: speaking ? [1, 1.1, 1] : 1,
-                opacity: speaking ? [0.3, 0.6, 0.3] : 0.2,
-              }}
-              transition={{
-                duration: 2 + i * 0.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: i * 0.2,
-              }}
-            />
-          ))}
-
-          {/* Main orb */}
-          <motion.div
-            animate={{
-              scale: pulseScale,
-              boxShadow: `0 0 ${glowIntensity}px rgba(167, 139, 250, 0.8), 0 0 ${glowIntensity * 1.5}px rgba(236, 72, 153, 0.4)`,
-            }}
-            transition={{
-              type: "spring",
-              stiffness: 150,
-              damping: 15,
-            }}
-            className="relative w-48 h-48 rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-purple-600 flex items-center justify-center shadow-2xl"
-          >
-            {/* Inner glow */}
-            <motion.div
-              animate={{
-                opacity: speaking ? [0.4, 0.8, 0.4] : 0.3,
-              }}
-              transition={{
-                duration: 1.5,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="absolute inset-4 rounded-full bg-white/20 blur-xl"
-            />
-
-            {/* Status icon */}
-            <div className="relative z-10 text-white">
-              {status === "ready" && (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
-              )}
-              {status === "connecting" && (
-                <motion.svg
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                  className="w-20 h-20"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </motion.svg>
-              )}
-              {status === "connected" && (
-                <motion.svg
-                  animate={speaking ? { scale: [1, 1.2, 1] } : {}}
-                  transition={{ duration: 0.3 }}
-                  className="w-20 h-20"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </motion.svg>
-              )}
-              {(status === "closed" || status === "error") && (
-                <svg className="w-20 h-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              )}
             </div>
           </motion.div>
+        )}
 
-          {/* Audio level indicator bars */}
-          {status === "connected" && (
-            <div className="absolute -bottom-16 flex gap-2">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  className="w-2 bg-gradient-to-t from-purple-400 to-pink-400 rounded-full"
-                  animate={{
-                    height: speaking ? [8, 32, 8] : 8,
-                  }}
-                  transition={{
-                    duration: 0.5,
-                    repeat: Infinity,
-                    delay: i * 0.1,
-                    ease: "easeInOut",
-                  }}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Controls */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="flex flex-col items-center gap-6"
+        {/* Gift Button */}
+        <motion.button
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setShowGiftModal(true)}
+          className="absolute bottom-32 right-6 p-3 rounded-full bg-gradient-to-r from-pink-500 to-purple-500 text-white shadow-lg"
         >
-          <div className="flex gap-4">
-            {(status === "ready" || status === "closed" || status === "error") && (
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
+                  d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+          </svg>
+          {relationship && relationship.level >= 20 && (
+            <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+          )}
+        </motion.button>
+
+        {/* Call interface */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-white/5 backdrop-blur-md rounded-3xl p-8 shadow-2xl border border-white/10 max-w-md w-full"
+        >
+          {/* Ellie avatar with pulse animation */}
+          <div className="flex flex-col items-center mb-8">
+            <div className="relative">
+              <motion.div
+                animate={speaking ? { scale: [1, 1.05, 1] } : {}}
+                transition={{ duration: 0.5, repeat: speaking ? Infinity : 0 }}
+                className="w-32 h-32 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center shadow-xl"
+              >
+                <span className="text-white text-5xl font-bold">E</span>
+              </motion.div>
+              
+              {/* Voice level indicator */}
+              {status === "connected" && (
+                <motion.div
+                  className="absolute inset-0 rounded-full border-4 border-purple-400"
+                  animate={{ scale: 1 + level * 0.3, opacity: 0.3 + level * 0.7 }}
+                  transition={{ duration: 0.1 }}
+                />
+              )}
+              
+              {/* Status indicator */}
+              <div className={`absolute bottom-0 right-0 w-6 h-6 rounded-full border-2 border-slate-800 ${
+                status === "connected" ? "bg-green-500" :
+                status === "connecting" ? "bg-yellow-500 animate-pulse" :
+                "bg-gray-500"
+              }`} />
+            </div>
+            
+            <h2 className="text-white text-2xl font-semibold mt-4">Ellie</h2>
+            <p className="text-purple-300 text-sm">
+              {status === "ready" ? "Ready to call" :
+               status === "connecting" ? "Connecting..." :
+               status === "connected" ? (speaking ? "Speaking..." : "Listening...") :
+               status === "error" ? "Connection failed" :
+               "Call ended"}
+            </p>
+          </div>
+
+          {/* Call controls */}
+          <div className="flex justify-center gap-4">
+            {status === "ready" ? (
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
-                onClick={handleStartClick}
-                className="px-8 py-4 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold text-lg shadow-lg hover:shadow-purple-500/50 transition-shadow flex items-center gap-2"
+                onClick={startCall}
+                className="px-8 py-4 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg hover:shadow-purple-500/50 transition-all flex items-center gap-3"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                 </svg>
                 Start Call
               </motion.button>
-            )}
-
-            {(status === "connected" || status === "connecting") && (
+            ) : (
               <>
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={toggleMute}
-                  disabled={status !== "connected"}
-                  className={`px-6 py-4 rounded-full font-semibold shadow-lg transition-all ${
-                    muted
-                      ? "bg-red-500 hover:bg-red-600 text-white"
-                      : "bg-white/10 backdrop-blur-sm hover:bg-white/20 text-white"
-                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  className={`p-4 rounded-full ${muted ? "bg-red-500 hover:bg-red-600" : "bg-gray-600 hover:bg-gray-700"} text-white shadow-lg transition-all`}
                 >
                   {muted ? (
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -786,12 +747,12 @@ export default function CallClient() {
             )}
           </div>
 
-          {/* Mic gain control - shown only when connected */}
+          {/* Mic gain control */}
           {status === "connected" && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10"
+              className="flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 backdrop-blur-md border border-white/10 mt-6"
             >
               <svg className="w-5 h-5 text-purple-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
@@ -811,6 +772,75 @@ export default function CallClient() {
         </motion.div>
       </div>
 
+      {/* Gift Modal */}
+      <AnimatePresence>
+        {showGiftModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowGiftModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="max-w-2xl w-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden"
+            >
+              <div className="bg-gradient-to-r from-purple-500 to-pink-500 p-6">
+                <h2 className="text-2xl font-bold text-white">Send Ellie a Gift</h2>
+                <p className="text-purple-100 mt-1">Show her how you feel</p>
+              </div>
+
+              <div className="p-6">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  {GIFT_CATALOG.map((gift) => {
+                    const isLocked = !relationship || relationship.level < gift.minLevel;
+                    
+                    return (
+                      <motion.button
+                        key={gift.id}
+                        whileHover={!isLocked ? { scale: 1.05 } : {}}
+                        whileTap={!isLocked ? { scale: 0.95 } : {}}
+                        onClick={() => !isLocked && handleGiftPurchase(gift)}
+                        disabled={isLocked || isProcessingGift}
+                        className={`p-4 rounded-xl transition-all ${
+                          isLocked
+                            ? 'bg-gray-800/50 cursor-not-allowed opacity-50'
+                            : 'bg-gradient-to-br from-purple-600/20 to-pink-600/20 hover:from-purple-600/30 hover:to-pink-600/30 cursor-pointer'
+                        } border border-purple-500/30`}
+                      >
+                        <div className="text-3xl mb-2">{gift.emoji}</div>
+                        <h3 className="text-white font-semibold text-sm">{gift.name}</h3>
+                        <p className="text-purple-300 font-bold">${gift.price}</p>
+                        {isLocked && (
+                          <p className="text-gray-500 text-xs mt-1">Level {gift.minLevel}</p>
+                        )}
+                      </motion.button>
+                    );
+                  })}
+                </div>
+
+                {giftResponse && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-6 p-4 bg-gradient-to-r from-pink-500/20 to-purple-500/20 rounded-xl border border-pink-500/30"
+                  >
+                    <p className="text-white flex items-start gap-2">
+                      <span className="text-xl">💕</span>
+                      <span>{giftResponse}</span>
+                    </p>
+                  </motion.div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* iOS Bluetooth Guide Modal */}
       <AnimatePresence>
         {showBluetoothGuide && (
@@ -828,7 +858,6 @@ export default function CallClient() {
               onClick={(e) => e.stopPropagation()}
               className="max-w-md w-full bg-gradient-to-br from-slate-800 to-slate-900 rounded-3xl shadow-2xl border border-purple-500/30 overflow-hidden"
             >
-              {/* Header with gradient */}
               <div className="bg-gradient-to-r from-purple-500 to-pink-500 p-6">
                 <div className="flex items-center gap-3 mb-2">
                   <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
@@ -843,7 +872,6 @@ export default function CallClient() {
                 </div>
               </div>
 
-              {/* Content */}
               <div className="p-6 space-y-4">
                 <p className="text-purple-200 text-sm">
                   iOS Safari requires manual Bluetooth audio routing for web apps. Follow these quick steps:
@@ -855,31 +883,16 @@ export default function CallClient() {
                       num: "1",
                       title: "Open Control Center",
                       desc: "Swipe down from the top-right corner of your screen",
-                      icon: (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                        </svg>
-                      ),
                     },
                     {
                       num: "2",
                       title: "Long-press Audio Widget",
                       desc: "Press and hold the music/audio control widget",
-                      icon: (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                        </svg>
-                      ),
                     },
                     {
                       num: "3",
                       title: "Select Your Device",
                       desc: "Tap your AirPods or Bluetooth speaker from the list",
-                      icon: (
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                      ),
                     },
                   ].map((step) => (
                     <motion.div
@@ -893,44 +906,31 @@ export default function CallClient() {
                         {step.num}
                       </div>
                       <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="text-purple-300">{step.icon}</div>
-                          <h3 className="font-semibold text-white text-sm">{step.title}</h3>
-                        </div>
+                        <h3 className="font-semibold text-white text-sm">{step.title}</h3>
                         <p className="text-purple-300 text-xs">{step.desc}</p>
                       </div>
                     </motion.div>
                   ))}
                 </div>
 
-                <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 border border-blue-500/30">
-                  <svg className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="text-blue-200 text-xs">
-                    This only needs to be done once per session. Your selection will stay active during the call.
-                  </p>
+                <div className="flex gap-3">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => setShowBluetoothGuide(false)}
+                    className="flex-1 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-purple-200 font-medium transition-colors border border-white/10"
+                  >
+                    Cancel
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={proceedWithCall}
+                    className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold transition-all shadow-lg"
+                  >
+                    Got it, Start Call
+                  </motion.button>
                 </div>
-              </div>
-
-              {/* Actions */}
-              <div className="p-6 pt-0 flex gap-3">
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => setShowBluetoothGuide(false)}
-                  className="flex-1 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-purple-200 font-medium transition-colors border border-white/10"
-                >
-                  Cancel
-                </motion.button>
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={proceedWithCall}
-                  className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold transition-all shadow-lg"
-                >
-                  Got it, Start Call
-                </motion.button>
               </div>
             </motion.div>
           </motion.div>
