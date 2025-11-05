@@ -26,7 +26,6 @@ interface Gift {
 }
 
 const WS_URL = "wss://ellie-api-1.onrender.com/ws/phone";
-const DEFAULT_VOICE = "alloy";
 
 // Relationship stage colors and emojis
 const STAGE_STYLES: Record<string, { color: string; emoji: string; bg: string }> = {
@@ -109,7 +108,7 @@ export default function CallClient() {
     if (typeof document === 'undefined') return 'guest';
     
     const cookies = document.cookie.split(';');
-    for (let cookie of cookies) {
+    for (const cookie of cookies) {
       const [name, value] = cookie.trim().split('=');
       if (name === 'auth_token' || name === 'user_id') {
         try {
