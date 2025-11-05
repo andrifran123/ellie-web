@@ -376,12 +376,16 @@ export default function CallClient() {
 
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
+      
+      console.log("WebSocket created, URL:", WS_URL);
+      console.log("WebSocket readyState:", ws.readyState, "(0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)");
 
       ws.onopen = () => {
         setStatus("connected");
         show("Connected to Ellie");
+        console.log("WebSocket opened, sending session configuration...");
 
-        ws.send(JSON.stringify({
+        const sessionUpdate = {
           type: "session.update",
           session: {
             modalities: ["text", "audio"],
@@ -397,8 +401,12 @@ export default function CallClient() {
               silence_duration_ms: 500,
             },
           },
-        }));
+        };
+        
+        console.log("Sending session.update:", JSON.stringify(sessionUpdate, null, 2));
+        ws.send(JSON.stringify(sessionUpdate));
 
+        console.log("Sending response.create...");
         ws.send(JSON.stringify({
           type: "response.create",
           response: { modalities: ["text", "audio"] },
@@ -410,17 +418,26 @@ export default function CallClient() {
           }
         }, 10000);
 
-        console.log("Setting up microphone, AudioContext state:", acRef.current?.state);
-        setupMicrophone().catch((err) => {
-          console.error("Mic setup failed:", err);
-          console.error("AudioContext at failure:", acRef.current?.state);
-          show("Microphone access failed");
-          hangUp();
-        });
+        // Wait a bit for the WebSocket to be fully ready
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            console.log("Setting up microphone, AudioContext state:", acRef.current?.state);
+            setupMicrophone().catch((err) => {
+              console.error("Mic setup failed:", err);
+              console.error("AudioContext at failure:", acRef.current?.state);
+              show("Microphone access failed");
+              hangUp();
+            });
+          } else {
+            console.error("WebSocket closed before microphone setup, state:", ws.readyState);
+            show("Connection lost before audio setup");
+          }
+        }, 100);
       };
 
       ws.onmessage = (evt) => {
         const msg = JSON.parse(evt.data);
+        console.log("Received WebSocket message:", msg.type, msg);
 
         switch (msg.type) {
           case "response.audio.delta":
@@ -446,17 +463,47 @@ export default function CallClient() {
       };
 
       ws.onerror = (err) => {
-        console.error("WebSocket error:", err);
+        console.error("WebSocket error event:", err);
+        console.error("WebSocket readyState:", ws.readyState);
+        console.error("WebSocket URL:", ws.url);
         setStatus("error");
-        show("Connection error");
+        show("Connection error - check console");
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        console.log("WebSocket closed. Code:", event.code, "Reason:", event.reason || "No reason provided", "Clean:", event.wasClean);
+        
+        // Common close codes
+        const closeReasons: Record<number, string> = {
+          1000: "Normal closure",
+          1001: "Going away",
+          1002: "Protocol error",
+          1003: "Unsupported data",
+          1005: "No status code (abnormal closure)",
+          1006: "Abnormal closure (no close frame)",
+          1007: "Invalid frame payload",
+          1008: "Policy violation",
+          1009: "Message too big",
+          1010: "Missing extension",
+          1011: "Internal server error",
+          1015: "TLS handshake failure"
+        };
+        
+        const reason = closeReasons[event.code] || "Unknown reason";
+        console.log("Close reason:", reason);
+        
+        if (event.code !== 1000) {
+          show(`Call ended: ${reason}`);
+        }
+        
         setStatus("closed");
         if (wsPingRef.current) {
           clearInterval(wsPingRef.current);
           wsPingRef.current = null;
         }
+        
+        // Don't auto hangUp here to avoid race condition
+        // User will need to manually hang up or restart
       };
     } catch (error) {
       console.error("Failed to start call:", error);
