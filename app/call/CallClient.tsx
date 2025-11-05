@@ -128,9 +128,13 @@ export default function CallClient() {
       if (res.ok) {
         const data = await res.json();
         setAvailableGifts(data.gifts || GIFT_CATALOG);
+      } else if (res.status === 503 || res.status === 404) {
+        // API not implemented yet, use default catalog
+        console.log("Gift API not available, using default catalog");
+        setAvailableGifts(GIFT_CATALOG);
       }
     } catch (err) {
-      console.error("Failed to fetch gifts:", err);
+      console.log("Failed to fetch gifts, using default catalog:", err);
       setAvailableGifts(GIFT_CATALOG);
     }
   }, []);
@@ -225,7 +229,12 @@ export default function CallClient() {
   }
 
   const startMeter = useCallback((nodeAfterGain: AudioNode) => {
-    const ac = acRef.current!;
+    if (!acRef.current) {
+      console.error("AudioContext is null in startMeter");
+      return () => {}; // Return empty cleanup function
+    }
+    
+    const ac = acRef.current;
     const analyser = ac.createAnalyser();
     analyser.fftSize = 1024;
     analyserRef.current = analyser;
@@ -271,8 +280,18 @@ export default function CallClient() {
   }, []);
 
   const setupMicrophone = useCallback(async () => {
-    const ac = acRef.current!;
+    console.log("setupMicrophone called, checking AudioContext...");
+    if (!acRef.current) {
+      console.error("AudioContext is null in setupMicrophone");
+      throw new Error("AudioContext not initialized");
+    }
+    
+    console.log("AudioContext exists, state:", acRef.current.state);
+    const ac = acRef.current;
+    
+    console.log("Requesting microphone access...");
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log("Microphone access granted");
     micStreamRef.current = stream;
 
     const source = ac.createMediaStreamSource(stream);
@@ -302,7 +321,9 @@ export default function CallClient() {
     gainNode.connect(processor);
     processor.connect(ac.destination);
 
+    console.log("Starting audio level meter...");
     const cleanup = startMeter(gainNode);
+    console.log("Microphone setup complete");
     return () => {
       cleanup();
       processor.disconnect();
@@ -327,11 +348,17 @@ export default function CallClient() {
     setStatus("connecting");
 
     try {
+      console.log("Creating AudioContext...");
       const AudioContextClass = (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
       const ac = new AudioContextClass({ sampleRate: 24000 });
+      console.log("AudioContext created, state:", ac.state);
       acRef.current = ac;
 
-      if (ac.state === "suspended") await ac.resume();
+      if (ac.state === "suspended") {
+        console.log("Resuming AudioContext...");
+        await ac.resume();
+        console.log("AudioContext state after resume:", ac.state);
+      }
 
       const osc = ac.createOscillator();
       osc.frequency.value = 0;
@@ -383,8 +410,10 @@ export default function CallClient() {
           }
         }, 10000);
 
+        console.log("Setting up microphone, AudioContext state:", acRef.current?.state);
         setupMicrophone().catch((err) => {
           console.error("Mic setup failed:", err);
+          console.error("AudioContext at failure:", acRef.current?.state);
           show("Microphone access failed");
           hangUp();
         });
@@ -534,6 +563,16 @@ export default function CallClient() {
         body: JSON.stringify({ giftId: gift.id })
       });
 
+      if (res.status === 503 || res.status === 404) {
+        // API not implemented yet - show demo response
+        console.log("Gift API not available, showing demo response");
+        setGiftResponse(`Demo: You sent ${gift.name}! 💕 (Payment integration coming soon)`);
+        setTimeout(() => {
+          fetchRelationshipStatus();
+        }, 1000);
+        return;
+      }
+
       const data = await res.json();
       
       if (data.error) {
@@ -545,15 +584,21 @@ export default function CallClient() {
           const responseRes = await fetch(`/api/gift-response/${gift.id}`, {
             credentials: 'include'
           });
-          const responseData = await responseRes.json();
-          setGiftResponse(responseData.response || "Thank you so much! 💕");
+          
+          if (responseRes.ok) {
+            const responseData = await responseRes.json();
+            setGiftResponse(responseData.response || "Thank you so much! 💕");
+          } else {
+            setGiftResponse("Thank you so much! 💕");
+          }
+          
           fetchRelationshipStatus();
           fetchAvailableGifts();
         }, 2000);
       }
     } catch (error) {
       console.error('Gift purchase failed:', error);
-      setGiftResponse('Failed to send gift');
+      setGiftResponse('Gift system temporarily unavailable');
     } finally {
       setIsProcessingGift(false);
       setSelectedGift(null);
