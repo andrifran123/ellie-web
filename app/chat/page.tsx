@@ -169,10 +169,7 @@ export default function ChatPage() {
   const [typing, setTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // voice recording
-  const [recording, setRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<BlobPart[]>([]);
+  // 🚫 Voice recording removed
 
   // language gate
   const [langReady, setLangReady] = useState(false);
@@ -468,22 +465,19 @@ export default function ChatPage() {
       setInput("");
       setLoading(true);
       
-      // Mark message as seen after 1 second
-      setTimeout(() => {
-        setMessages((m) => 
-          m.map((msg) => 
-            msg.ts === userMsgTs && msg.from === "you"
-              ? { ...msg, seen: true } 
-              : msg
-          )
-        );
-        
-        // After "Seen" appears, show typing dots (only in normal mode)
-        // In manual override, typing will be controlled by admin's actual typing
-        if (!inManualOverride) {
-          setTyping(true);
-        }
-      }, 1000);
+      // ⚡ INSTANT: Mark message as seen immediately
+      setMessages((m) => 
+        m.map((msg) => 
+          msg.ts === userMsgTs && msg.from === "you"
+            ? { ...msg, seen: true } 
+            : msg
+        )
+      );
+      
+      // Show typing dots immediately (only in normal mode)
+      if (!inManualOverride) {
+        setTyping(true);
+      }
 
       try {
         // Check manual override status before sending
@@ -549,8 +543,7 @@ export default function ChatPage() {
         trackMessage(reply, ellieMsg.ts);
         console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
         
-        // Small delay to make the transition smooth, then hide typing
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // ⚡ INSTANT: Hide typing immediately
         setTyping(false);
         
         if (data.language && data.language !== chosenLang) {
@@ -605,118 +598,10 @@ export default function ChatPage() {
     }
   }, [show, userId]);
 
-  const startRecording = useCallback(async () => {
-    if (!userId) return; // Wait for userId
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
-      mediaRecorderRef.current = mr;
-      chunksRef.current = [];
-      mr.ondataavailable = (ev) => chunksRef.current.push(ev.data);
-      mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        if (!blob.size) {
-          show("No audio recorded");
-          return;
-        }
-        setLoading(true);
-        
-        try {
-          const form = new FormData();
-          form.append("audio", blob, "rec.webm");
-          form.append("userId", userId);
-          form.append("language", chosenLang);
+  // 🚫 Voice recording function removed
 
-          const resp = await apiPostForm<VoiceResponse>("/api/voice-chat", form);
-          
-          const userText = resp.text || "";
-          const reply = resp.reply || "(No reply)";
 
-          if (userText) {
-            const userTs = Date.now();
-            
-            // First, add only the user's message
-            setMessages((m) => [
-              ...m,
-              { from: "you", text: userText, ts: userTs },
-            ]);
-            
-            // After 1 second: mark as seen and show typing (only in normal mode)
-            setTimeout(() => {
-              setMessages((m) => 
-                m.map((msg) => 
-                  msg.ts === userTs && msg.from === "you"
-                    ? { ...msg, seen: true }
-                    : msg
-                )
-              );
-              
-              // Show typing dots after "seen" appears (only if not in manual override)
-              if (!inManualOverride) {
-                setTyping(true);
-              }
-              
-              // Then after a brief moment, add Ellie's response
-              setTimeout(() => {
-                const ellieTs = Date.now();
-                setMessages((m) => [
-                  ...m,
-                  { from: "ellie", text: reply, ts: ellieTs },
-                ]);
-                
-                // Track voice response to prevent duplicate if polling fetches it later
-                trackMessage(reply, ellieTs);
-                console.log("✅ Voice chat message tracked:", reply.substring(0, 30));
-                
-                // Hide typing after message is added
-                setTimeout(() => {
-                  setTyping(false);
-                  setLoading(false);
-                }, 200);
-              }, 500); // Brief delay to show typing before response
-            }, 1000);
-          } else {
-            // If no user text, just stop loading
-            setLoading(false);
-          }
-
-          if (resp.language && resp.language !== chosenLang) {
-            setChosenLang(resp.language);
-          }
-          if (resp.voiceMode) {
-            setVoiceMode(resp.voiceMode);
-          }
-
-          if (resp.audioMp3Base64) {
-            const b64 = resp.audioMp3Base64;
-            const byteStr = atob(b64);
-            const buf = new Uint8Array(byteStr.length);
-            for (let i = 0; i < byteStr.length; i++) buf[i] = byteStr.charCodeAt(i);
-            const blob2 = new Blob([buf], { type: "audio/mpeg" });
-            const url = URL.createObjectURL(blob2);
-            const audio = new Audio(url);
-            audio.play().catch((e) => console.error("Audio play error:", e));
-          }
-        } catch (e) {
-          setTyping(false);
-          setLoading(false);
-          show("Error: " + errorMessage(e));
-        }
-      };
-      mr.start();
-      setRecording(true);
-    } catch (e) {
-      show("Mic error: " + errorMessage(e));
-    }
-  }, [chosenLang, show, userId, inManualOverride]);
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && recording) {
-      mediaRecorderRef.current.stop();
-      setRecording(false);
-    }
-  }, [recording]);
+  // 🚫 Voice recording removed
 
   const loadVoicePresets = useCallback(async () => {
     if (loadingPresets.current || presets.length > 0) return;
@@ -944,22 +829,7 @@ export default function ChatPage() {
                 </svg>
               </button>
 
-              {!recording ? (
-                <button
-                  onClick={startRecording}
-                  disabled={loading}
-                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 transition hover:bg-white/10 disabled:opacity-50"
-                >
-                  🎤
-                </button>
-              ) : (
-                <button
-                  onClick={stopRecording}
-                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-red-500 bg-red-500/20 transition hover:bg-red-500/30"
-                >
-                  ⏹️
-                </button>
-              )}
+              {/* 🚫 Voice recording removed */}
 
               <Link
                 href="/call"
