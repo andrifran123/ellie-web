@@ -9,7 +9,21 @@ import { motion, AnimatePresence } from "framer-motion";
 /* ─────────────────────────────────────────────────────────────
    Types & constants (UPDATED WITH RELATIONSHIP)
 ───────────────────────────────────────────────────────────── */
-type ChatMsg = { from: "you" | "ellie"; text: string; ts: number; seen?: boolean };
+// 📸 Photo data structure
+interface PhotoData {
+  url: string;
+  message: string;
+  category: string;
+  isMilestone: boolean;
+}
+
+type ChatMsg = { 
+  from: "you" | "ellie"; 
+  text: string; 
+  ts: number; 
+  seen?: boolean;
+  photo?: PhotoData; // 📸 NEW: Photo attachment
+};
 
 // NEW: Relationship types
 interface RelationshipStatus {
@@ -39,6 +53,8 @@ type ChatResponse = {
   voiceMode?: string;
   relationshipStatus?: RelationshipStatus;
   in_manual_override?: boolean; // NEW: Flag when admin is in control
+  photo?: PhotoData; // 📸 NEW: Photo attachment
+  photoRefused?: boolean; // 📸 NEW: Flag when user asked for photo and was refused
 };
 
 type VoiceResponse = {
@@ -534,7 +550,7 @@ export default function ChatPage() {
         }
 
         const reply = data.reply || "(No reply)";
-        const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now() };
+        const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now(), photo: data.photo };
         
         // ✅ FIX: Add message first, THEN hide typing indicator
         setMessages((m) => [...m, ellieMsg]);
@@ -769,9 +785,44 @@ export default function ChatPage() {
                       )}
                     </div>
                   ) : (
-                    <div className="max-w-[75%] rounded-2xl px-4 py-2.5 shadow-lg border border-white/15 bg-white/5 backdrop-blur">
-                      <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
-                      <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
+                    <div className="max-w-[75%] flex flex-col gap-2">
+                      <div className="rounded-2xl px-4 py-2.5 shadow-lg border border-white/15 bg-white/5 backdrop-blur">
+                        <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
+                        <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
+                      </div>
+                      {/* 📸 Photo Display */}
+                      {msg.photo && (
+                        <div className="relative rounded-2xl overflow-hidden shadow-xl border border-white/20 bg-white/5 backdrop-blur animate-drop-in">
+                          {/* Milestone Badge */}
+                          {msg.photo.isMilestone && (
+                            <div className="absolute top-3 right-3 z-10 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg flex items-center gap-1.5 animate-bounce-in">
+                              <span className="text-sm">🎉</span>
+                              <span>First Photo!</span>
+                            </div>
+                          )}
+                          
+                          {/* Photo Image */}
+                          <div className="relative w-full max-w-sm">
+                            <img 
+                              src={msg.photo.url} 
+                              alt="Ellie" 
+                              className="w-full h-auto rounded-t-2xl object-cover"
+                              loading="lazy"
+                              onError={(e) => {
+                                // Fallback for broken images
+                                (e.target as HTMLImageElement).style.display = 'none';
+                              }}
+                            />
+                          </div>
+                          
+                          {/* Photo Caption */}
+                          {msg.photo.message && (
+                            <div className="px-4 py-3 bg-white/10 backdrop-blur">
+                              <p className="text-sm text-white/90">{msg.photo.message}</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1034,6 +1085,13 @@ function StyleKeyframes() {
         0%, 80%, 100% { transform: translateY(0); opacity: .6; }
         40% { transform: translateY(-2px); opacity: 1; }
       }
+      
+      @keyframes bounceIn {
+        0% { opacity: 0; transform: scale(0) rotate(-180deg); }
+        50% { transform: scale(1.1) rotate(10deg); }
+        100% { opacity: 1; transform: scale(1) rotate(0deg); }
+      }
+      .animate-bounce-in { animation: bounceIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) both; }
     `}</style>
   );
 }
