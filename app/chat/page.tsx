@@ -219,19 +219,14 @@ export default function ChatPage() {
   const messageIdsRef = useRef<Set<string>>(new Set()); // Track message IDs to prevent duplicates
   const messageContentRef = useRef<Map<string, number>>(new Map()); // Track message content+timestamp
 
-  const [hasPendingMissedCall, setHasPendingMissedCall] = useState(false);
-  const [missedCallChecked, setMissedCallChecked] = useState(false);
-  const [missedCallData, setMissedCallData] = useState<{
-    emotionalTone: string;
-    hoursAgo: number;
-    createdAt: string;
-  } | null>(null);
-
   // NEW: Abort controller for cancelling in-flight requests
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Typing timeout ref for auto-clearing typing indicator
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 📞 Missed call state
+  const [missedCallChecked, setMissedCallChecked] = useState(false);
 
   // Helper function to set typing with auto-clear timeout
   const setTypingWithTimeout = (isTyping: boolean) => {
@@ -307,10 +302,7 @@ export default function ChatPage() {
 
  // 💬 Load conversation history when userId is available
   useEffect(() => {
-
-  /**
-   * Check for pending missed call from Ellie
-   */
+  // 📞 Check for pending missed call
   const checkForMissedCall = useCallback(async () => {
     if (missedCallChecked) return;
     
@@ -319,26 +311,14 @@ export default function ChatPage() {
       if (!token) return;
       
       const response = await fetch('/api/missed-call/pending', {
-        headers: { 
-          'Authorization': `Bearer ${token}` 
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       
-      if (!response.ok) {
-        console.error('Failed to check for missed call');
-        return;
-      }
+      if (!response.ok) return;
       
       const data = await response.json();
       
       if (data.hasMissedCall) {
-        setHasPendingMissedCall(true);
-        setMissedCallData({
-          emotionalTone: data.emotionalTone,
-          hoursAgo: data.hoursAgo,
-          createdAt: data.createdAt
-        });
-        
         const timeText = data.hoursAgo === 1 ? '1 hour' : `${data.hoursAgo} hours`;
         const missedCallMessage: ChatMsg = {
           from: "ellie",
@@ -352,17 +332,13 @@ export default function ChatPage() {
             msg.text.startsWith('📞 Missed call from Ellie')
           );
           if (alreadyExists) return prev;
-          
           return [missedCallMessage, ...prev];
         });
-        
-        console.log(`📞 Pending missed call detected (${data.emotionalTone} tone, ${data.hoursAgo}h ago)`);
       }
       
       setMissedCallChecked(true);
-      
     } catch (error) {
-      console.error('❌ Failed to check for missed call:', error);
+      console.error('Failed to check for missed call:', error);
       setMissedCallChecked(true);
     }
   }, [missedCallChecked]);
@@ -415,7 +391,8 @@ export default function ChatPage() {
     };
     
     loadChatHistory();
-  }, [userId]); // Run when userId becomes available
+    checkForMissedCall();
+  }, [userId, checkForMissedCall]); // Run when userId becomes available
 
   // NEW: Continuous polling for new messages (catches manual override messages)
   const checkForNewMessages = useCallback(async () => {
