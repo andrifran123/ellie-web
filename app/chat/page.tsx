@@ -290,7 +290,7 @@ export default function ChatPage() {
       const token = localStorage.getItem('token');
       if (!token) return;
       
-      const response = await fetch('/api/missed-call/pending', {
+     const response = await fetch('https://ellie-api-1.onrender.com/api/missed-call/pending', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
