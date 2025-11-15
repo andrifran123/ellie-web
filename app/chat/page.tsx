@@ -219,6 +219,14 @@ export default function ChatPage() {
   const messageIdsRef = useRef<Set<string>>(new Set()); // Track message IDs to prevent duplicates
   const messageContentRef = useRef<Map<string, number>>(new Map()); // Track message content+timestamp
 
+  const [hasPendingMissedCall, setHasPendingMissedCall] = useState(false);
+  const [missedCallChecked, setMissedCallChecked] = useState(false);
+  const [missedCallData, setMissedCallData] = useState<{
+    emotionalTone: string;
+    hoursAgo: number;
+    createdAt: string;
+  } | null>(null);
+
   // NEW: Abort controller for cancelling in-flight requests
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -299,6 +307,66 @@ export default function ChatPage() {
 
  // 💬 Load conversation history when userId is available
   useEffect(() => {
+
+  /**
+   * Check for pending missed call from Ellie
+   */
+  const checkForMissedCall = useCallback(async () => {
+    if (missedCallChecked) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      
+      const response = await fetch('/api/missed-call/pending', {
+        headers: { 
+          'Authorization': `Bearer ${token}` 
+        }
+      });
+      
+      if (!response.ok) {
+        console.error('Failed to check for missed call');
+        return;
+      }
+      
+      const data = await response.json();
+      
+      if (data.hasMissedCall) {
+        setHasPendingMissedCall(true);
+        setMissedCallData({
+          emotionalTone: data.emotionalTone,
+          hoursAgo: data.hoursAgo,
+          createdAt: data.createdAt
+        });
+        
+        const timeText = data.hoursAgo === 1 ? '1 hour' : `${data.hoursAgo} hours`;
+        const missedCallMessage: ChatMsg = {
+          from: "ellie",
+          text: `📞 Missed call from Ellie ${timeText} ago`,
+          ts: new Date(data.createdAt).getTime(),
+          seen: false
+        };
+        
+        setMessages(prev => {
+          const alreadyExists = prev.some(msg => 
+            msg.text.startsWith('📞 Missed call from Ellie')
+          );
+          if (alreadyExists) return prev;
+          
+          return [missedCallMessage, ...prev];
+        });
+        
+        console.log(`📞 Pending missed call detected (${data.emotionalTone} tone, ${data.hoursAgo}h ago)`);
+      }
+      
+      setMissedCallChecked(true);
+      
+    } catch (error) {
+      console.error('❌ Failed to check for missed call:', error);
+      setMissedCallChecked(true);
+    }
+  }, [missedCallChecked]);
+
     const loadChatHistory = async () => {
       if (!userId) return;
       
