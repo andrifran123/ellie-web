@@ -281,27 +281,7 @@ export default function ChatPage() {
     return false;
   };
 
-  // Fetch authenticated user ID on mount
-  useEffect(() => {
-    const fetchUserId = async () => {
-      try {
-        const res = await fetch("/api/auth/me", { credentials: "include" });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.userId) {
-            setUserId(data.userId);
-            console.log("✅ User ID fetched:", data.userId);
-          }
-        }
-      } catch (err) {
-        console.error("❌ Failed to fetch user ID:", err);
-      }
-    };
-    fetchUserId();
-  }, []);
 
- // 💬 Load conversation history when userId is available
-  useEffect(() => {
   // 📞 Check for pending missed call
   const checkForMissedCall = useCallback(async () => {
     if (missedCallChecked) return;
@@ -341,8 +321,29 @@ export default function ChatPage() {
       console.error('Failed to check for missed call:', error);
       setMissedCallChecked(true);
     }
-  }, [missedCallChecked]);
+  }, []);
 
+  // Fetch authenticated user ID on mount
+  useEffect(() => {
+    const fetchUserId = async () => {
+      try {
+        const res = await fetch("/api/auth/me", { credentials: "include" });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.userId) {
+            setUserId(data.userId);
+            console.log("✅ User ID fetched:", data.userId);
+          }
+        }
+      } catch (err) {
+        console.error("❌ Failed to fetch user ID:", err);
+      }
+    };
+    fetchUserId();
+  }, []);
+
+ // 💬 Load conversation history when userId is available
+  useEffect(() => {
     const loadChatHistory = async () => {
       if (!userId) return;
       
