@@ -25,6 +25,14 @@ type ChatMsg = {
   photo?: PhotoData; // 📸 NEW: Photo attachment
 };
 
+// Database message format
+interface DbMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  created_at: string;
+}
+
 // NEW: Relationship types
 interface RelationshipStatus {
   level: number;
@@ -308,9 +316,9 @@ export default function ChatPage() {
             console.log(`✅ Loaded ${data.messages.length} messages from history`);
             
             // Convert database messages to ChatMsg format
-            const historicalMessages: ChatMsg[] = data.messages
-              .filter((msg: any) => msg.role !== 'system') // Filter out system notes
-              .map((msg: any) => ({
+            const historicalMessages: ChatMsg[] = (data.messages as DbMessage[])
+              .filter((msg: DbMessage) => msg.role !== 'system') // Filter out system notes
+              .map((msg: DbMessage) => ({
                 from: msg.role === 'user' ? 'you' : 'ellie',
                 text: msg.content,
                 ts: new Date(msg.created_at).getTime(),
