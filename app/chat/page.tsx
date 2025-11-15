@@ -289,6 +289,58 @@ export default function ChatPage() {
     fetchUserId();
   }, []);
 
+ // 💬 Load conversation history when userId is available
+  useEffect(() => {
+    const loadChatHistory = async () => {
+      if (!userId) return;
+      
+      try {
+        console.log("📜 Loading chat history for user:", userId);
+        
+        const res = await fetch(`/api/chat-view/messages/${userId}?limit=50`, {
+          credentials: "include"
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          
+          if (data.success && data.messages && data.messages.length > 0) {
+            console.log(`✅ Loaded ${data.messages.length} messages from history`);
+            
+            // Convert database messages to ChatMsg format
+            const historicalMessages: ChatMsg[] = data.messages
+              .filter((msg: any) => msg.role !== 'system') // Filter out system notes
+              .map((msg: any) => ({
+                from: msg.role === 'user' ? 'you' : 'ellie',
+                text: msg.content,
+                ts: new Date(msg.created_at).getTime(),
+                seen: true // Mark all historical messages as seen
+              }));
+            
+            // Set the messages, replacing any existing ones
+            setMessages(historicalMessages);
+            
+            // Track these messages to prevent duplicates from polling
+            historicalMessages.forEach(msg => {
+              trackMessage(msg.text, msg.ts);
+            });
+            
+            console.log("📨 Chat history loaded successfully");
+          } else {
+            console.log("📭 No previous messages found");
+          }
+        } else {
+          console.error("❌ Failed to load chat history:", res.status);
+        }
+      } catch (err) {
+        console.error("❌ Error loading chat history:", err);
+        // Don't fail the app if history loading fails
+      }
+    };
+    
+    loadChatHistory();
+  }, [userId]); // Run when userId becomes available
+
   // NEW: Continuous polling for new messages (catches manual override messages)
   const checkForNewMessages = useCallback(async () => {
     if (!userId) return; // Wait for userId to be loaded
