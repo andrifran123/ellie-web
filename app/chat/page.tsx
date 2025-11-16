@@ -290,8 +290,8 @@ export default function ChatPage() {
       const token = localStorage.getItem('token');
       if (!token) return;
       
+      // Step 1: Check if there's a pending missed call
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://ellie-api-1.onrender.com'}/api/missed-call/pending`, {
-                            
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
@@ -299,22 +299,39 @@ export default function ChatPage() {
       
       const data = await response.json();
       
-      if (data.hasMissedCall) {
-        const timeText = data.hoursAgo === 1 ? '1 hour' : `${data.hoursAgo} hours`;
-        const missedCallMessage: ChatMsg = {
-          from: "ellie",
-          text: `📞 Missed call from Ellie ${timeText} ago`,
-          ts: new Date(data.createdAt).getTime(),
-          seen: false
-        };
-        
-        setMessages(prev => {
-          const alreadyExists = prev.some(msg => 
-            msg.text.startsWith('📞 Missed call from Ellie')
-          );
-          if (alreadyExists) return prev;
-          return [missedCallMessage, ...prev];
+      if (data.hasMissedCall && data.missedCallId) {
+        // Step 2: Create the message in the database
+        const createResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://ellie-api-1.onrender.com'}/api/missed-call/create-message`, {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ missedCallId: data.missedCallId })
         });
+        
+        if (createResponse.ok) {
+          const createData = await createResponse.json();
+          console.log('✅ Missed call message saved to database');
+          
+          // Step 3: Add to local state for immediate display
+          const missedCallMessage: ChatMsg = {
+            from: "ellie",
+            text: createData.message,
+            ts: new Date(createData.createdAt).getTime(),
+            seen: false
+          };
+          
+          setMessages(prev => {
+            const alreadyExists = prev.some(msg => 
+              msg.text.startsWith('📞 Missed call from Ellie')
+            );
+            if (alreadyExists) return prev;
+            return [missedCallMessage, ...prev];
+          });
+        } else {
+          console.error('Failed to create missed call message in database');
+        }
       }
       
       setMissedCallChecked(true);
