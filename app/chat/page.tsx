@@ -291,6 +291,7 @@ export default function ChatPage() {
       if (!token) return;
       
      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/missed-call/pending`, {
+                            
         headers: { 'Authorization': `Bearer ${token}` }
       });
       
