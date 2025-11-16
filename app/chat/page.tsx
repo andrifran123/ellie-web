@@ -287,26 +287,27 @@ export default function ChatPage() {
     if (missedCallChecked) return;
     
     try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      
       // Step 1: Check if there's a pending missed call
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://ellie-api-1.onrender.com'}/api/missed-call/pending`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+      const response = await fetch(`/api/missed-call/pending`, {
+        credentials: "include"  // Use cookie-based auth
       });
       
-      if (!response.ok) return;
+      if (!response.ok) {
+        console.error('Failed to check for missed call:', response.status);
+        setMissedCallChecked(true);
+        return;
+      }
       
       const data = await response.json();
       
       if (data.hasMissedCall && data.missedCallId) {
         // Step 2: Create the message in the database
-        const createResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://ellie-api-1.onrender.com'}/api/missed-call/create-message`, {
+        const createResponse = await fetch(`/api/missed-call/create-message`, {
           method: 'POST',
           headers: { 
-            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
+          credentials: "include",  // Use cookie-based auth
           body: JSON.stringify({ missedCallId: data.missedCallId })
         });
         
