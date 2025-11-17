@@ -464,16 +464,16 @@ export default function HomePage() {
                   </h3>
                 </div>
                 <p className="text-purple-200 leading-relaxed max-w-3xl">
-                  Conversations are private to you. Ellie won&apos;t answer
-                  explicitly sexual requests and will steer things back to a
-                  respectful tone. You can reset memory any time.
+                  Conversations are private to you. Ellie is built for adults and can
+                  include explicit and sexual themes when you choose to engage that way.
+                  Messages are stored securely and linked only to anonymous user IDs,
+                  not directly to your personal details. You can reset chat history any time.
                 </p>
 
                 <div className="mt-6 flex flex-wrap gap-3">
                   {[
-                    "🛡️ End-to-end encrypted",
-                    "🗑️ Reset memory anytime",
-                    "✨ Respectful boundaries",
+                    "🗑️ Reset chat history anytime",
+                    "🕶️ Anonymous user IDs",
                   ].map((item, i) => (
                     <motion.div
                       key={i}
