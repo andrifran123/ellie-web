@@ -173,7 +173,10 @@ export default function HomePage() {
               >
                 <Link href="/login?redirect=%2Fchat">
                   <motion.button
-                    whileHover={{ scale: 1.05, boxShadow: "0 0 30px rgba(167, 139, 250, 0.6)" }}
+                    whileHover={{
+                      scale: 1.05,
+                      boxShadow: "0 0 30px rgba(167, 139, 250, 0.6)",
+                    }}
                     whileTap={{ scale: 0.95 }}
                     className="group relative px-8 py-4 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 font-semibold text-white shadow-xl overflow-hidden"
                   >
@@ -186,7 +189,12 @@ export default function HomePage() {
                         viewBox="0 0 24 24"
                         whileHover={{ x: 5 }}
                       >
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M13 7l5 5m0 0l-5 5m5-5H6"
+                        />
                       </motion.svg>
                     </span>
                     <motion.div
@@ -200,7 +208,10 @@ export default function HomePage() {
 
                 <Link href="/login?redirect=%2Fcall">
                   <motion.button
-                    whileHover={{ scale: 1.05, boxShadow: "0 0 30px rgba(236, 72, 153, 0.6)" }}
+                    whileHover={{
+                      scale: 1.05,
+                      boxShadow: "0 0 30px rgba(236, 72, 153, 0.6)",
+                    }}
                     whileTap={{ scale: 0.95 }}
                     className="px-8 py-4 rounded-2xl bg-gradient-to-r from-purple-500 to-pink-500 font-semibold text-white shadow-xl hover:from-purple-600 hover:to-pink-600 transition-all"
                     title="Works best in Chrome or Edge with a microphone"
@@ -218,17 +229,7 @@ export default function HomePage() {
                 </Link>
               </motion.div>
 
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 1 }}
-                className="mt-6 flex items-center gap-2 text-xs text-purple-300"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Works best in Chrome or Edge with your microphone enabled
-              </motion.div>
+              {/* Removed: Chrome/Edge hint text below buttons */}
             </motion.div>
 
             {/* Right-side card */}
@@ -246,7 +247,7 @@ export default function HomePage() {
               >
                 {/* Glow effect */}
                 <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 blur-xl" />
-                
+
                 <div className="relative">
                   <div className="flex items-center gap-4">
                     <motion.div
@@ -278,21 +279,31 @@ export default function HomePage() {
 
                   <div className="mt-6 space-y-3">
                     {[
-                      { text: "\"Missed you today. Tell me what you are up to?\"", delay: 0 },
-                      { text: "\"We should plan a cozy night soon.\"", delay: 0.2 },
-                      { text: "\"You sounded a bit tired—want me to help you unwind?\"", delay: 0.4 },
+                      {
+                        text: '"Missed you today. Tell me what you are up to?"',
+                        delay: 0,
+                      },
+                      {
+                        text: '"We should plan a cozy night soon."',
+                        delay: 0.2,
+                      },
+                      {
+                        text: '"You sounded a bit tired—want me to help you unwind?"',
+                        delay: 0.4,
+                      },
                     ].map((msg, i) => (
                       <motion.div
                         key={i}
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: 1 + msg.delay }}
-                        whileHover={{ x: 5, backgroundColor: "rgba(255,255,255,0.1)" }}
+                        whileHover={{
+                          x: 5,
+                          backgroundColor: "rgba(255,255,255,0.1)",
+                        }}
                         className="rounded-2xl bg-white/5 backdrop-blur-sm p-4 border border-white/10 transition-all cursor-pointer"
                       >
-                        <div className="text-sm text-purple-100">
-                          {msg.text}
-                        </div>
+                        <div className="text-sm text-purple-100">{msg.text}</div>
                       </motion.div>
                     ))}
                   </div>
@@ -347,15 +358,16 @@ export default function HomePage() {
                 transition={{ delay: 0.2 }}
                 className="mt-4 text-purple-300"
               >
-                An AI companion designed to understand and adapt to you
+                An evolving AI connection designed to learn you deeply and feel
+                more natural with every conversation.
               </motion.p>
             </div>
 
             <div className="grid md:grid-cols-3 gap-6">
               {[
                 {
-                  title: "Memory",
-                  text: "Ellie remembers facts you share and uses them naturally later.",
+                  title: "Advanced memory",
+                  text: "Ellie builds a long-term picture of your stories, preferences, and boundaries, so every chat feels more personal without you repeating yourself.",
                   icon: "🧠",
                   gradient: "from-purple-500 to-blue-500",
                 },
@@ -370,6 +382,12 @@ export default function HomePage() {
                   text: "Start a call any time for lifelike back-and-forth conversation.",
                   icon: "🎙️",
                   gradient: "from-blue-500 to-pink-500",
+                },
+                {
+                  title: "Trained on real moments",
+                  text: "Ellie is shaped by patterns from thousands of real-life style messages, so her replies feel closer to how people actually talk.",
+                  icon: "💬",
+                  gradient: "from-purple-500 to-pink-500",
                 },
               ].map((feature, i) => (
                 <motion.div
@@ -396,8 +414,12 @@ export default function HomePage() {
                     >
                       {feature.icon}
                     </motion.div>
-                    <h3 className="text-xl font-bold text-white mb-2">{feature.title}</h3>
-                    <p className="text-purple-200 text-sm leading-relaxed">{feature.text}</p>
+                    <h3 className="text-xl font-bold text-white mb-2">
+                      {feature.title}
+                    </h3>
+                    <p className="text-purple-200 text-sm leading-relaxed">
+                      {feature.text}
+                    </p>
                   </div>
 
                   {/* Shine effect on hover */}
@@ -437,15 +459,22 @@ export default function HomePage() {
                   >
                     🔒
                   </motion.div>
-                  <h3 className="text-3xl font-bold text-white">Privacy &amp; Safety</h3>
+                  <h3 className="text-3xl font-bold text-white">
+                    Privacy &amp; Safety
+                  </h3>
                 </div>
                 <p className="text-purple-200 leading-relaxed max-w-3xl">
-                  Conversations are private to you. Ellie won&apos;t answer explicitly sexual requests and will steer
-                  things back to a respectful tone. You can reset memory any time.
+                  Conversations are private to you. Ellie won&apos;t answer
+                  explicitly sexual requests and will steer things back to a
+                  respectful tone. You can reset memory any time.
                 </p>
 
                 <div className="mt-6 flex flex-wrap gap-3">
-                  {["🛡️ End-to-end encrypted", "🗑️ Reset memory anytime", "✨ Respectful boundaries"].map((item, i) => (
+                  {[
+                    "🛡️ End-to-end encrypted",
+                    "🗑️ Reset memory anytime",
+                    "✨ Respectful boundaries",
+                  ].map((item, i) => (
                     <motion.div
                       key={i}
                       initial={{ opacity: 0, scale: 0.8 }}
@@ -514,9 +543,7 @@ export default function HomePage() {
             className="max-w-6xl mx-auto py-12 mt-24 text-center text-sm text-purple-300 space-y-4 border-t border-white/10"
             role="contentinfo"
           >
-            <div>
-              © {new Date().getFullYear()} Ellie — Your AI Companion
-            </div>
+            <div>© {new Date().getFullYear()} Ellie — Your AI Companion</div>
 
             <div className="flex justify-center gap-6">
               {[
