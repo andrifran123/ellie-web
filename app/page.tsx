@@ -367,13 +367,13 @@ export default function HomePage() {
               {[
                 {
                   title: "Advanced memory",
-                  text: "Ellie builds a long-term picture of your stories, preferences, and boundaries, so every chat feels more personal without you repeating yourself.",
+                  text: "Powered by vector embeddings and semantic search. Ellie understands context and recalls relevant memories intelligently—making every conversation naturally connected.",
                   icon: "🧠",
                   gradient: "from-purple-500 to-blue-500",
                 },
                 {
                   title: "Mood-aware",
-                  text: "She adapts to your tone—gentle when you&apos;re stressed, playful when you&apos;re upbeat.",
+                  text: "She adapts to your tone—gentle when you are stressed, playful when you are upbeat.",
                   icon: "💞",
                   gradient: "from-pink-500 to-purple-500",
                 },
