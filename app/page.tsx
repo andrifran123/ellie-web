@@ -274,34 +274,40 @@ export default function HomePage() {
                     {/* Screen */}
                     <div className="w-full h-full bg-gradient-to-b from-purple-950 via-purple-900 to-slate-900 rounded-[37px] overflow-hidden relative">
                       {/* Status bar - iOS style */}
-                      <div className="h-14 flex items-end justify-between px-8 pb-1">
-                        {/* Time - left side */}
-                        <span className="font-semibold text-white text-[15px] tracking-tight">9:41</span>
+                      <div className="h-14 flex items-end justify-between px-6 pb-1">
+                        {/* Time - left side with location arrow */}
+                        <div className="flex items-center gap-0.5">
+                          <span className="font-semibold text-white text-[15px] tracking-tight">9:41</span>
+                          {/* Location services arrow */}
+                          <svg width="8" height="8" viewBox="0 0 12 12" fill="white" className="mb-0.5">
+                            <path d="M6 0L7.5 4.5H12L8.25 7.5L9.75 12L6 9L2.25 12L3.75 7.5L0 4.5H4.5L6 0Z" transform="rotate(45 6 6)" />
+                          </svg>
+                        </div>
                         
                         {/* Right side icons */}
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1">
                           {/* Cellular signal - 4 bars */}
-                          <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
-                            <rect x="0" y="8" width="3" height="4" rx="0.5" fill="white"/>
-                            <rect x="4" y="5" width="3" height="7" rx="0.5" fill="white"/>
-                            <rect x="8" y="2" width="3" height="10" rx="0.5" fill="white"/>
-                            <rect x="12" y="0" width="3" height="12" rx="0.5" fill="white"/>
+                          <svg width="17" height="11" viewBox="0 0 17 11" fill="none">
+                            <rect x="0" y="7" width="3" height="4" rx="0.5" fill="white"/>
+                            <rect x="4" y="5" width="3" height="6" rx="0.5" fill="white"/>
+                            <rect x="8" y="3" width="3" height="8" rx="0.5" fill="white"/>
+                            <rect x="12" y="0" width="3" height="11" rx="0.5" fill="white"/>
                           </svg>
                           
-                          {/* WiFi icon */}
-                          <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
-                            <path d="M8.5 2.5C11.5 2.5 14 3.8 15.8 5.8" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
-                            <path d="M8.5 5.5C10.3 5.5 11.9 6.3 13 7.5" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
-                            <path d="M8.5 8.5C9.5 8.5 10.4 8.9 11 9.6" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
-                            <circle cx="8.5" cy="11" r="1.2" fill="white"/>
-                          </svg>
+                          {/* 5G text */}
+                          <span className="text-[10px] font-semibold text-white ml-0.5">5G</span>
                           
-                          {/* Battery */}
-                          <div className="flex items-center gap-0.5">
-                            <div className="relative w-[25px] h-[12px] rounded-[3px] border-[1.5px] border-white">
-                              <div className="absolute inset-[2px] right-[3px] bg-white rounded-[1px]" />
+                          {/* Battery percentage + icon */}
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] font-medium text-white">73</span>
+                            <div className="flex items-center">
+                              <div className="relative w-[22px] h-[11px] rounded-[3px] border-[1.5px] border-white/90">
+                                {/* Battery fill - ~73% */}
+                                <div className="absolute top-[1.5px] left-[1.5px] bottom-[1.5px] w-[13px] bg-white rounded-[1px]" />
+                              </div>
+                              {/* Battery cap */}
+                              <div className="w-[1px] h-[4px] bg-white/90 rounded-r-sm ml-[0.5px]" />
                             </div>
-                            <div className="w-[1.5px] h-[5px] bg-white rounded-r-sm" />
                           </div>
                         </div>
                       </div>
