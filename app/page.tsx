@@ -237,12 +237,6 @@ export default function HomePage() {
               transition={{ duration: 0.8, delay: 0.4 }}
               className="relative flex justify-center"
             >
-              {/* Edge glow effect - left side */}
-              <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-8 w-32 h-[500px] bg-gradient-to-r from-white/60 via-white/20 to-transparent blur-2xl" />
-              
-              {/* Edge glow effect - right side */}
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-8 w-32 h-[500px] bg-gradient-to-l from-white/60 via-white/20 to-transparent blur-2xl" />
-
               {/* Subtle center glow */}
               <div className="absolute inset-0 flex justify-center items-center">
                 <div className="w-48 h-80 bg-purple-500/20 blur-3xl rounded-full" />
