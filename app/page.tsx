@@ -576,6 +576,12 @@ export default function HomePage() {
                   icon: "💬",
                   gradient: "from-purple-500 to-pink-500",
                 },
+                {
+                  title: "Ultra-realistic photos",
+                  text: "Trained on natural human poses and authentic angles to create images that feel real.",
+                  icon: "📸",
+                  gradient: "from-pink-500 to-orange-500",
+                },
               ].map((feature, i) => (
                 <motion.div
                   key={feature.title}
