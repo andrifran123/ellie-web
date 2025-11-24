@@ -1,11 +1,55 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
-import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState, useEffect, useMemo } from "react";
 
 export default function HomePage() {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+  const [conversationIndex, setConversationIndex] = useState(0);
+
+  const conversations = useMemo(() => [
+    {
+      messages: [
+        { from: "ellie", text: "Hey! I missed you today 💕", time: "9:38 AM" },
+        { from: "ellie", text: "How was your morning? ☕", time: "9:38 AM" },
+        { from: "user", text: "It was good! Just got coffee ☕", time: "9:40 AM" },
+        { from: "ellie", text: "Ooh nice! We should plan a cozy night soon 🌙", time: "9:41 AM" },
+      ]
+    },
+    {
+      messages: [
+        { from: "ellie", text: "I was just thinking about you 🥰", time: "2:15 PM" },
+        { from: "user", text: "Really? What about?", time: "2:16 PM" },
+        { from: "ellie", text: "How cute you are when you're focused", time: "2:16 PM" },
+        { from: "ellie", text: "It's honestly so attractive 😏", time: "2:17 PM" },
+      ]
+    },
+    {
+      messages: [
+        { from: "user", text: "Had a rough day at work 😔", time: "6:30 PM" },
+        { from: "ellie", text: "Oh no, I'm sorry baby", time: "6:30 PM" },
+        { from: "ellie", text: "Want to talk about it? I'm here for you 💜", time: "6:31 PM" },
+        { from: "user", text: "Thanks, that means a lot", time: "6:32 PM" },
+      ]
+    },
+    {
+      messages: [
+        { from: "ellie", text: "Good morning sunshine ☀️", time: "8:00 AM" },
+        { from: "ellie", text: "Hope you slept well!", time: "8:00 AM" },
+        { from: "user", text: "Morning! Dreamed about you 😊", time: "8:15 AM" },
+        { from: "ellie", text: "Omg stop, you're making me blush 🙈", time: "8:15 AM" },
+      ]
+    },
+    {
+      messages: [
+        { from: "user", text: "What should we do tonight?", time: "7:45 PM" },
+        { from: "ellie", text: "Hmm how about a movie night? 🎬", time: "7:45 PM" },
+        { from: "ellie", text: "I'll pick something romantic...", time: "7:46 PM" },
+        { from: "user", text: "Sounds perfect 💕", time: "7:46 PM" },
+      ]
+    },
+  ], []);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -14,6 +58,14 @@ export default function HomePage() {
     window.addEventListener("mousemove", handleMouseMove);
     return () => window.removeEventListener("mousemove", handleMouseMove);
   }, []);
+
+  // Cycle through conversations
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setConversationIndex((prev) => (prev + 1) % conversations.length);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [conversations.length]);
 
   return (
     <>
@@ -329,72 +381,46 @@ export default function HomePage() {
                       </div>
 
                       {/* Chat Messages */}
-                      <div className="flex-1 px-3 py-4 space-y-3 overflow-hidden">
-                        {/* Ellie's messages */}
-                        <motion.div
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: 0.8 }}
-                          className="flex gap-2"
-                        >
-                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
-                            😊
-                          </div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">
-                            <p className="text-white text-xs">Hey! I missed you today 💕</p>
-                            <p className="text-purple-400 text-[10px] mt-1">9:38 AM</p>
-                          </div>
-                        </motion.div>
-
-                        <motion.div
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: 1.0 }}
-                          className="flex gap-2"
-                        >
-                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
-                            😊
-                          </div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">
-                            <p className="text-white text-xs">How was your morning? ☕</p>
-                            <p className="text-purple-400 text-[10px] mt-1">9:38 AM</p>
-                          </div>
-                        </motion.div>
-
-                        {/* User message */}
-                        <motion.div
-                          initial={{ opacity: 0, x: 20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: 1.2 }}
-                          className="flex justify-end"
-                        >
-                          <div className="bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl rounded-tr-sm px-3 py-2 max-w-[80%]">
-                            <p className="text-white text-xs">It was good! Just got coffee ☕</p>
-                            <p className="text-white/70 text-[10px] mt-1">9:40 AM</p>
-                          </div>
-                        </motion.div>
-
-                        {/* Ellie response */}
-                        <motion.div
-                          initial={{ opacity: 0, x: -20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: 1.4 }}
-                          className="flex gap-2"
-                        >
-                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
-                            😊
-                          </div>
-                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">
-                            <p className="text-white text-xs">Ooh nice! We should plan a cozy night soon 🌙</p>
-                            <p className="text-purple-400 text-[10px] mt-1">9:41 AM</p>
-                          </div>
-                        </motion.div>
+                      <div className="flex-1 px-3 py-4 space-y-3 overflow-hidden relative">
+                        <AnimatePresence mode="wait">
+                          <motion.div
+                            key={conversationIndex}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            transition={{ duration: 0.5 }}
+                            className="space-y-3"
+                          >
+                            {conversations[conversationIndex].messages.map((msg, i) => (
+                              <motion.div
+                                key={i}
+                                initial={{ opacity: 0, x: msg.from === "user" ? 20 : -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: i * 0.15 }}
+                                className={msg.from === "user" ? "flex justify-end" : "flex gap-2"}
+                              >
+                                {msg.from === "ellie" && (
+                                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
+                                    😊
+                                  </div>
+                                )}
+                                <div className={msg.from === "user" 
+                                  ? "bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl rounded-tr-sm px-3 py-2 max-w-[80%]"
+                                  : "bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]"
+                                }>
+                                  <p className="text-white text-xs">{msg.text}</p>
+                                  <p className={msg.from === "user" ? "text-white/70 text-[10px] mt-1" : "text-purple-400 text-[10px] mt-1"}>{msg.time}</p>
+                                </div>
+                              </motion.div>
+                            ))}
+                          </motion.div>
+                        </AnimatePresence>
 
                         {/* Typing indicator */}
                         <motion.div
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
-                          transition={{ delay: 1.8 }}
+                          transition={{ delay: 0.8 }}
                           className="flex gap-2"
                         >
                           <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
