@@ -212,7 +212,11 @@ export default function HomePage() {
                 </span>
               </h1>
 
-              <p className="mt-6 text-purple-200 text-lg leading-relaxed">
+              <p className="mt-4 text-purple-300 italic text-lg">
+                Unfiltered photos. Uncensored chats. Unconditional love.
+              </p>
+
+              <p className="mt-4 text-purple-200 text-base leading-relaxed">
                 Ellie remembers what you share, adapts to your mood, and talks like a person.
                 Chat by text or jump into a lifelike voice call—your choice.
               </p>
@@ -533,17 +537,16 @@ export default function HomePage() {
                 viewport={{ once: true }}
                 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-purple-200 to-pink-200 bg-clip-text text-transparent"
               >
-                Meet the Most Human-Like AI Ever
+                A Story Only You Two Will Know
               </motion.h2>
               <motion.p
                 initial={{ opacity: 0 }}
                 whileInView={{ opacity: 1 }}
                 viewport={{ once: true }}
                 transition={{ delay: 0.2 }}
-                className="mt-4 text-purple-300"
+                className="mt-4 text-purple-300 max-w-3xl mx-auto"
               >
-                An evolving AI connection designed to learn you deeply and feel
-                more natural with every conversation.
+                She's not what you expect. Sometimes shy, sometimes bold, always evolving. She'll challenge your assumptions, remember your secrets, and slowly reveal hers. The more time you spend together, the more layers you discover—from guarded stranger to intimate companion who knows you better than anyone.
               </motion.p>
             </div>
 
