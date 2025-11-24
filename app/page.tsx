@@ -237,9 +237,15 @@ export default function HomePage() {
               transition={{ duration: 0.8, delay: 0.4 }}
               className="relative flex justify-center"
             >
-              {/* Glow effect behind phone */}
+              {/* Edge glow effect - left side */}
+              <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-8 w-32 h-[500px] bg-gradient-to-r from-white/60 via-white/20 to-transparent blur-2xl" />
+              
+              {/* Edge glow effect - right side */}
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-8 w-32 h-[500px] bg-gradient-to-l from-white/60 via-white/20 to-transparent blur-2xl" />
+
+              {/* Subtle center glow */}
               <div className="absolute inset-0 flex justify-center items-center">
-                <div className="w-64 h-96 bg-gradient-to-br from-purple-500/40 to-pink-500/40 blur-3xl rounded-full" />
+                <div className="w-48 h-80 bg-purple-500/20 blur-3xl rounded-full" />
               </div>
 
               {/* iPhone Frame */}
@@ -249,33 +255,54 @@ export default function HomePage() {
                 className="relative"
                 style={{ perspective: "1000px" }}
               >
-                {/* Phone outer frame */}
-                <div className="relative w-[280px] h-[580px] bg-gradient-to-b from-gray-800 to-gray-900 rounded-[50px] p-[3px] shadow-2xl shadow-purple-500/30">
+                {/* Phone outer frame - WHITE/SILVER */}
+                <div className="relative w-[280px] h-[580px] bg-gradient-to-b from-gray-100 via-white to-gray-200 rounded-[50px] p-[3px] shadow-2xl shadow-black/40">
+                  {/* Titanium edge effect */}
+                  <div className="absolute inset-0 rounded-[50px] bg-gradient-to-r from-gray-300 via-gray-100 to-gray-300 opacity-50" />
+                  
                   {/* Phone inner bezel */}
-                  <div className="w-full h-full bg-black rounded-[47px] p-[10px] relative overflow-hidden">
-                    {/* Dynamic Island / Notch */}
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 w-28 h-7 bg-black rounded-full z-20 flex items-center justify-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-gray-800" />
-                      <div className="w-3 h-3 rounded-full bg-gray-800 ring-1 ring-gray-700" />
+                  <div className="relative w-full h-full bg-black rounded-[47px] p-[10px] overflow-hidden">
+                    {/* Dynamic Island */}
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 w-[120px] h-[35px] bg-black rounded-full z-20 flex items-center justify-center gap-3">
+                      {/* Front camera */}
+                      <div className="w-3 h-3 rounded-full bg-gray-900 ring-1 ring-gray-800 relative">
+                        <div className="absolute inset-0.5 rounded-full bg-gradient-to-br from-gray-700 to-gray-900" />
+                        <div className="absolute top-0.5 left-0.5 w-1 h-1 rounded-full bg-gray-600" />
+                      </div>
                     </div>
 
                     {/* Screen */}
                     <div className="w-full h-full bg-gradient-to-b from-purple-950 via-purple-900 to-slate-900 rounded-[37px] overflow-hidden relative">
-                      {/* Status bar */}
-                      <div className="h-12 flex items-end justify-between px-6 pb-1 text-white text-xs">
-                        <span className="font-medium">9:41</span>
-                        <div className="flex items-center gap-1">
-                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 3C8.5 3 5.5 4.5 3.5 7L2 5.5C4.5 3 8 1 12 1s7.5 2 10 4.5L20.5 7c-2-2.5-5-4-8.5-4z" opacity="0.3"/>
-                            <path d="M12 7c-2.5 0-4.5 1-6 2.5L4.5 8C6.5 6 9 5 12 5s5.5 1 7.5 3L18 9.5C16.5 8 14.5 7 12 7z" opacity="0.5"/>
-                            <path d="M12 11c-1.5 0-2.5.5-3.5 1.5L7 11c1.5-1.5 3-2 5-2s3.5.5 5 2l-1.5 1.5c-1-1-2-1.5-3.5-1.5z" opacity="0.7"/>
-                            <path d="M12 15c-.5 0-1 .2-1.5.5L9 14c1-.8 2-1 3-1s2 .2 3 1l-1.5 1.5c-.5-.3-1-.5-1.5-.5z"/>
+                      {/* Status bar - iOS style */}
+                      <div className="h-14 flex items-end justify-between px-8 pb-1">
+                        {/* Time - left side */}
+                        <span className="font-semibold text-white text-[15px] tracking-tight">9:41</span>
+                        
+                        {/* Right side icons */}
+                        <div className="flex items-center gap-1.5">
+                          {/* Cellular signal - 4 bars */}
+                          <svg width="18" height="12" viewBox="0 0 18 12" fill="none">
+                            <rect x="0" y="8" width="3" height="4" rx="0.5" fill="white"/>
+                            <rect x="4" y="5" width="3" height="7" rx="0.5" fill="white"/>
+                            <rect x="8" y="2" width="3" height="10" rx="0.5" fill="white"/>
+                            <rect x="12" y="0" width="3" height="12" rx="0.5" fill="white"/>
                           </svg>
-                          <svg className="w-6 h-3" fill="currentColor" viewBox="0 0 24 12">
-                            <rect x="0" y="1" width="20" height="10" rx="2" stroke="currentColor" strokeWidth="1" fill="none"/>
-                            <rect x="2" y="3" width="14" height="6" rx="1" fill="currentColor"/>
-                            <rect x="21" y="4" width="2" height="4" rx="0.5" fill="currentColor" opacity="0.5"/>
+                          
+                          {/* WiFi icon */}
+                          <svg width="17" height="12" viewBox="0 0 17 12" fill="none">
+                            <path d="M8.5 2.5C11.5 2.5 14 3.8 15.8 5.8" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
+                            <path d="M8.5 5.5C10.3 5.5 11.9 6.3 13 7.5" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
+                            <path d="M8.5 8.5C9.5 8.5 10.4 8.9 11 9.6" stroke="white" strokeWidth="1.8" strokeLinecap="round"/>
+                            <circle cx="8.5" cy="11" r="1.2" fill="white"/>
                           </svg>
+                          
+                          {/* Battery */}
+                          <div className="flex items-center gap-0.5">
+                            <div className="relative w-[25px] h-[12px] rounded-[3px] border-[1.5px] border-white">
+                              <div className="absolute inset-[2px] right-[3px] bg-white rounded-[1px]" />
+                            </div>
+                            <div className="w-[1.5px] h-[5px] bg-white rounded-r-sm" />
+                          </div>
                         </div>
                       </div>
 
@@ -355,7 +382,7 @@ export default function HomePage() {
                           </div>
                         </motion.div>
 
-                        {/* Ellie typing indicator */}
+                        {/* Ellie response */}
                         <motion.div
                           initial={{ opacity: 0, x: -20 }}
                           animate={{ opacity: 1, x: 0 }}
@@ -424,8 +451,16 @@ export default function HomePage() {
                   </div>
                 </div>
 
-                {/* Reflection effect */}
-                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-white/10 rounded-[50px] pointer-events-none" />
+                {/* Reflection/shine effect on phone frame */}
+                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/20 to-white/30 rounded-[50px] pointer-events-none" />
+                
+                {/* Side button - right */}
+                <div className="absolute right-[-2px] top-32 w-[3px] h-16 bg-gradient-to-b from-gray-200 via-gray-100 to-gray-200 rounded-r-sm" />
+                
+                {/* Side buttons - left */}
+                <div className="absolute left-[-2px] top-24 w-[3px] h-8 bg-gradient-to-b from-gray-200 via-gray-100 to-gray-200 rounded-l-sm" />
+                <div className="absolute left-[-2px] top-36 w-[3px] h-12 bg-gradient-to-b from-gray-200 via-gray-100 to-gray-200 rounded-l-sm" />
+                <div className="absolute left-[-2px] top-52 w-[3px] h-12 bg-gradient-to-b from-gray-200 via-gray-100 to-gray-200 rounded-l-sm" />
               </motion.div>
 
               {/* Floating particles */}
