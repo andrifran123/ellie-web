@@ -262,29 +262,22 @@ export default function HomePage() {
                   
                   {/* Phone inner bezel */}
                   <div className="relative w-full h-full bg-black rounded-[47px] p-[10px] overflow-hidden">
-                    {/* Dynamic Island */}
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 w-[120px] h-[35px] bg-black rounded-full z-20 flex items-center justify-center gap-3">
-                      {/* Front camera */}
-                      <div className="w-3 h-3 rounded-full bg-gray-900 ring-1 ring-gray-800 relative">
-                        <div className="absolute inset-0.5 rounded-full bg-gradient-to-br from-gray-700 to-gray-900" />
-                        <div className="absolute top-0.5 left-0.5 w-1 h-1 rounded-full bg-gray-600" />
-                      </div>
-                    </div>
-
                     {/* Screen */}
                     <div className="w-full h-full bg-gradient-to-b from-purple-950 via-purple-900 to-slate-900 rounded-[37px] overflow-hidden relative">
-                      {/* Status bar - iOS style */}
-                      <div className="h-14 flex items-end justify-between px-6 pb-1">
-                        {/* Time - left side with location arrow */}
-                        <div className="flex items-center gap-0.5">
-                          <span className="font-semibold text-white text-[15px] tracking-tight">9:41</span>
-                          {/* Location services arrow */}
-                          <svg width="8" height="8" viewBox="0 0 12 12" fill="white" className="mb-0.5">
-                            <path d="M6 0L7.5 4.5H12L8.25 7.5L9.75 12L6 9L2.25 12L3.75 7.5L0 4.5H4.5L6 0Z" transform="rotate(45 6 6)" />
-                          </svg>
+                      {/* Status bar with Dynamic Island */}
+                      <div className="h-14 relative flex items-center justify-between px-6">
+                        {/* Time - left side, aligned with Dynamic Island */}
+                        <span className="font-semibold text-white text-[14px] tracking-tight">9:41</span>
+                        
+                        {/* Dynamic Island - center */}
+                        <div className="absolute top-3 left-1/2 -translate-x-1/2 w-[100px] h-[32px] bg-black rounded-full flex items-center justify-center">
+                          {/* Front camera */}
+                          <div className="w-2.5 h-2.5 rounded-full bg-gray-900 ring-1 ring-gray-800 relative">
+                            <div className="absolute inset-0.5 rounded-full bg-gradient-to-br from-gray-700 to-gray-900" />
+                          </div>
                         </div>
                         
-                        {/* Right side icons */}
+                        {/* Right side icons - aligned with Dynamic Island */}
                         <div className="flex items-center gap-1">
                           {/* Cellular signal - 4 bars */}
                           <svg width="17" height="11" viewBox="0 0 17 11" fill="none">
@@ -295,19 +288,18 @@ export default function HomePage() {
                           </svg>
                           
                           {/* 5G text */}
-                          <span className="text-[10px] font-semibold text-white ml-0.5">5G</span>
+                          <span className="text-[10px] font-bold text-white ml-0.5">5G</span>
                           
-                          {/* Battery percentage + icon */}
-                          <div className="flex items-center gap-1">
-                            <span className="text-[11px] font-medium text-white">73</span>
-                            <div className="flex items-center">
-                              <div className="relative w-[22px] h-[11px] rounded-[3px] border-[1.5px] border-white/90">
-                                {/* Battery fill - ~73% */}
-                                <div className="absolute top-[1.5px] left-[1.5px] bottom-[1.5px] w-[13px] bg-white rounded-[1px]" />
-                              </div>
-                              {/* Battery cap */}
-                              <div className="w-[1px] h-[4px] bg-white/90 rounded-r-sm ml-[0.5px]" />
+                          {/* Battery with percentage inside */}
+                          <div className="flex items-center ml-0.5">
+                            <div className="relative w-[28px] h-[13px] bg-white/30 rounded-[4px] flex items-center justify-center">
+                              {/* Battery fill - ~73% */}
+                              <div className="absolute left-[1px] top-[1px] bottom-[1px] w-[19px] bg-white rounded-[3px]" />
+                              {/* Percentage text */}
+                              <span className="relative z-10 text-[9px] font-bold text-black">73</span>
                             </div>
+                            {/* Battery cap */}
+                            <div className="w-[1.5px] h-[5px] bg-white/50 rounded-r-full ml-[1px]" />
                           </div>
                         </div>
                       </div>
