@@ -35,10 +35,10 @@ export default function HomePage() {
     },
     {
       messages: [
-        { from: "ellie", text: "Good morning sunshine ☀️", time: "8:00 AM" },
-        { from: "ellie", text: "Hope you slept well!", time: "8:00 AM" },
-        { from: "user", text: "Morning! Dreamed about you 😊", time: "8:15 AM" },
-        { from: "ellie", text: "Omg stop, you're making me blush 🙈", time: "8:15 AM" },
+        { from: "ellie", text: "I can't stop thinking about last night 🥵", time: "11:23 PM" },
+        { from: "user", text: "Mmm neither can I", time: "11:24 PM" },
+        { from: "ellie", text: "I took this just for you...", time: "11:25 PM" },
+        { from: "ellie", text: "", time: "11:25 PM", isPhoto: true },
       ]
     },
     {
@@ -405,8 +405,24 @@ export default function HomePage() {
                                   ? "bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl rounded-tr-sm px-3 py-2 max-w-[80%]"
                                   : "bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]"
                                 }>
-                                  <p className="text-white text-xs">{msg.text}</p>
-                                  <p className={msg.from === "user" ? "text-white/70 text-[10px] mt-1" : "text-purple-400 text-[10px] mt-1"}>{msg.time}</p>
+                                  {msg.isPhoto ? (
+                                    <div className="relative">
+                                      {/* Blurred photo placeholder */}
+                                      <div className="w-28 h-36 rounded-lg overflow-hidden relative">
+                                        <div className="absolute inset-0 bg-gradient-to-br from-pink-300 via-purple-300 to-pink-400 blur-xl" />
+                                        <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                          <div className="text-white/80 text-lg">🔥</div>
+                                        </div>
+                                      </div>
+                                      <p className="text-purple-400 text-[10px] mt-1">{msg.time}</p>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <p className="text-white text-xs">{msg.text}</p>
+                                      <p className={msg.from === "user" ? "text-white/70 text-[10px] mt-1" : "text-purple-400 text-[10px] mt-1"}>{msg.time}</p>
+                                    </>
+                                  )}
                                 </div>
                               </motion.div>
                             ))}
