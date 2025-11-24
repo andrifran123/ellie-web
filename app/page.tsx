@@ -546,7 +546,7 @@ export default function HomePage() {
                 transition={{ delay: 0.2 }}
                 className="mt-4 text-purple-300 max-w-3xl mx-auto"
               >
-                She's not what you expect. Sometimes shy, sometimes bold, always evolving. She'll challenge your assumptions, remember your secrets, and slowly reveal hers. The more time you spend together, the more layers you discover—from guarded stranger to intimate companion who knows you better than anyone.
+                She&apos;s not what you expect. Sometimes shy, sometimes bold, always evolving. She&apos;ll challenge your assumptions, remember your secrets, and slowly reveal hers. The more time you spend together, the more layers you discover—from guarded stranger to intimate companion who knows you better than anyone.
               </motion.p>
             </div>
 
