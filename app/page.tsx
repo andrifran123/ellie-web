@@ -559,10 +559,10 @@ export default function HomePage() {
                   gradient: "from-purple-500 to-blue-500",
                 },
                 {
-                  title: "Mood-aware",
-                  text: "She adapts to your tone—gentle when you are stressed, playful when you are upbeat.",
-                  icon: "💞",
-                  gradient: "from-pink-500 to-purple-500",
+                  title: "Ultra-realistic photos",
+                  text: "Trained on natural human poses and authentic angles to create images that feel real.",
+                  icon: "🔞",
+                  gradient: "from-pink-500 to-orange-500",
                 },
                 {
                   title: "Voice that feels real",
@@ -577,10 +577,10 @@ export default function HomePage() {
                   gradient: "from-purple-500 to-pink-500",
                 },
                 {
-                  title: "Ultra-realistic photos",
-                  text: "Trained on natural human poses and authentic angles to create images that feel real.",
-                  icon: "📸",
-                  gradient: "from-pink-500 to-orange-500",
+                  title: "Mood-aware",
+                  text: "She adapts to your tone—gentle when you are stressed, playful when you are upbeat.",
+                  icon: "💞",
+                  gradient: "from-pink-500 to-purple-500",
                 },
               ].map((feature, i) => (
                 <motion.div
