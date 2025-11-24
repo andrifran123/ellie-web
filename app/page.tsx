@@ -228,96 +228,214 @@ export default function HomePage() {
                   </motion.button>
                 </Link>
               </motion.div>
-
-              {/* Removed: Chrome/Edge hint text below buttons */}
             </motion.div>
 
-            {/* Right-side card */}
+            {/* iPhone Mockup */}
             <motion.div
               initial={{ opacity: 0, x: 50 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.8, delay: 0.4 }}
-              className="relative"
+              className="relative flex justify-center"
             >
-              <motion.div
-                whileHover={{ scale: 1.02 }}
-                className="relative rounded-3xl p-8 bg-white/5 backdrop-blur-xl border border-white/10 shadow-2xl"
-                role="region"
-                aria-label="Ellie preview"
-              >
-                {/* Glow effect */}
-                <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 blur-xl" />
+              {/* Glow effect behind phone */}
+              <div className="absolute inset-0 flex justify-center items-center">
+                <div className="w-64 h-96 bg-gradient-to-br from-purple-500/40 to-pink-500/40 blur-3xl rounded-full" />
+              </div>
 
-                <div className="relative">
-                  <div className="flex items-center gap-4">
-                    <motion.div
-                      animate={{
-                        scale: [1, 1.05, 1],
-                      }}
-                      transition={{
-                        duration: 3,
-                        repeat: Infinity,
-                        ease: "easeInOut",
-                      }}
-                      className="size-16 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 grid place-items-center text-3xl shadow-lg shadow-purple-500/50"
-                      aria-hidden
-                    >
-                      😊
-                    </motion.div>
-                    <div>
-                      <div className="font-bold text-xl text-white">Ellie</div>
-                      <div className="text-purple-300 text-sm flex items-center gap-2">
-                        <motion.span
-                          animate={{ opacity: [0.5, 1, 0.5] }}
-                          transition={{ duration: 2, repeat: Infinity }}
-                          className="w-2 h-2 rounded-full bg-green-400"
-                        />
-                        Warm • Playful • Supportive
+              {/* iPhone Frame */}
+              <motion.div
+                whileHover={{ scale: 1.02, rotateY: 5 }}
+                transition={{ type: "spring", stiffness: 300 }}
+                className="relative"
+                style={{ perspective: "1000px" }}
+              >
+                {/* Phone outer frame */}
+                <div className="relative w-[280px] h-[580px] bg-gradient-to-b from-gray-800 to-gray-900 rounded-[50px] p-[3px] shadow-2xl shadow-purple-500/30">
+                  {/* Phone inner bezel */}
+                  <div className="w-full h-full bg-black rounded-[47px] p-[10px] relative overflow-hidden">
+                    {/* Dynamic Island / Notch */}
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 w-28 h-7 bg-black rounded-full z-20 flex items-center justify-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-gray-800" />
+                      <div className="w-3 h-3 rounded-full bg-gray-800 ring-1 ring-gray-700" />
+                    </div>
+
+                    {/* Screen */}
+                    <div className="w-full h-full bg-gradient-to-b from-purple-950 via-purple-900 to-slate-900 rounded-[37px] overflow-hidden relative">
+                      {/* Status bar */}
+                      <div className="h-12 flex items-end justify-between px-6 pb-1 text-white text-xs">
+                        <span className="font-medium">9:41</span>
+                        <div className="flex items-center gap-1">
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 3C8.5 3 5.5 4.5 3.5 7L2 5.5C4.5 3 8 1 12 1s7.5 2 10 4.5L20.5 7c-2-2.5-5-4-8.5-4z" opacity="0.3"/>
+                            <path d="M12 7c-2.5 0-4.5 1-6 2.5L4.5 8C6.5 6 9 5 12 5s5.5 1 7.5 3L18 9.5C16.5 8 14.5 7 12 7z" opacity="0.5"/>
+                            <path d="M12 11c-1.5 0-2.5.5-3.5 1.5L7 11c1.5-1.5 3-2 5-2s3.5.5 5 2l-1.5 1.5c-1-1-2-1.5-3.5-1.5z" opacity="0.7"/>
+                            <path d="M12 15c-.5 0-1 .2-1.5.5L9 14c1-.8 2-1 3-1s2 .2 3 1l-1.5 1.5c-.5-.3-1-.5-1.5-.5z"/>
+                          </svg>
+                          <svg className="w-6 h-3" fill="currentColor" viewBox="0 0 24 12">
+                            <rect x="0" y="1" width="20" height="10" rx="2" stroke="currentColor" strokeWidth="1" fill="none"/>
+                            <rect x="2" y="3" width="14" height="6" rx="1" fill="currentColor"/>
+                            <rect x="21" y="4" width="2" height="4" rx="0.5" fill="currentColor" opacity="0.5"/>
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* Chat Header */}
+                      <div className="px-4 py-3 flex items-center gap-3 border-b border-white/10">
+                        <motion.div
+                          animate={{ scale: [1, 1.05, 1] }}
+                          transition={{ duration: 3, repeat: Infinity }}
+                          className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-lg shadow-lg"
+                        >
+                          😊
+                        </motion.div>
+                        <div className="flex-1">
+                          <div className="font-semibold text-white text-sm">Ellie</div>
+                          <div className="flex items-center gap-1.5 text-xs text-purple-300">
+                            <motion.span
+                              animate={{ opacity: [0.5, 1, 0.5] }}
+                              transition={{ duration: 2, repeat: Infinity }}
+                              className="w-1.5 h-1.5 rounded-full bg-green-400"
+                            />
+                            Online
+                          </div>
+                        </div>
+                        <div className="flex gap-3 text-purple-300">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* Chat Messages */}
+                      <div className="flex-1 px-3 py-4 space-y-3 overflow-hidden">
+                        {/* Ellie's messages */}
+                        <motion.div
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.8 }}
+                          className="flex gap-2"
+                        >
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
+                            😊
+                          </div>
+                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">
+                            <p className="text-white text-xs">Hey! I missed you today 💕</p>
+                            <p className="text-purple-400 text-[10px] mt-1">9:38 AM</p>
+                          </div>
+                        </motion.div>
+
+                        <motion.div
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 1.0 }}
+                          className="flex gap-2"
+                        >
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
+                            😊
+                          </div>
+                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">
+                            <p className="text-white text-xs">How was your morning? ☕</p>
+                            <p className="text-purple-400 text-[10px] mt-1">9:38 AM</p>
+                          </div>
+                        </motion.div>
+
+                        {/* User message */}
+                        <motion.div
+                          initial={{ opacity: 0, x: 20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 1.2 }}
+                          className="flex justify-end"
+                        >
+                          <div className="bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl rounded-tr-sm px-3 py-2 max-w-[80%]">
+                            <p className="text-white text-xs">It was good! Just got coffee ☕</p>
+                            <p className="text-white/70 text-[10px] mt-1">9:40 AM</p>
+                          </div>
+                        </motion.div>
+
+                        {/* Ellie typing indicator */}
+                        <motion.div
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 1.4 }}
+                          className="flex gap-2"
+                        >
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
+                            😊
+                          </div>
+                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">
+                            <p className="text-white text-xs">Ooh nice! We should plan a cozy night soon 🌙</p>
+                            <p className="text-purple-400 text-[10px] mt-1">9:41 AM</p>
+                          </div>
+                        </motion.div>
+
+                        {/* Typing indicator */}
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ delay: 1.8 }}
+                          className="flex gap-2"
+                        >
+                          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-xs flex-shrink-0 mt-1">
+                            😊
+                          </div>
+                          <div className="bg-white/10 backdrop-blur-sm rounded-2xl rounded-tl-sm px-3 py-2.5">
+                            <div className="flex gap-1">
+                              <motion.div
+                                animate={{ y: [0, -3, 0] }}
+                                transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
+                                className="w-1.5 h-1.5 bg-purple-400 rounded-full"
+                              />
+                              <motion.div
+                                animate={{ y: [0, -3, 0] }}
+                                transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
+                                className="w-1.5 h-1.5 bg-purple-400 rounded-full"
+                              />
+                              <motion.div
+                                animate={{ y: [0, -3, 0] }}
+                                transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
+                                className="w-1.5 h-1.5 bg-purple-400 rounded-full"
+                              />
+                            </div>
+                          </div>
+                        </motion.div>
+                      </div>
+
+                      {/* Message Input */}
+                      <div className="absolute bottom-0 left-0 right-0 p-3 bg-black/50 backdrop-blur-lg">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-white/10 rounded-full px-4 py-2 flex items-center">
+                            <span className="text-purple-300 text-xs">Message...</span>
+                          </div>
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center">
+                            <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                            </svg>
+                          </div>
+                        </div>
+                        {/* Home indicator */}
+                        <div className="mt-2 flex justify-center">
+                          <div className="w-32 h-1 bg-white/30 rounded-full" />
+                        </div>
                       </div>
                     </div>
                   </div>
-
-                  <div className="mt-6 space-y-3">
-                    {[
-                      {
-                        text: '"Missed you today. Tell me what you are up to?"',
-                        delay: 0,
-                      },
-                      {
-                        text: '"We should plan a cozy night soon."',
-                        delay: 0.2,
-                      },
-                      {
-                        text: '"You sounded a bit tired—want me to help you unwind?"',
-                        delay: 0.4,
-                      },
-                    ].map((msg, i) => (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 1 + msg.delay }}
-                        whileHover={{
-                          x: 5,
-                          backgroundColor: "rgba(255,255,255,0.1)",
-                        }}
-                        className="rounded-2xl bg-white/5 backdrop-blur-sm p-4 border border-white/10 transition-all cursor-pointer"
-                      >
-                        <div className="text-sm text-purple-100">{msg.text}</div>
-                      </motion.div>
-                    ))}
-                  </div>
                 </div>
+
+                {/* Reflection effect */}
+                <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-white/10 rounded-[50px] pointer-events-none" />
               </motion.div>
 
               {/* Floating particles */}
-              {Array.from({ length: 3 }).map((_, i) => (
+              {Array.from({ length: 5 }).map((_, i) => (
                 <motion.div
                   key={i}
                   className="absolute w-2 h-2 rounded-full bg-purple-400/50"
                   style={{
-                    top: `${20 + i * 30}%`,
-                    right: `${-5 + i * 5}%`,
+                    top: `${10 + i * 20}%`,
+                    right: `${10 + i * 8}%`,
                   }}
                   animate={{
                     y: [-10, 10, -10],
