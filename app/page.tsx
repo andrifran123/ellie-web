@@ -533,7 +533,7 @@ export default function HomePage() {
                 viewport={{ once: true }}
                 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-purple-200 to-pink-200 bg-clip-text text-transparent"
               >
-                Why Ellie feels different
+                Meet the Most Human-Like AI Ever
               </motion.h2>
               <motion.p
                 initial={{ opacity: 0 }}
