@@ -1,3 +1,5 @@
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import RelationshipDashboard from "./RelationshipDashboard";
 
 export const metadata = {
@@ -5,20 +7,23 @@ export const metadata = {
   description: "Comprehensive relationship analytics and insights",
 };
 
-export default function DashboardPage() {
-  // ⚠️ IMPORTANT: Add authentication here before deploying to production
-  // For now, this is accessible to anyone who knows the URL
-  // 
-  // Option 1: Check environment variable
-  // if (process.env.NODE_ENV === 'production' && !process.env.ENABLE_DASHBOARD) {
-  //   notFound();
-  // }
-  //
-  // Option 2: Implement proper auth
-  // const session = await getServerSession();
-  // if (!session?.user?.isAdmin) {
-  //   redirect("/");
-  // }
+// Simple authentication check
+async function checkAuth() {
+  const cookieStore = await cookies();
+  const authToken = cookieStore.get('admin_auth')?.value;
+  
+  // Check if auth token matches the hashed password
+  const expectedToken = process.env.ADMIN_AUTH_TOKEN;
+  
+  return authToken === expectedToken;
+}
+
+export default async function DashboardPage() {
+  const isAuthenticated = await checkAuth();
+  
+  if (!isAuthenticated) {
+    redirect('/dashboard/login');
+  }
 
   return <RelationshipDashboard />;
 }

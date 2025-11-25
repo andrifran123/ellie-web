@@ -1,0 +1,70 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import crypto from 'crypto';
+
+export async function POST(request: NextRequest) {
+  try {
+    const { password } = await request.json();
+
+    if (!password) {
+      return NextResponse.json(
+        { error: 'Password is required' },
+        { status: 400 }
+      );
+    }
+
+    // Get the admin password from environment variables
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminPassword) {
+      console.error('❌ ADMIN_PASSWORD not configured in environment variables');
+      return NextResponse.json(
+        { error: 'Server configuration error' },
+        { status: 500 }
+      );
+    }
+
+    // Check if password matches
+    if (password !== adminPassword) {
+      return NextResponse.json(
+        { error: 'Invalid password' },
+        { status: 401 }
+      );
+    }
+
+    // Generate a secure session token
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+    
+    // Hash the session token for storage
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(sessionToken)
+      .digest('hex');
+
+    // Set the auth cookie
+    const cookieStore = await cookies();
+    cookieStore.set('admin_auth', hashedToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: '/',
+    });
+
+    // Store the hashed token in environment for verification
+    // Note: In production, use a proper session store (Redis, Database, etc.)
+    process.env.ADMIN_AUTH_TOKEN = hashedToken;
+
+    return NextResponse.json(
+      { success: true, message: 'Login successful' },
+      { status: 200 }
+    );
+
+  } catch (error) {
+    console.error('Login error:', error);
+    return NextResponse.json(
+      { error: 'Login failed' },
+      { status: 500 }
+    );
+  }
+}

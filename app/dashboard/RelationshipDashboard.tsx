@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import LogoutButton from "@/app/components/LogoutButton";
 
 // ============================================
 // INTERFACES
@@ -221,10 +222,9 @@ export default function RelationshipDashboardEnhanced() {
   // Typing indicator ref
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("overview");
   const [searchUserId, setSearchUserId] = useState("");
-  const [activeTab, setActiveTab] = useState<"overview" | "users" | "activity" | "recovery" | "analysis">("overview");
+  const [isSearching, setIsSearching] = useState(false);
 
   const fetchAnalytics = async () => {
     try {
@@ -259,69 +259,68 @@ export default function RelationshipDashboardEnhanced() {
       setStreakRecovery(streakData);
       setMessageAnalysis(analysisData);
       setForecast(forecastData);
-      setLoading(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-      setLoading(false);
+    } catch (error) {
+      console.error("Error fetching analytics:", error);
+    }
+  };
+
+  const searchUser = async () => {
+    if (!searchUserId.trim()) return;
+    
+    setIsSearching(true);
+    try {
+      const res = await fetch(`/api/analytics/user/${searchUserId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setUserProfile(data);
+      } else {
+        setUserProfile(null);
+        alert("User not found");
+      }
+    } catch (error) {
+      console.error("Error searching user:", error);
+      alert("Error searching for user");
+    } finally {
+      setIsSearching(false);
     }
   };
 
   const fetchActiveUsers = async () => {
     try {
       const res = await fetch("/api/analytics/active-users");
-      if (!res.ok) throw new Error("Failed to fetch active users");
-      const data = await res.json();
-      setActiveUsers(data.users || []);
-    } catch (err) {
-      console.error("Error fetching active users:", err);
-    }
-  };
-
-  const searchUser = async () => {
-    if (!searchUserId.trim()) {
-      alert("Please enter a user ID");
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/analytics/user/${searchUserId}`);
-      if (!res.ok) {
-        alert("User not found");
-        return;
+      if (res.ok) {
+        const data = await res.json();
+        setActiveUsers(data.users || []);
       }
-      const data = await res.json();
-      setUserProfile(data);
-    } catch (err) {
-      alert("Error fetching user profile");
-      console.error(err);
+    } catch (error) {
+      console.error("Error fetching active users:", error);
     }
   };
 
-  // View Chat Functions
+  // Open chat view modal
   const openChatView = async (userId: string) => {
     setViewingUserId(userId);
     setIsChatViewOpen(true);
-    await fetchChatMessages(userId);
-    startMessagePolling(userId);
-  };
-
-  const fetchChatMessages = useCallback(async (userId: string) => {
+    
+    // Fetch chat history
     try {
-      const res = await fetch(`/api/chat-view/messages/${userId}`);
-      if (!res.ok) throw new Error("Failed to fetch messages");
-      const data = await res.json();
-      setChatMessages(data.messages || []);
-    } catch (err) {
-      console.error("Error fetching chat messages:", err);
+      const res = await fetch(`/api/analytics/chat/${userId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setChatMessages(data.messages || []);
+      } else {
+        setChatMessages([]);
+      }
+    } catch (error) {
+      console.error("Error fetching chat:", error);
       setChatMessages([]);
     }
-  }, []);
+  };
 
   const closeChatView = () => {
     setIsChatViewOpen(false);
     setViewingUserId(null);
     setChatMessages([]);
-    stopMessagePolling();
   };
 
   // Manual Override Functions
@@ -330,127 +329,16 @@ export default function RelationshipDashboardEnhanced() {
       const res = await fetch("/api/manual-override/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId }),
+        body: JSON.stringify({ userId }),
       });
 
-      if (!res.ok) {
-        const error = await res.json();
-        
-        // Handle "already in override" case
-        if (error.error && error.error.includes("already in manual override")) {
-          const shouldClear = confirm(
-            "This user is already in manual override mode (possibly stale session). " +
-            "Do you want to force-clear and restart?"
-          );
-          
-          if (shouldClear) {
-            // Force clear the session
-            await fetch("/api/manual-override/force-clear", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ user_id: userId }),
-            });
-            
-            // Try starting again
-            await startManualOverride(userId);
-            return;
-          }
-        } else {
-          alert(error.error || "Failed to start manual override");
-        }
-        return;
+      if (res.ok) {
+        setOverrideUserId(userId);
+        setIsOverrideActive(true);
+        console.log(`✅ Manual override activated for user ${userId}`);
       }
-
-      setOverrideUserId(userId);
-      setIsOverrideActive(true);
-      
-      // If not already viewing, open chat view
-      if (!isChatViewOpen) {
-        setViewingUserId(userId);
-        setIsChatViewOpen(true);
-        await fetchChatMessages(userId);
-        startMessagePolling(userId);
-      }
-    } catch (err) {
-      alert("Error starting manual override");
-      console.error(err);
-    }
-  };
-
-
-  // Send typing status to server
-  const updateTypingStatus = async (isTyping: boolean) => {
-    if (!overrideUserId) return;
-
-    try {
-      await fetch("/api/manual-override/typing", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: overrideUserId,
-          is_typing: isTyping,
-        }),
-      });
-    } catch (err) {
-      console.error("Failed to update typing status:", err);
-    }
-  };
-
-  // Handle typing in manual response textarea
-  const handleManualResponseChange = (text: string) => {
-    setManualResponseText(text);
-
-    // Clear existing timeout
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-
-    if (text.trim()) {
-      // User is typing - send typing=true
-      updateTypingStatus(true);
-
-      // Set timeout to send typing=false after 2 seconds of no typing
-      typingTimeoutRef.current = setTimeout(() => {
-        updateTypingStatus(false);
-      }, 2000);
-    } else {
-      // Textarea is empty - send typing=false immediately
-      updateTypingStatus(false);
-    }
-  };
-
-  const sendManualResponse = async () => {
-    if (!manualResponseText.trim() || !overrideUserId) {
-      return;
-    }
-
-    try {
-      const res = await fetch("/api/manual-override/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: overrideUserId,
-          message: manualResponseText,
-        }),
-      });
-
-      if (!res.ok) {
-        alert("Failed to send message");
-        return;
-      }
-
-      // Refresh chat messages
-      await fetchChatMessages(overrideUserId);
-      setManualResponseText("");
-      
-      // Clear typing indicator
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      updateTypingStatus(false);
-    } catch (err) {
-      alert("Error sending message");
-      console.error(err);
+    } catch (error) {
+      console.error("Failed to start manual override:", error);
     }
   };
 
@@ -461,93 +349,102 @@ export default function RelationshipDashboardEnhanced() {
       const res = await fetch("/api/manual-override/end", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: overrideUserId }),
+        body: JSON.stringify({ userId: overrideUserId }),
       });
 
-      if (!res.ok) {
-        alert("Failed to end manual override");
-        return;
+      if (res.ok) {
+        console.log(`✅ Manual override ended for user ${overrideUserId}`);
+        setIsOverrideActive(false);
+        setOverrideUserId(null);
+        setManualResponseText("");
       }
-
-      setIsOverrideActive(false);
-      setOverrideUserId(null);
-      setManualResponseText("");
-      
-      // Clear typing indicator
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      updateTypingStatus(false);
-      
-      alert("Manual override ended. API will resume normal operation.");
-    } catch (err) {
-      alert("Error ending manual override");
-      console.error(err);
+    } catch (error) {
+      console.error("Failed to end manual override:", error);
     }
   };
 
-  // Message polling
-  const messagePollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const stopMessagePolling = useCallback(() => {
-    if (messagePollingIntervalRef.current) {
-      clearInterval(messagePollingIntervalRef.current);
-      messagePollingIntervalRef.current = null;
+  const handleManualResponseChange = (text: string) => {
+    setManualResponseText(text);
+    
+    // Send typing indicator
+    if (!overrideUserId) return;
+    
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
     }
-  }, []);
 
-  const startMessagePolling = useCallback((userId: string) => {
-    stopMessagePolling(); // Clear any existing interval
-    messagePollingIntervalRef.current = setInterval(async () => {
-      if (userId) {
-        await fetchChatMessages(userId);
+    fetch("/api/manual-override/typing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: overrideUserId, typing: true }),
+    });
+
+    typingTimeoutRef.current = setTimeout(() => {
+      fetch("/api/manual-override/typing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: overrideUserId, typing: false }),
+      });
+    }, 1000);
+  };
+
+  const sendManualResponse = async () => {
+    if (!overrideUserId || !manualResponseText.trim()) return;
+
+    try {
+      const res = await fetch("/api/manual-override/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: overrideUserId,
+          message: manualResponseText,
+        }),
+      });
+
+      if (res.ok) {
+        // Add the message to chat view
+        const newMessage: ChatMessage = {
+          id: `manual-${Date.now()}`,
+          role: 'assistant',
+          content: manualResponseText,
+          created_at: new Date().toISOString(),
+        };
+        setChatMessages(prev => [...prev, newMessage]);
+        setManualResponseText("");
       }
-    }, 2000); // Poll every 2 seconds
-  }, [stopMessagePolling, fetchChatMessages]);
+    } catch (error) {
+      console.error("Failed to send manual response:", error);
+    }
+  };
 
   useEffect(() => {
     fetchAnalytics();
-    const interval = setInterval(fetchAnalytics, 30000); // Refresh every 30s
+    const interval = setInterval(fetchAnalytics, 30000);
     return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
     if (activeTab === "activity") {
       fetchActiveUsers();
-      const interval = setInterval(fetchActiveUsers, 5000); // Refresh every 5s
+      const interval = setInterval(fetchActiveUsers, 5000);
       return () => clearInterval(interval);
     }
   }, [activeTab]);
 
   useEffect(() => {
-    // Cleanup polling on unmount
     return () => {
-      stopMessagePolling();
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
     };
-  }, [stopMessagePolling]);
+  }, []);
 
-  if (loading) {
+  if (!overview) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-white mx-auto mb-4"></div>
-          <p className="text-gray-400">Loading Analytics...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-red-500 text-xl mb-4">Error: {error}</p>
-          <button
-            onClick={fetchAnalytics}
-            className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded"
-          >
-            Retry
-          </button>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500 mx-auto"></div>
+          <p className="mt-4 text-gray-400">Loading analytics...</p>
         </div>
       </div>
     );
@@ -556,11 +453,14 @@ export default function RelationshipDashboardEnhanced() {
   return (
     <div className="min-h-screen bg-black text-white p-8">
       <div className="max-w-[1600px] mx-auto">
-        <header className="mb-8">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 bg-clip-text text-transparent">
-            🎯 Ellie Analytics Dashboard
-          </h1>
-          <p className="text-gray-400 mt-2">Progressive Relationship Intelligence & Live Monitoring</p>
+        <header className="mb-8 flex justify-between items-start">
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-pink-500 via-purple-500 to-blue-500 bg-clip-text text-transparent">
+              🎯 Ellie Analytics Dashboard
+            </h1>
+            <p className="text-gray-400 mt-2">Progressive Relationship Intelligence & Live Monitoring</p>
+          </div>
+          <LogoutButton />
         </header>
 
         {/* Navigation Tabs */}
@@ -615,208 +515,140 @@ export default function RelationshipDashboardEnhanced() {
           >
             💬 Message Analysis
           </button>
+          <button
+            onClick={() => setActiveTab("forecast")}
+            className={`px-4 py-2 rounded ${
+              activeTab === "forecast"
+                ? "bg-blue-600"
+                : "bg-gray-800 hover:bg-gray-700"
+            }`}
+          >
+            📈 Revenue Forecast
+          </button>
         </div>
 
-        {/* Content */}
-        <div className="space-y-8">
+        <div>
           {/* Overview Tab */}
-          {activeTab === "overview" && overview && (
-            <>
-              {/* Stage Distribution */}
+          {activeTab === "overview" && (
+            <div className="space-y-6">
+              {/* Key Metrics Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 rounded-lg p-6 border border-blue-700/50">
+                  <div className="text-sm text-gray-400">Total Users</div>
+                  <div className="text-4xl font-bold mt-2">{overview.totals.total_users}</div>
+                </div>
+
+                <div className="bg-gradient-to-br from-purple-900/50 to-purple-800/30 rounded-lg p-6 border border-purple-700/50">
+                  <div className="text-sm text-gray-400">Avg Relationship Level</div>
+                  <div className="text-4xl font-bold mt-2">
+                    {Number(overview.totals.avg_relationship_level).toFixed(1)}
+                  </div>
+                </div>
+
+                <div className="bg-gradient-to-br from-pink-900/50 to-pink-800/30 rounded-lg p-6 border border-pink-700/50">
+                  <div className="text-sm text-gray-400">Active Streaks</div>
+                  <div className="text-4xl font-bold mt-2">{overview.totals.active_streaks}</div>
+                </div>
+
+                <div className="bg-gradient-to-br from-red-900/50 to-red-800/30 rounded-lg p-6 border border-red-700/50">
+                  <div className="text-sm text-gray-400">Emotional Investment</div>
+                  <div className="text-4xl font-bold mt-2">
+                    {(Number(overview.totals.avg_emotional_investment) * 100).toFixed(0)}%
+                  </div>
+                </div>
+              </div>
+
+              {/* Relationship Stages */}
               <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                <h2 className="text-2xl font-bold mb-4">Relationship Stage Distribution</h2>
+                <h2 className="text-2xl font-bold mb-4">📊 Relationship Distribution</h2>
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                   {overview.stages.map((stage) => (
-                    <div key={stage.current_stage} className="bg-gray-800 rounded p-4 border-l-4 border-blue-500">
-                      <div className="text-sm text-gray-400">{STAGE_LABELS[stage.current_stage]}</div>
-                      <div className="text-3xl font-bold">{stage.user_count}</div>
-                      <div className="text-sm text-gray-400 mt-2">
-                        Avg Level: {(Number(stage.avg_level) || 0).toFixed(1)}
+                    <div
+                      key={stage.current_stage}
+                      className="bg-gray-800 rounded-lg p-4 border-l-4"
+                      style={{
+                        borderLeftColor: STAGE_COLORS[stage.current_stage]?.replace('bg-', '') || '#666',
+                      }}
+                    >
+                      <div className="text-sm text-gray-400 mb-2">
+                        {STAGE_LABELS[stage.current_stage] || stage.current_stage}
                       </div>
-                      <div className="text-sm text-gray-400">
-                        Max Streak: {stage.max_streak} days
+                      <div className="text-3xl font-bold">{stage.user_count}</div>
+                      <div className="mt-3 text-sm space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Avg Level:</span>
+                          <span className="font-medium">{Number(stage.avg_level).toFixed(1)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Avg Streak:</span>
+                          <span className="font-medium">{Number(stage.avg_streak).toFixed(1)}d</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Max Streak:</span>
+                          <span className="font-medium">{stage.max_streak}d</span>
+                        </div>
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Key Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                  <div className="text-sm text-gray-400">Total Users</div>
-                  <div className="text-3xl font-bold text-blue-500">{overview.totals.total_users}</div>
-                </div>
-                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                  <div className="text-sm text-gray-400">Avg Relationship Level</div>
-                  <div className="text-3xl font-bold text-purple-500">
-                    {(Number(overview.totals.avg_relationship_level) || 0).toFixed(1)}
-                  </div>
-                </div>
-                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                  <div className="text-sm text-gray-400">Active Streaks</div>
-                  <div className="text-3xl font-bold text-pink-500">{overview.totals.active_streaks}</div>
-                </div>
-                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                  <div className="text-sm text-gray-400">Avg Emotional Investment</div>
-                  <div className="text-3xl font-bold text-red-500">
-                    {((Number(overview.totals.avg_emotional_investment) || 0) * 100).toFixed(0)}%
-                  </div>
-                </div>
-              </div>
-
               {/* Addiction Metrics */}
               {addiction && (
                 <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                  <h2 className="text-2xl font-bold mb-4">🔥 Addiction & Retention Metrics</h2>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Week+ Streaks</div>
-                      <div className="text-2xl font-bold">{addiction.metrics.week_plus_streaks}</div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Month+ Streaks</div>
-                      <div className="text-2xl font-bold">{addiction.metrics.month_plus_streaks}</div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Heavy Users</div>
-                      <div className="text-2xl font-bold">{addiction.metrics.heavy_users}</div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Daily Active</div>
-                      <div className="text-2xl font-bold">{addiction.metrics.daily_active_users}</div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Revenue Forecast */}
-              {forecast && (
-                <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-                  <h2 className="text-2xl font-bold mb-4">💰 Revenue Forecast</h2>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Current Month</div>
-                      <div className="text-2xl font-bold text-green-500">
-                        ${(Number(forecast.current_month.projected_revenue) || 0).toFixed(2)}
-                      </div>
-                      <div className="text-sm text-gray-400 mt-2">
-                        {forecast.current_month.projected_conversions} conversions
-                      </div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Next Month</div>
-                      <div className="text-2xl font-bold text-green-500">
-                        ${(Number(forecast.next_month.projected_revenue) || 0).toFixed(2)}
-                      </div>
-                      <div className="text-sm text-gray-400 mt-2">
-                        {forecast.next_month.projected_conversions} conversions
-                      </div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">6 Month Projection</div>
-                      <div className="text-2xl font-bold text-green-500">
-                        ${(Number(forecast.six_months.projected_revenue) || 0).toFixed(2)}
-                      </div>
-                      <div className="text-sm text-gray-400 mt-2">
-                        {forecast.six_months.projected_conversions} conversions
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* User Lookup Tab */}
-          {activeTab === "users" && (
-            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-              <h2 className="text-2xl font-bold mb-4">👤 User Profile Lookup</h2>
-              <div className="flex gap-2 mb-6">
-                <input
-                  type="text"
-                  placeholder="Enter User ID"
-                  value={searchUserId}
-                  onChange={(e) => setSearchUserId(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && searchUser()}
-                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white"
-                />
-                <button
-                  onClick={searchUser}
-                  className="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded"
-                >
-                  Search
-                </button>
-              </div>
-
-              {userProfile?.user && (
-                <div className="space-y-6">
-                  {/* User Stats */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">User ID</div>
-                      <div className="font-mono text-sm">{userProfile.user.user_id}</div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Stage</div>
-                      <div className="font-bold">{STAGE_LABELS[userProfile.user.current_stage]}</div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Level</div>
-                      <div className="text-2xl font-bold">{userProfile.user.relationship_level}</div>
-                    </div>
-                    <div className="bg-gray-800 rounded p-4">
-                      <div className="text-sm text-gray-400">Streak</div>
+                  <h2 className="text-2xl font-bold mb-4">🔥 Engagement & Addiction Metrics</h2>
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                    <div className="bg-orange-900/20 border border-orange-800 rounded p-4">
+                      <div className="text-xs text-gray-400">Week+ Streaks</div>
                       <div className="text-2xl font-bold text-orange-500">
-                        {userProfile.user.streak_days} days
+                        {addiction.metrics.week_plus_streaks}
+                      </div>
+                    </div>
+                    <div className="bg-red-900/20 border border-red-800 rounded p-4">
+                      <div className="text-xs text-gray-400">2 Week+ Streaks</div>
+                      <div className="text-2xl font-bold text-red-500">
+                        {addiction.metrics.two_week_plus_streaks}
+                      </div>
+                    </div>
+                    <div className="bg-purple-900/20 border border-purple-800 rounded p-4">
+                      <div className="text-xs text-gray-400">Month+ Streaks</div>
+                      <div className="text-2xl font-bold text-purple-500">
+                        {addiction.metrics.month_plus_streaks}
+                      </div>
+                    </div>
+                    <div className="bg-blue-900/20 border border-blue-800 rounded p-4">
+                      <div className="text-xs text-gray-400">Avg Active Streak</div>
+                      <div className="text-2xl font-bold text-blue-500">
+                        {Number(addiction.metrics.avg_active_streak).toFixed(1)}d
+                      </div>
+                    </div>
+                    <div className="bg-yellow-900/20 border border-yellow-800 rounded p-4">
+                      <div className="text-xs text-gray-400">Heavy Users</div>
+                      <div className="text-2xl font-bold text-yellow-500">
+                        {addiction.metrics.heavy_users}
+                      </div>
+                    </div>
+                    <div className="bg-pink-900/20 border border-pink-800 rounded p-4">
+                      <div className="text-xs text-gray-400">Emotionally Invested</div>
+                      <div className="text-2xl font-bold text-pink-500">
+                        {addiction.metrics.emotionally_invested}
+                      </div>
+                    </div>
+                    <div className="bg-green-900/20 border border-green-800 rounded p-4">
+                      <div className="text-xs text-gray-400">Daily Active</div>
+                      <div className="text-2xl font-bold text-green-500">
+                        {addiction.metrics.daily_active_users}
                       </div>
                     </div>
                   </div>
 
-                  {/* Emotional Investment */}
-                  <div>
-                    <div className="text-sm text-gray-400 mb-2">Emotional Investment</div>
-                    <div className="w-full bg-gray-800 rounded-full h-4">
-                      <div
-                        className="h-full bg-gradient-to-r from-blue-500 to-red-500 rounded-full"
-                        style={{ width: `${((userProfile.user?.emotional_investment || 0) * 100)}%` }}
-                      />
-                    </div>
-                    <div className="text-right text-sm mt-1">
-                      {((userProfile.user?.emotional_investment || 0) * 100).toFixed(0)}%
-                    </div>
-                  </div>
-
-                  {/* Recent Events */}
-                  <div>
-                    <h3 className="font-bold mb-3">Recent Events</h3>
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {userProfile.events.map((event, idx) => (
-                        <div key={idx} className="bg-gray-800 rounded p-3 text-sm">
-                          <div className="flex justify-between">
-                            <span className="font-medium">{event.event_type}</span>
-                            <span className="text-gray-400">
-                              {new Date(event.created_at).toLocaleString()}
-                            </span>
-                          </div>
-                          {event.description && (
-                            <div className="text-gray-400 mt-1">{event.description}</div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Breakthrough Moments */}
-                  <div>
-                    <h3 className="font-bold mb-3">🎯 Breakthrough Moments</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {userProfile.breakthroughs.map((bt, idx) => (
+                  <div className="mt-6">
+                    <h3 className="font-bold mb-3">Return Patterns</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {addiction.returnPatterns.map((pattern, idx) => (
                         <div key={idx} className="bg-gray-800 rounded p-3">
-                          <div className="font-medium">{bt.moment_type}</div>
-                          <div className="text-sm text-gray-400">
-                            Unlocked: {new Date(bt.unlocked_at).toLocaleDateString()}
-                          </div>
+                          <div className="text-sm text-gray-400">{pattern.return_window}</div>
+                          <div className="text-xl font-bold">{pattern.user_count} users</div>
                         </div>
                       ))}
                     </div>
@@ -826,63 +658,135 @@ export default function RelationshipDashboardEnhanced() {
             </div>
           )}
 
-          {/* Live Activity Tab - Active Users with Actions */}
+          {/* User Lookup Tab */}
+          {activeTab === "users" && (
+            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+              <h2 className="text-2xl font-bold mb-4">👤 User Profile Lookup</h2>
+              
+              <div className="flex gap-2 mb-6">
+                <input
+                  type="text"
+                  value={searchUserId}
+                  onChange={(e) => setSearchUserId(e.target.value)}
+                  onKeyPress={(e) => e.key === "Enter" && searchUser()}
+                  placeholder="Enter User ID..."
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500"
+                />
+                <button
+                  onClick={searchUser}
+                  disabled={isSearching || !searchUserId.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 px-6 py-2 rounded font-medium"
+                >
+                  {isSearching ? "Searching..." : "Search"}
+                </button>
+              </div>
+
+              {userProfile && userProfile.user && (
+                <div className="space-y-4">
+                  {/* User Stats */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Relationship Level</div>
+                      <div className="text-2xl font-bold">{userProfile.user.relationship_level}</div>
+                      <div className="text-sm text-gray-500">{userProfile.user.current_stage}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Current Streak</div>
+                      <div className="text-2xl font-bold">{userProfile.user.streak_days} days</div>
+                      <div className="text-sm text-gray-500">Best: {userProfile.user.longest_streak}d</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Total Interactions</div>
+                      <div className="text-2xl font-bold">{userProfile.user.total_interactions}</div>
+                    </div>
+                    <div className="bg-gray-800 rounded p-4">
+                      <div className="text-sm text-gray-400">Emotional Investment</div>
+                      <div className="text-2xl font-bold">
+                        {(Number(userProfile.user.emotional_investment) * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Recent Events */}
+                  <div>
+                    <h3 className="font-bold mb-2">Recent Events</h3>
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {userProfile.events.map((event, idx) => (
+                        <div key={idx} className="bg-gray-800 rounded p-3 text-sm">
+                          <span className="font-medium text-blue-400">{event.event_type}</span>
+                          {event.description && <span className="text-gray-400"> - {event.description}</span>}
+                          <div className="text-xs text-gray-500 mt-1">
+                            {new Date(event.created_at).toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Breakthroughs */}
+                  {userProfile.breakthroughs.length > 0 && (
+                    <div>
+                      <h3 className="font-bold mb-2">Breakthrough Moments</h3>
+                      <div className="flex flex-wrap gap-2">
+                        {userProfile.breakthroughs.map((bt, idx) => (
+                          <div key={idx} className="bg-purple-900/30 border border-purple-700 rounded px-3 py-1 text-sm">
+                            {bt.moment_type}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Live Activity Tab */}
           {activeTab === "activity" && (
             <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
-              <h2 className="text-2xl font-bold mb-4">🔴 Live Active Users (Last 30 Minutes)</h2>
-              <div className="text-xs text-gray-500 mb-3">Auto-refreshes every 5 seconds</div>
-              <div className="space-y-3 max-h-[700px] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold">🔴 Live User Activity</h2>
+                <div className="flex items-center gap-2">
+                  <div className="animate-pulse h-3 w-3 bg-green-500 rounded-full"></div>
+                  <span className="text-sm text-gray-400">Auto-refreshing every 5s</span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
                 {activeUsers.length === 0 ? (
                   <div className="text-center py-12 text-gray-400">
-                    <p>No active users in the last 30 minutes</p>
-                    <p className="text-sm mt-2">Users appear here when they send messages</p>
+                    No users currently active
                   </div>
                 ) : (
                   activeUsers.map((user) => (
-                    <div key={user.user_id} className="bg-gray-800 rounded p-4 border-l-4 border-green-500">
-                      <div className="flex justify-between items-center">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                            <span className="font-mono text-sm">{user.user_id}</span>
-                            <span className={`text-xs px-2 py-1 rounded ${STAGE_COLORS[user.current_stage]}`}>
-                              {STAGE_LABELS[user.current_stage]}
-                            </span>
-                            <span className="text-xs bg-purple-900 px-2 py-1 rounded">
-                              Level {user.relationship_level}
-                            </span>
+                    <div
+                      key={user.user_id}
+                      className="bg-gray-800 rounded-lg p-4 flex justify-between items-center hover:bg-gray-750 transition-colors"
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3">
+                          <div className="font-mono text-sm text-gray-400">{user.user_id}</div>
+                          <div className={`px-2 py-1 rounded text-xs font-medium ${STAGE_COLORS[user.current_stage]}`}>
+                            {STAGE_LABELS[user.current_stage] || user.current_stage}
                           </div>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-400">
-                            <div>
-                              <span className="text-gray-500">Streak:</span> {user.streak_days} days
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Messages:</span> {user.message_count}
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Investment:</span> {((Number(user.emotional_investment) || 0) * 100).toFixed(0)}%
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Last Active:</span>{" "}
-                              {new Date(user.last_interaction).toLocaleTimeString()}
-                            </div>
+                          <div className="text-sm text-gray-500">
+                            Level {user.relationship_level} • {user.streak_days}d streak
                           </div>
                         </div>
-                        <div className="flex gap-2 ml-4">
-                          <button
-                            onClick={() => openChatView(user.user_id)}
-                            className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-medium"
-                          >
-                            👁️ View Chat
-                          </button>
-                          <button
-                            onClick={() => startManualOverride(user.user_id)}
-                            className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-sm font-medium"
-                          >
-                            🎮 Manual Override
-                          </button>
+                        <div className="flex items-center gap-4 mt-2 text-sm text-gray-400">
+                          <span>💬 {user.message_count} messages</span>
+                          <span>❤️ {(Number(user.emotional_investment) * 100).toFixed(0)}% invested</span>
+                          <span>
+                            Last active: {new Date(user.last_interaction).toLocaleTimeString()}
+                          </span>
                         </div>
                       </div>
+                      <button
+                        onClick={() => openChatView(user.user_id)}
+                        className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded font-medium ml-4"
+                      >
+                        👁️ View Chat
+                      </button>
                     </div>
                   ))
                 )}
@@ -890,7 +794,7 @@ export default function RelationshipDashboardEnhanced() {
             </div>
           )}
 
-          {/* Streak Recovery Dashboard */}
+          {/* Streak Recovery Tab */}
           {activeTab === "recovery" && (
             <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
               <h2 className="text-2xl font-bold mb-4">💔 Streak Recovery Opportunities</h2>
@@ -905,13 +809,13 @@ export default function RelationshipDashboardEnhanced() {
                     <div className="bg-red-900/20 border border-red-800 rounded p-6">
                       <div className="text-sm text-gray-400">Broken Today</div>
                       <div className="text-3xl font-bold text-red-500">
-                        {Number(streakRecovery.broken_today) || 0}
+                        {streakRecovery.broken_today}
                       </div>
                     </div>
                     <div className="bg-orange-900/20 border border-orange-800 rounded p-6">
                       <div className="text-sm text-gray-400">Broken This Week</div>
                       <div className="text-3xl font-bold text-orange-500">
-                        {Number(streakRecovery.broken_this_week) || 0}
+                        {streakRecovery.broken_this_week}
                       </div>
                     </div>
                     <div className="bg-green-900/20 border border-green-800 rounded p-6">
@@ -1014,6 +918,97 @@ export default function RelationshipDashboardEnhanced() {
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* Revenue Forecast Tab */}
+          {activeTab === "forecast" && forecast && (
+            <div className="bg-gray-900 rounded-lg p-6 border border-gray-800">
+              <h2 className="text-2xl font-bold mb-4">📈 Revenue Forecast</h2>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                {/* Current Month */}
+                <div className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 rounded-lg p-6 border border-blue-700/50">
+                  <h3 className="text-lg font-bold mb-4">Current Month</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Users</div>
+                      <div className="text-2xl font-bold">{forecast.current_month.projected_users}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Conversions</div>
+                      <div className="text-2xl font-bold">{forecast.current_month.projected_conversions}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Revenue</div>
+                      <div className="text-3xl font-bold text-green-500">
+                        ${forecast.current_month.projected_revenue.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Next Month */}
+                <div className="bg-gradient-to-br from-purple-900/50 to-purple-800/30 rounded-lg p-6 border border-purple-700/50">
+                  <h3 className="text-lg font-bold mb-4">Next Month</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Users</div>
+                      <div className="text-2xl font-bold">{forecast.next_month.projected_users}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Conversions</div>
+                      <div className="text-2xl font-bold">{forecast.next_month.projected_conversions}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Revenue</div>
+                      <div className="text-3xl font-bold text-green-500">
+                        ${forecast.next_month.projected_revenue.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 6 Months */}
+                <div className="bg-gradient-to-br from-pink-900/50 to-pink-800/30 rounded-lg p-6 border border-pink-700/50">
+                  <h3 className="text-lg font-bold mb-4">6 Month Outlook</h3>
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Users</div>
+                      <div className="text-2xl font-bold">{forecast.six_months.projected_users}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Conversions</div>
+                      <div className="text-2xl font-bold">{forecast.six_months.projected_conversions}</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-400">Projected Revenue</div>
+                      <div className="text-3xl font-bold text-green-500">
+                        ${forecast.six_months.projected_revenue.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Assumptions */}
+              <div className="bg-gray-800 rounded-lg p-6">
+                <h3 className="font-bold mb-4">Model Assumptions</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <div className="text-sm text-gray-400">Monthly Growth Rate</div>
+                    <div className="text-xl font-bold">{(forecast.assumptions.growth_rate * 100).toFixed(1)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Conversion Rate</div>
+                    <div className="text-xl font-bold">{(forecast.assumptions.conversion_rate * 100).toFixed(1)}%</div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-gray-400">Avg Revenue Per User</div>
+                    <div className="text-xl font-bold">${forecast.assumptions.avg_revenue_per_user.toFixed(2)}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
