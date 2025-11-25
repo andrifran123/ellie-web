@@ -32,28 +32,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate a secure session token
-    const sessionToken = crypto.randomBytes(32).toString('hex');
-    
-    // Hash the session token for storage
-    const hashedToken = crypto
+    // Hash the admin password to use as the auth token
+    const authToken = crypto
       .createHash('sha256')
-      .update(sessionToken)
+      .update(adminPassword)
       .digest('hex');
 
     // Set the auth cookie
     const cookieStore = await cookies();
-    cookieStore.set('admin_auth', hashedToken, {
+    cookieStore.set('admin_auth', authToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
       path: '/',
     });
-
-    // Store the hashed token in environment for verification
-    // Note: In production, use a proper session store (Redis, Database, etc.)
-    process.env.ADMIN_AUTH_TOKEN = hashedToken;
 
     return NextResponse.json(
       { success: true, message: 'Login successful' },

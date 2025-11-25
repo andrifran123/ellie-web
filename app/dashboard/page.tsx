@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
+import crypto from 'crypto';
 import RelationshipDashboard from "./RelationshipDashboard";
 
 export const metadata = {
@@ -12,8 +13,21 @@ async function checkAuth() {
   const cookieStore = await cookies();
   const authToken = cookieStore.get('admin_auth')?.value;
   
-  // Check if auth token matches the hashed password
-  const expectedToken = process.env.ADMIN_AUTH_TOKEN;
+  if (!authToken) {
+    return false;
+  }
+
+  // Hash the admin password to compare with cookie
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  
+  if (!adminPassword) {
+    return false;
+  }
+
+  const expectedToken = crypto
+    .createHash('sha256')
+    .update(adminPassword)
+    .digest('hex');
   
   return authToken === expectedToken;
 }
