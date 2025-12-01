@@ -23,118 +23,48 @@ body {
 }
 
 /* ============================================================
-   ✨ STARLIGHT LOUNGE - Cozy Chat Theme
+   💜 COZY ROMANCE - Warm Chat Theme
    ============================================================ */
 
-/* Starlight Background - Deep night sky */
-.starlight-bg {
+/* Chat Background - Rich warm gradient */
+.chat-bg {
   position: relative;
   min-height: 100vh;
-  background: linear-gradient(180deg,
-    #0a0a12 0%,
-    #0d0d18 30%,
-    #12111f 60%,
-    #0f0e1a 100%
+  background: linear-gradient(135deg,
+    #1a1025 0%,
+    #2d1f3d 25%,
+    #1f1a2e 50%,
+    #2a1f35 75%,
+    #1a1025 100%
   );
   overflow: hidden;
 }
 
-/* Ambient glow layers */
-.starlight-bg::before {
+/* Ambient color glow layers - static, no animation */
+.chat-bg::before {
   content: "";
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse 800px 600px at 20% 20%, rgba(147, 112, 219, 0.08), transparent 50%),
-    radial-gradient(ellipse 600px 500px at 80% 30%, rgba(232, 180, 184, 0.06), transparent 50%),
-    radial-gradient(ellipse 700px 400px at 60% 80%, rgba(184, 169, 201, 0.05), transparent 50%);
+    radial-gradient(ellipse 60% 50% at 10% 20%, rgba(168, 85, 247, 0.15), transparent 50%),
+    radial-gradient(ellipse 50% 40% at 90% 20%, rgba(236, 72, 153, 0.12), transparent 50%),
+    radial-gradient(ellipse 70% 50% at 50% 90%, rgba(139, 92, 246, 0.1), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 80% 70%, rgba(244, 114, 182, 0.08), transparent 50%);
   pointer-events: none;
   z-index: 0;
-  animation: ambientShift 20s ease-in-out infinite;
-}
-
-@keyframes ambientShift {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.8; transform: scale(1.05); }
-}
-
-/* Floating Stars Container */
-.stars-container {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
-  overflow: hidden;
-}
-
-/* Individual Star */
-.star {
-  position: absolute;
-  width: 2px;
-  height: 2px;
-  background: white;
-  border-radius: 50%;
-  opacity: 0;
-  animation: twinkle var(--duration, 4s) ease-in-out infinite;
-  animation-delay: var(--delay, 0s);
-}
-
-.star::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 6px;
-  height: 6px;
-  background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-  border-radius: 50%;
-}
-
-.star.large {
-  width: 3px;
-  height: 3px;
-}
-
-.star.large::after {
-  width: 10px;
-  height: 10px;
-}
-
-@keyframes twinkle {
-  0%, 100% { opacity: 0.1; transform: scale(0.8); }
-  50% { opacity: 0.8; transform: scale(1.2); }
-}
-
-/* Shooting Star */
-.shooting-star {
-  position: absolute;
-  width: 100px;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(255,255,255,0.8), transparent);
-  opacity: 0;
-  animation: shoot 8s ease-in-out infinite;
-  animation-delay: var(--delay, 3s);
-}
-
-@keyframes shoot {
-  0% { opacity: 0; transform: translateX(0) translateY(0); }
-  5% { opacity: 1; }
-  15% { opacity: 0; transform: translateX(300px) translateY(150px); }
-  100% { opacity: 0; transform: translateX(300px) translateY(150px); }
 }
 
 /* ============================================================
-   💬 Message Bubbles - Cozy Styling
+   💬 Message Bubbles - Vibrant Cozy Styling
    ============================================================ */
 
-/* User Message - Warm rose gradient */
+/* User Message - Rich purple/pink gradient */
 .msg-user {
-  background: linear-gradient(135deg, #9d8ec7 0%, #b8a9c9 100%);
+  background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 50%, #d946ef 100%);
   border-radius: 20px 20px 4px 20px;
   box-shadow:
-    0 4px 15px rgba(157, 142, 199, 0.2),
-    inset 0 1px 0 rgba(255,255,255,0.1);
+    0 4px 20px rgba(139, 92, 246, 0.35),
+    0 0 40px rgba(168, 85, 247, 0.15);
   color: white;
   position: relative;
 }
@@ -145,21 +75,21 @@ body {
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent);
+  background: linear-gradient(135deg, rgba(255,255,255,0.3), transparent);
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
   pointer-events: none;
 }
 
-/* Ellie Message - Soft glass with warm glow */
+/* Ellie Message - Warm glass with pink accent */
 .msg-ellie {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(232, 180, 184, 0.15);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(244, 114, 182, 0.05));
+  border: 1px solid rgba(244, 114, 182, 0.2);
   border-radius: 20px 20px 20px 4px;
   backdrop-filter: blur(10px);
   box-shadow:
-    0 4px 20px rgba(0, 0, 0, 0.2),
-    0 0 30px rgba(232, 180, 184, 0.05);
+    0 4px 20px rgba(0, 0, 0, 0.3),
+    0 0 30px rgba(244, 114, 182, 0.08);
   position: relative;
 }
 
@@ -168,7 +98,7 @@ body {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(135deg, rgba(232, 180, 184, 0.05) 0%, transparent 50%);
+  background: linear-gradient(135deg, rgba(244, 114, 182, 0.08) 0%, transparent 50%);
   pointer-events: none;
 }
 
@@ -189,7 +119,7 @@ body {
 }
 
 /* ============================================================
-   🌟 Avatar with breathing glow
+   🌟 Avatar with glow
    ============================================================ */
 
 .avatar-glow {
@@ -199,11 +129,10 @@ body {
 .avatar-glow::before {
   content: "";
   position: absolute;
-  inset: -4px;
+  inset: -3px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent-warm), var(--accent-lavender));
-  opacity: 0.6;
-  animation: avatarBreath 3s ease-in-out infinite;
+  background: linear-gradient(135deg, #a855f7, #ec4899);
+  opacity: 0.7;
   z-index: -1;
 }
 
@@ -212,19 +141,8 @@ body {
   position: absolute;
   inset: -8px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(232, 180, 184, 0.3), transparent 70%);
-  animation: avatarGlow 3s ease-in-out infinite;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.4), transparent 70%);
   z-index: -2;
-}
-
-@keyframes avatarBreath {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.05); opacity: 0.8; }
-}
-
-@keyframes avatarGlow {
-  0%, 100% { transform: scale(1); opacity: 0.3; }
-  50% { transform: scale(1.15); opacity: 0.5; }
 }
 
 /* Online indicator pulse */
@@ -252,31 +170,31 @@ body {
    ============================================================ */
 
 .input-cozy {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(168, 85, 247, 0.2);
   border-radius: 24px;
   backdrop-filter: blur(10px);
   transition: all 0.3s ease;
 }
 
 .input-cozy:focus {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(232, 180, 184, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(168, 85, 247, 0.4);
   box-shadow:
-    0 0 0 3px rgba(232, 180, 184, 0.1),
+    0 0 0 3px rgba(168, 85, 247, 0.15),
     0 4px 20px rgba(0, 0, 0, 0.2);
 }
 
 .input-cozy::placeholder {
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.4);
 }
 
 /* Send button glow */
 .send-btn {
-  background: linear-gradient(135deg, var(--accent-soft-purple), var(--accent-lavender));
+  background: linear-gradient(135deg, #8b5cf6, #a855f7, #d946ef);
   border-radius: 50%;
   box-shadow:
-    0 4px 15px rgba(157, 142, 199, 0.3),
+    0 4px 20px rgba(168, 85, 247, 0.4),
     inset 0 1px 0 rgba(255,255,255,0.2);
   transition: all 0.2s ease;
 }
@@ -284,7 +202,7 @@ body {
 .send-btn:hover:not(:disabled) {
   transform: scale(1.05);
   box-shadow:
-    0 6px 25px rgba(157, 142, 199, 0.4),
+    0 6px 30px rgba(168, 85, 247, 0.5),
     inset 0 1px 0 rgba(255,255,255,0.2);
 }
 
@@ -329,13 +247,13 @@ body {
 }
 
 /* ============================================================
-   💫 Typing Indicator - Softer dots
+   💫 Typing Indicator - Vibrant dots
    ============================================================ */
 
 .typing-dot {
   width: 8px;
   height: 8px;
-  background: linear-gradient(135deg, var(--accent-warm), var(--accent-lavender));
+  background: linear-gradient(135deg, #ec4899, #a855f7);
   border-radius: 50%;
   animation: typingBounce 1.4s ease-in-out infinite;
 }
@@ -347,7 +265,7 @@ body {
 @keyframes typingBounce {
   0%, 60%, 100% {
     transform: translateY(0);
-    opacity: 0.4;
+    opacity: 0.5;
   }
   30% {
     transform: translateY(-8px);

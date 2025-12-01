@@ -150,56 +150,8 @@ function useToasts() {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Visual helpers - Starlight Lounge Theme
+   Visual helpers - Cozy Romance Theme (no animations)
 ───────────────────────────────────────────────────────────── */
-
-// Floating Stars Component
-const StarsBackground = () => {
-  // Generate random stars
-  const stars = Array.from({ length: 50 }, (_, i) => ({
-    id: i,
-    left: `${Math.random() * 100}%`,
-    top: `${Math.random() * 100}%`,
-    delay: `${Math.random() * 5}s`,
-    duration: `${3 + Math.random() * 4}s`,
-    large: Math.random() > 0.85,
-  }));
-
-  // Shooting stars
-  const shootingStars = [
-    { top: '15%', left: '10%', delay: '0s' },
-    { top: '35%', left: '60%', delay: '5s' },
-    { top: '55%', left: '25%', delay: '10s' },
-  ];
-
-  return (
-    <div className="stars-container">
-      {stars.map((star) => (
-        <div
-          key={star.id}
-          className={`star ${star.large ? 'large' : ''}`}
-          style={{
-            left: star.left,
-            top: star.top,
-            '--delay': star.delay,
-            '--duration': star.duration,
-          } as React.CSSProperties}
-        />
-      ))}
-      {shootingStars.map((ss, i) => (
-        <div
-          key={`shooting-${i}`}
-          className="shooting-star"
-          style={{
-            top: ss.top,
-            left: ss.left,
-            '--delay': ss.delay,
-          } as React.CSSProperties}
-        />
-      ))}
-    </div>
-  );
-};
 
 /* ─────────────────────────────────────────────────────────────
    Main component (WITH RELATIONSHIP PROGRESSION + MANUAL OVERRIDE POLLING)
@@ -580,10 +532,17 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [fetchRelationshipStatus]);
 
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    // Use requestAnimationFrame to ensure DOM has updated
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTo({
+          top: scrollRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+    });
   }, [messages, typing]);
 
   useEffect(() => {
@@ -805,18 +764,17 @@ export default function ChatPage() {
 
   if (!langReady) {
     return (
-      <div className="starlight-bg flex min-h-screen flex-col items-center justify-center text-white">
-        <StarsBackground />
-        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-white/10 bg-black/40 p-8 shadow-2xl backdrop-blur-xl">
+      <div className="chat-bg flex min-h-screen flex-col items-center justify-center text-white">
+        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-purple-500/20 bg-black/50 p-8 shadow-2xl backdrop-blur-xl">
           <div className="text-center mb-6">
-            <div className="text-4xl mb-3">✨</div>
-            <h2 className="text-xl font-semibold text-[var(--accent-warm)]">Welcome to Ellie</h2>
+            <div className="text-4xl mb-3">💜</div>
+            <h2 className="text-xl font-semibold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">Welcome to Ellie</h2>
             <p className="text-sm text-white/50 mt-2">Choose your language to begin</p>
           </div>
           <select
             value={chosenLang}
             onChange={(e) => setChosenLang(e.target.value as LangCode)}
-            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 outline-none focus:ring-2 focus:ring-[var(--accent-warm)]/30 focus:border-[var(--accent-warm)]/30 transition"
+            className="w-full rounded-xl border border-purple-500/20 bg-white/5 px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500/40 transition"
           >
             {LANGS.map((o) => (
               <option key={o.code} value={o.code}>
@@ -836,8 +794,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="starlight-bg flex min-h-screen flex-col text-white">
-      <StarsBackground />
+    <div className="chat-bg flex min-h-screen flex-col text-white">
 
       <main className="relative z-10 flex flex-1 flex-col">
         {/* Relationship Header - Starlight Theme */}
@@ -897,12 +854,12 @@ export default function ChatPage() {
         )}
 
         {/* Top bar - Cozy header */}
-        <div className="border-b border-white/5 bg-black/20 backdrop-blur-md">
+        <div className="border-b border-purple-500/10 bg-black/30 backdrop-blur-md">
           <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
             <div className="flex items-center gap-3">
-              <div className="avatar-glow h-11 w-11 rounded-full bg-gradient-to-br from-[var(--accent-warm)] via-[var(--accent-lavender)] to-[var(--accent-rose)]">
+              <div className="avatar-glow h-11 w-11 rounded-full bg-gradient-to-br from-purple-500 via-pink-500 to-fuchsia-500">
                 <div className="relative h-full w-full rounded-full overflow-hidden flex items-center justify-center text-lg">
-                  ✨
+                  💜
                 </div>
               </div>
               <div>
@@ -915,7 +872,7 @@ export default function ChatPage() {
             </div>
             <button
               onClick={() => setSettingsOpen(true)}
-              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm transition hover:bg-white/10 hover:border-[var(--accent-lavender)]/30"
+              className="rounded-lg border border-purple-500/20 bg-white/5 px-3 py-1.5 text-sm transition hover:bg-purple-500/10 hover:border-purple-500/40"
             >
               ⚙️ Settings
             </button>
@@ -1003,7 +960,7 @@ export default function ChatPage() {
         </div>
 
         {/* Composer - Cozy Input */}
-        <div className="border-t border-white/5 bg-black/30 backdrop-blur-xl safe-bottom">
+        <div className="border-t border-purple-500/10 bg-black/40 backdrop-blur-xl safe-bottom">
           <div className="mx-auto max-w-4xl px-4 py-4">
             <div className="flex items-end gap-3">
               <div className="relative flex-1">
@@ -1042,7 +999,7 @@ export default function ChatPage() {
 
               <Link
                 href="/call"
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 transition hover:bg-white/10 hover:border-[var(--accent-warm)]/30 text-lg"
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-pink-500/20 bg-white/5 transition hover:bg-pink-500/10 hover:border-pink-500/40 text-lg"
                 title="Call Ellie"
               >
                 📞
