@@ -169,6 +169,7 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [typing, setTyping] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // 🚫 Voice recording removed
 
@@ -534,15 +535,10 @@ export default function ChatPage() {
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    // Use requestAnimationFrame to ensure DOM has updated
-    requestAnimationFrame(() => {
-      if (scrollRef.current) {
-        scrollRef.current.scrollTo({
-          top: scrollRef.current.scrollHeight,
-          behavior: 'smooth'
-        });
-      }
-    });
+    // Small delay to ensure DOM has updated
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, 50);
   }, [messages, typing]);
 
   useEffect(() => {
@@ -956,6 +952,8 @@ export default function ChatPage() {
                 </div>
               </div>
             )}
+            {/* Scroll anchor */}
+            <div ref={messagesEndRef} />
           </div>
         </div>
 

@@ -14,12 +14,18 @@
   --accent-soft-purple: #9d8ec7;
 }
 
-html, body { min-height: 100%; }
+html, body {
+  min-height: 100%;
+  height: 100%;
+}
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
 }
 
 /* ============================================================
@@ -28,8 +34,8 @@ body {
 
 /* Chat Background - Rich warm gradient */
 .chat-bg {
-  position: relative;
-  min-height: 100vh;
+  position: fixed;
+  inset: 0;
   background: linear-gradient(135deg,
     #1a1025 0%,
     #2d1f3d 25%,
@@ -38,6 +44,8 @@ body {
     #1a1025 100%
   );
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Ambient color glow layers - static, no animation */
@@ -58,10 +66,21 @@ body {
    💬 Message Bubbles - Vibrant Cozy Styling
    ============================================================ */
 
-/* User Message - Rich purple/pink gradient */
+/* User Message - Clean glass style */
 .msg-user {
-  background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 50%, #d946ef 100%);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 20px 20px 4px 20px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  color: white;
+  position: relative;
+}
+
+/* Ellie Message - Rich purple/pink gradient with glow */
+.msg-ellie {
+  background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 50%, #d946ef 100%);
+  border-radius: 20px 20px 20px 4px;
   box-shadow:
     0 4px 20px rgba(139, 92, 246, 0.35),
     0 0 40px rgba(168, 85, 247, 0.15);
@@ -69,7 +88,7 @@ body {
   position: relative;
 }
 
-.msg-user::before {
+.msg-ellie::before {
   content: "";
   position: absolute;
   inset: -1px;
@@ -78,27 +97,6 @@ body {
   background: linear-gradient(135deg, rgba(255,255,255,0.3), transparent);
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
-  pointer-events: none;
-}
-
-/* Ellie Message - Warm glass with pink accent */
-.msg-ellie {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(244, 114, 182, 0.05));
-  border: 1px solid rgba(244, 114, 182, 0.2);
-  border-radius: 20px 20px 20px 4px;
-  backdrop-filter: blur(10px);
-  box-shadow:
-    0 4px 20px rgba(0, 0, 0, 0.3),
-    0 0 30px rgba(244, 114, 182, 0.08);
-  position: relative;
-}
-
-.msg-ellie::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: linear-gradient(135deg, rgba(244, 114, 182, 0.08) 0%, transparent 50%);
   pointer-events: none;
 }
 
