@@ -533,13 +533,27 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [fetchRelationshipStatus]);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive or on initial load
   useEffect(() => {
     // Small delay to ensure DOM has updated
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }, 50);
+    const scrollToBottom = () => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    };
+
+    // Use requestAnimationFrame for smoother scroll after DOM updates
+    requestAnimationFrame(() => {
+      scrollToBottom();
+    });
   }, [messages, typing]);
+
+  // Scroll to absolute bottom on initial load
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [langReady]);
 
   useEffect(() => {
     refreshSession()
@@ -790,9 +804,9 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="chat-bg flex min-h-screen flex-col text-white">
+    <div className="chat-bg flex h-[100dvh] flex-col text-white overflow-hidden">
 
-      <main className="relative z-10 flex flex-1 flex-col">
+      <main className="relative z-10 flex flex-1 flex-col min-h-0">
         {/* Relationship Header - Starlight Theme */}
         {relationship && (
           <div className="rel-header">
@@ -875,8 +889,8 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Chat area */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+        {/* Chat area - scrollable messages only */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-4">
           <div className="mx-auto max-w-4xl space-y-3">
             {messages.map((msg, i) => {
               // Find if this is the last user message

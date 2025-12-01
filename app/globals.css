@@ -34,8 +34,6 @@ body {
 /* Chat Background - Rich warm gradient */
 .chat-bg {
   position: relative;
-  min-height: 100vh;
-  min-height: 100dvh; /* Dynamic viewport height for mobile */
   background: linear-gradient(135deg,
     #1a1025 0%,
     #2d1f3d 25%,
@@ -43,8 +41,6 @@ body {
     #2a1f35 75%,
     #1a1025 100%
   );
-  display: flex;
-  flex-direction: column;
 }
 
 /* Ambient color glow layers - static, no animation */
@@ -167,23 +163,27 @@ body {
    ============================================================ */
 
 .input-cozy {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(168, 85, 247, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: 24px;
   backdrop-filter: blur(10px);
   transition: all 0.3s ease;
+  box-shadow:
+    0 0 15px rgba(255, 255, 255, 0.1),
+    0 0 30px rgba(255, 255, 255, 0.05);
 }
 
 .input-cozy:focus {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(168, 85, 247, 0.4);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.5);
   box-shadow:
-    0 0 0 3px rgba(168, 85, 247, 0.15),
-    0 4px 20px rgba(0, 0, 0, 0.2);
+    0 0 20px rgba(255, 255, 255, 0.2),
+    0 0 40px rgba(255, 255, 255, 0.1),
+    0 0 60px rgba(168, 85, 247, 0.15);
 }
 
 .input-cozy::placeholder {
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /* Send button glow */
