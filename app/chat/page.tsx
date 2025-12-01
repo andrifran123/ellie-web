@@ -53,6 +53,8 @@ type LangOption = { code: LangCode; name: string };
 
 type GetLanguageResponse = { language?: LangCode | null };
 type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string };
+type GetNameResponse = { name?: string | null };
+type SetNameResponse = { ok?: boolean; name?: string };
 
 // UPDATED: Chat response now includes relationship status and manual override flag
 type ChatResponse = { 
@@ -176,6 +178,10 @@ export default function ChatPage() {
   // language gate
   const [langReady, setLangReady] = useState(false);
   const [chosenLang, setChosenLang] = useState<LangCode>("en");
+
+  // name gate (after language)
+  const [nameReady, setNameReady] = useState(false);
+  const [userName, setUserName] = useState("");
 
   // Ellie can hint voice mode
   const [voiceMode, setVoiceMode] = useState<string | null>(null);
@@ -580,6 +586,23 @@ export default function ChatPage() {
     }
   }, [langReady]);
 
+  // Check if user already has a name set
+  useEffect(() => {
+    if (langReady && !nameReady) {
+      fetch("/api/get-name", { credentials: "include" })
+        .then((r) => r.json())
+        .then((d: GetNameResponse) => {
+          if (d?.name && d.name.trim()) {
+            setUserName(d.name);
+            setNameReady(true);
+          } else {
+            setNameReady(false);
+          }
+        })
+        .catch(() => setNameReady(false));
+    }
+  }, [langReady, nameReady]);
+
   const handleSendText = useCallback(
     async (txt: string) => {
       if (!txt.trim() || loading) return;
@@ -721,6 +744,25 @@ export default function ChatPage() {
     }
   }, [chosenLang, show]);
 
+  const confirmName = useCallback(async () => {
+    const trimmedName = userName.trim();
+    if (!trimmedName) {
+      show("Please enter your name");
+      return;
+    }
+    try {
+      const data = await apiPost<SetNameResponse>("/api/set-name", {
+        name: trimmedName,
+      });
+      if (data.ok) {
+        setNameReady(true);
+        show(`Nice to meet you, ${data.name || trimmedName}!`);
+      }
+    } catch (e) {
+      show("Error: " + errorMessage(e));
+    }
+  }, [userName, show]);
+
   const resetConversation = useCallback(async () => {
     if (!userId) return; // Wait for userId
     if (!confirm("Reset conversation? (Facts remain)")) return;
@@ -797,6 +839,37 @@ export default function ChatPage() {
             className="send-btn mt-5 w-full px-4 py-3 font-semibold text-white shadow-xl transition hover:scale-[1.02]"
           >
             Start Chatting
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show name prompt after language is set
+  if (!nameReady) {
+    return (
+      <div className="chat-bg flex min-h-screen flex-col items-center justify-center text-white">
+        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-purple-500/20 bg-black/50 p-8 shadow-2xl backdrop-blur-xl">
+          <div className="text-center mb-6">
+            <div className="text-4xl mb-3">💜</div>
+            <h2 className="text-xl font-semibold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">What&apos;s your name?</h2>
+            <p className="text-sm text-white/50 mt-2">I&apos;d love to know who I&apos;m talking to</p>
+          </div>
+          <input
+            type="text"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && confirmName()}
+            placeholder="Enter your name..."
+            className="w-full rounded-xl border border-purple-500/20 bg-white/5 px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500/40 transition text-white placeholder-white/30"
+            autoFocus
+          />
+          <button
+            onClick={confirmName}
+            disabled={!userName.trim()}
+            className="send-btn mt-5 w-full px-4 py-3 font-semibold text-white shadow-xl transition hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Continue
           </button>
         </div>
       </div>
