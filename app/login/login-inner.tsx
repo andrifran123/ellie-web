@@ -11,9 +11,11 @@ const toApi = (path: string) =>
 type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
 type SignupResp = { ok?: boolean; message?: string };
+type LoginResp = { ok?: boolean; paid?: boolean; message?: string };
 type MeResponse = { ok?: boolean; loggedIn?: boolean; email: string | null; paid: boolean };
 type TermsResp = { ok?: boolean; terms?: { title: string; content: string; checkboxLabel: string } };
 type Mode = "signin" | "signup";
+type SigninMethod = "code" | "password";
 type Flash = "none" | "signedin" | "signedup" | "signedout";
 
 /* ================= Nebula BG ================= */
@@ -147,6 +149,8 @@ export default function LoginInnerPage() {
   const [siEmail, setSiEmail] = useState("");
   const [code, setCode] = useState("");
   const [step, setStep] = useState<"email"|"code">("email");
+  const [signinMethod, setSigninMethod] = useState<SigninMethod>("code");
+  const [loginPassword, setLoginPassword] = useState("");
 
   const [name, setName] = useState("");
   const [suEmail, setSuEmail] = useState("");
@@ -190,6 +194,27 @@ export default function LoginInnerPage() {
       const data: VerifyResp = await r.json();
       if (!r.ok || !data.ok) return setErr(data.message || "Invalid or expired code.");
       setMe({ email: e, paid: !!data.paid }); setAuthedCookie(true); setStep("email"); setCode(""); setSiEmail(""); setFlash("signedin");
+      if (data.paid) window.location.href = dest || "/chat";
+      else window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
+    } catch { setErr("Network error."); } finally { setLoading(false); }
+  }
+
+  async function loginWithPassword() {
+    setErr(null);
+    const e = siEmail.trim().toLowerCase();
+    const p = loginPassword.trim();
+    if (!emailRegex.test(e)) return setErr("Enter a valid email.");
+    if (!p) return setErr("Enter your password.");
+    setLoading(true);
+    try {
+      const r = await fetch(toApi("/auth/login"), {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: e, password: p }),
+      });
+      const data: LoginResp = await r.json();
+      if (!r.ok || !data.ok) return setErr(data.message || "Invalid email or password.");
+      setMe({ email: e, paid: !!data.paid }); setAuthedCookie(true); setSiEmail(""); setLoginPassword(""); setFlash("signedin");
       if (data.paid) window.location.href = dest || "/chat";
       else window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
     } catch { setErr("Network error."); } finally { setLoading(false); }
@@ -241,7 +266,7 @@ export default function LoginInnerPage() {
       const data: SignupResp = await r.json();
       if (!r.ok || !data.ok) return setErr(data.message || "Could not create account.");
       setMe({ email: e, paid: false }); setAuthedCookie(true); setName(""); setSuEmail(""); setPassword(""); setFlash("signedup");
-      window.location.href = `/pricing?redirect=${encodeURIComponent(dest || "/chat")}`;
+      window.location.href = `/pricing?signup=1&redirect=${encodeURIComponent(dest || "/chat")}`;
     } catch { setErr("Network error."); } finally { setLoading(false); }
   }
 
@@ -354,21 +379,50 @@ export default function LoginInnerPage() {
                   <div className="mt-6 space-y-3 max-w-md mx-auto w-full">
                     {mode==="signin" ? (
                       <>
-                        {step==="email" && (
+                        {/* Toggle between email code and password login */}
+                        <div className="flex items-center gap-2 bg-white/5 rounded-lg p-1 text-xs">
+                          <button
+                            onClick={()=>{setSigninMethod("code"); setErr(null); setStep("email");}}
+                            className={`flex-1 px-3 py-1.5 rounded-md transition ${signinMethod==="code"?"bg-white/15 text-white":"text-white/60 hover:text-white"}`}
+                          >
+                            Email code
+                          </button>
+                          <button
+                            onClick={()=>{setSigninMethod("password"); setErr(null);}}
+                            className={`flex-1 px-3 py-1.5 rounded-md transition ${signinMethod==="password"?"bg-white/15 text-white":"text-white/60 hover:text-white"}`}
+                          >
+                            Password
+                          </button>
+                        </div>
+
+                        {signinMethod==="code" ? (
+                          <>
+                            {step==="email" && (
+                              <>
+                                <label className="text-sm text-white/80">Email</label>
+                                <input value={siEmail} onChange={(e)=>setSiEmail(e.target.value)} placeholder="you@example.com" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="email" autoComplete="email" />
+                                <button disabled={loading} onClick={sendCode} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading ? "true":"false"}>{loading ? "Sending…" : "Send code"}</button>
+                              </>
+                            )}
+
+                            {step==="code" && (
+                              <>
+                                <label className="text-sm text-white/80">Enter 6-digit code</label>
+                                <input value={code} onChange={(e)=>setCode(e.target.value.replace(/\D/g,"").slice(0,6))} placeholder="123456" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none focus:border-white/30 transition" inputMode="numeric" autoComplete="one-time-code" />
+                                <button disabled={loading || code.length<6} onClick={verifyCode} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading ? "true":"false"}>{loading ? "Verifying…" : "Verify & continue"}</button>
+                                <button onClick={()=>{ setStep("email"); setCode(""); setErr(null); }} className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition">← Use a different email</button>
+                                <div className="text-xs text-white/60 text-center">We emailed you a 6-digit code.</div>
+                              </>
+                            )}
+                          </>
+                        ) : (
                           <>
                             <label className="text-sm text-white/80">Email</label>
                             <input value={siEmail} onChange={(e)=>setSiEmail(e.target.value)} placeholder="you@example.com" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="email" autoComplete="email" />
-                            <button disabled={loading} onClick={sendCode} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading ? "true":"false"}>{loading ? "Sending…" : "Send code"}</button>
-                          </>
-                        )}
-
-                        {step==="code" && (
-                          <>
-                            <label className="text-sm text-white/80">Enter 6-digit code</label>
-                            <input value={code} onChange={(e)=>setCode(e.target.value.replace(/\D/g,"").slice(0,6))} placeholder="123456" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 tracking-widest text-center outline-none focus:border-white/30 transition" inputMode="numeric" autoComplete="one-time-code" />
-                            <button disabled={loading || code.length<6} onClick={verifyCode} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading ? "true":"false"}>{loading ? "Verifying…" : "Verify & continue"}</button>
-                            <button onClick={()=>{ setStep("email"); setCode(""); setErr(null); }} className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition">← Use a different email</button>
-                            <div className="text-xs text-white/60 text-center">We emailed you a 6-digit code.</div>
+                            <label className="text-sm text-white/80">Password</label>
+                            <input value={loginPassword} onChange={(e)=>setLoginPassword(e.target.value)} placeholder="Your password" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="password" autoComplete="current-password" />
+                            <button disabled={loading} onClick={loginWithPassword} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading ? "true":"false"}>{loading ? "Signing in…" : "Sign in"}</button>
+                            <div className="text-xs text-white/60 text-center">Use this if you signed up with a password.</div>
                           </>
                         )}
                       </>

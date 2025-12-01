@@ -18,11 +18,20 @@ export default function PricingInner() {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   const [paidReady, setPaidReady] = useState(false);
+  const [justSignedUp, setJustSignedUp] = useState(false);
 
   const emailRef = useRef<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const startPollingRef = useRef<(() => void) | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Check if user just signed up (from URL param or referrer)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("signup") === "1" || document.referrer.includes("/login")) {
+      setJustSignedUp(true);
+    }
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -276,6 +285,11 @@ export default function PricingInner() {
       <main className="relative z-10 flex min-h-screen items-center justify-center p-6">
         <div className="w-full max-w-6xl">
           <div className="text-center mb-10">
+            {justSignedUp && (
+              <div className="mb-6 inline-flex items-center gap-2 bg-green-500/20 border border-green-500/30 text-green-300 px-4 py-2 rounded-xl text-sm">
+                <span>Account created successfully!</span>
+              </div>
+            )}
             <h1
               className="text-5xl md:text-7xl font-extrabold tracking-tight"
               style={{ textShadow: "0 0 32px rgba(140,110,255,0.35)" }}
@@ -283,8 +297,8 @@ export default function PricingInner() {
               Pricing
             </h1>
             <p className="mt-3 text-white/70">
-              Pick a plan. As soon as your payment is active, you’ll see an
-              <strong> “Open Chat” </strong> button below.
+              Pick a plan. As soon as your payment is active, you'll see an
+              <strong> "Open Chat" </strong> button below.
             </p>
           </div>
 
