@@ -994,14 +994,6 @@ export default function ChatPage() {
                       {/* 📸 Photo Display */}
                       {msg.photo && (
                         <div className="photo-frame relative msg-animate">
-                          {/* Milestone Badge */}
-                          {msg.photo.isMilestone && (
-                            <div className="absolute top-3 right-3 z-10 bg-gradient-to-r from-[var(--accent-soft-purple)] to-[var(--accent-warm)] text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg flex items-center gap-1.5 animate-bounce-in">
-                              <span className="text-sm">🎉</span>
-                              <span>First Photo!</span>
-                            </div>
-                          )}
-
                           {/* Photo Image */}
                           <div className="relative w-full max-w-sm">
                             <img
