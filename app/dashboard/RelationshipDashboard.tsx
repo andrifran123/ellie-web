@@ -3,14 +3,15 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import LogoutButton from "@/app/components/LogoutButton";
 
-// 🔒 SECURITY: Helper to make authenticated admin API calls
+// 🔒 SECURITY: Helper to make authenticated admin API calls via server-side proxy
+// The admin key is added server-side, never exposed to browser
 const adminFetch = (url: string, options: RequestInit = {}) => {
-  return fetch(url, {
+  const proxyUrl = `/api/admin-proxy?path=${encodeURIComponent(url)}`;
+  return fetch(proxyUrl, {
     ...options,
     headers: {
       ...options.headers,
       "Content-Type": "application/json",
-      "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_API_KEY || "",
     },
   });
 };
