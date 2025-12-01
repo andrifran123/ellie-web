@@ -17,15 +17,14 @@
 html, body {
   min-height: 100%;
   height: 100%;
+  margin: 0;
+  padding: 0;
 }
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
-  overflow: hidden;
-  position: fixed;
-  width: 100%;
 }
 
 /* ============================================================
@@ -34,8 +33,9 @@ body {
 
 /* Chat Background - Rich warm gradient */
 .chat-bg {
-  position: fixed;
-  inset: 0;
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh; /* Dynamic viewport height for mobile */
   background: linear-gradient(135deg,
     #1a1025 0%,
     #2d1f3d 25%,
@@ -43,7 +43,6 @@ body {
     #2a1f35 75%,
     #1a1025 100%
   );
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
