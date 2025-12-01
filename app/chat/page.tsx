@@ -9,12 +9,14 @@ import { motion, AnimatePresence } from "framer-motion";
 /* ─────────────────────────────────────────────────────────────
    Types & constants (UPDATED WITH RELATIONSHIP)
 ───────────────────────────────────────────────────────────── */
-// 📸 Photo data structure
+// 📸 Photo data structure (matches backend response)
 interface PhotoData {
   url: string;
-  message: string;
-  category: string;
-  isMilestone: boolean;
+  id?: string;
+  category?: string;
+  mood?: string;
+  setting?: string;
+  isMilestone?: boolean;
 }
 
 type ChatMsg = { 
@@ -693,10 +695,15 @@ export default function ChatPage() {
 
         const reply = data.reply || "(No reply)";
         const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now(), photo: data.photo };
-        
+
+        // 📸 Debug photo data
+        if (data.photo) {
+          console.log("📸 Photo received:", JSON.stringify(data.photo));
+        }
+
         // ✅ FIX: Add message first, THEN hide typing indicator
         setMessages((m) => [...m, ellieMsg]);
-        
+
         // Track this message to prevent duplicate if polling fetches it later
         trackMessage(reply, ellieMsg.ts);
         console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
@@ -992,27 +999,24 @@ export default function ChatPage() {
                         <div className="mt-1.5 text-right text-[10px] text-white/40">{fmtTime(msg.ts)}</div>
                       </div>
                       {/* 📸 Photo Display */}
-                      {msg.photo && (
-                        <div className="photo-frame relative msg-animate">
+                      {msg.photo && msg.photo.url && (
+                        <div className="photo-frame relative msg-animate mt-2">
                           {/* Photo Image */}
-                          <div className="relative w-full max-w-sm">
+                          <div className="relative w-full max-w-xs mx-auto">
                             <img
                               src={msg.photo.url}
                               alt="Ellie"
-                              className="w-full h-auto object-cover"
-                              loading="lazy"
+                              className="w-full h-auto object-cover rounded-lg"
+                              loading="eager"
                               onError={(e) => {
+                                console.error("Photo failed to load:", msg.photo?.url);
                                 (e.target as HTMLImageElement).style.display = 'none';
+                              }}
+                              onLoad={() => {
+                                console.log("Photo loaded successfully:", msg.photo?.url);
                               }}
                             />
                           </div>
-
-                          {/* Photo Caption */}
-                          {msg.photo.message && (
-                            <div className="px-4 py-3 bg-black/30 backdrop-blur">
-                              <p className="text-sm text-white/80">{msg.photo.message}</p>
-                            </div>
-                          )}
                         </div>
                       )}
                     </div>
