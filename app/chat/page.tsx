@@ -150,31 +150,56 @@ function useToasts() {
 }
 
 /* ─────────────────────────────────────────────────────────────
-   Visual helpers (unchanged)
+   Visual helpers - Starlight Lounge Theme
 ───────────────────────────────────────────────────────────── */
-const AuroraBG = () => (
-  <>
-    {/* animated aurora layers */}
-    <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-[#0B0B11] via-[#161625] to-[#1A1A2B]" />
-    <div className="pointer-events-none absolute inset-0 -z-10 opacity-30 animate-aurora">
-      <div className="absolute -left-1/4 top-[-10%] h-[60vh] w-[80vw] rounded-[999px] blur-[90px]"
-        style={{ background: "radial-gradient(closest-side, rgba(167,139,250,0.35), transparent 70%)" }} />
-      <div className="absolute right-[-20%] bottom-[-10%] h-[60vh] w-[80vw] rounded-[999px] blur-[100px]"
-        style={{ background: "radial-gradient(closest-side, rgba(94,234,212,0.30), transparent 70%)" }} />
-    </div>
 
-    {/* a faint grid for texture */}
-    <div
-      aria-hidden
-      className="pointer-events-none absolute inset-0 -z-10 opacity-[0.06]"
-      style={{
-        background:
-          "linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px, linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px) 0 0 / 28px 28px",
-        mixBlendMode: "screen",
-      }}
-    />
-  </>
-);
+// Floating Stars Component
+const StarsBackground = () => {
+  // Generate random stars
+  const stars = Array.from({ length: 50 }, (_, i) => ({
+    id: i,
+    left: `${Math.random() * 100}%`,
+    top: `${Math.random() * 100}%`,
+    delay: `${Math.random() * 5}s`,
+    duration: `${3 + Math.random() * 4}s`,
+    large: Math.random() > 0.85,
+  }));
+
+  // Shooting stars
+  const shootingStars = [
+    { top: '15%', left: '10%', delay: '0s' },
+    { top: '35%', left: '60%', delay: '5s' },
+    { top: '55%', left: '25%', delay: '10s' },
+  ];
+
+  return (
+    <div className="stars-container">
+      {stars.map((star) => (
+        <div
+          key={star.id}
+          className={`star ${star.large ? 'large' : ''}`}
+          style={{
+            left: star.left,
+            top: star.top,
+            '--delay': star.delay,
+            '--duration': star.duration,
+          } as React.CSSProperties}
+        />
+      ))}
+      {shootingStars.map((ss, i) => (
+        <div
+          key={`shooting-${i}`}
+          className="shooting-star"
+          style={{
+            top: ss.top,
+            left: ss.left,
+            '--delay': ss.delay,
+          } as React.CSSProperties}
+        />
+      ))}
+    </div>
+  );
+};
 
 /* ─────────────────────────────────────────────────────────────
    Main component (WITH RELATIONSHIP PROGRESSION + MANUAL OVERRIDE POLLING)
@@ -780,14 +805,18 @@ export default function ChatPage() {
 
   if (!langReady) {
     return (
-      <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden text-white">
-        <AuroraBG />
-        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-white/15 bg-white/5 p-6 shadow-2xl backdrop-blur-xl">
-          <h2 className="mb-4 text-center text-xl font-semibold">Select Language</h2>
+      <div className="starlight-bg flex min-h-screen flex-col items-center justify-center text-white">
+        <StarsBackground />
+        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-white/10 bg-black/40 p-8 shadow-2xl backdrop-blur-xl">
+          <div className="text-center mb-6">
+            <div className="text-4xl mb-3">✨</div>
+            <h2 className="text-xl font-semibold text-[var(--accent-warm)]">Welcome to Ellie</h2>
+            <p className="text-sm text-white/50 mt-2">Choose your language to begin</p>
+          </div>
           <select
             value={chosenLang}
             onChange={(e) => setChosenLang(e.target.value as LangCode)}
-            className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 outline-none focus:ring-2 focus:ring-[#A78BFA]/40 transition"
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 outline-none focus:ring-2 focus:ring-[var(--accent-warm)]/30 focus:border-[var(--accent-warm)]/30 transition"
           >
             {LANGS.map((o) => (
               <option key={o.code} value={o.code}>
@@ -797,9 +826,9 @@ export default function ChatPage() {
           </select>
           <button
             onClick={confirmLanguage}
-            className="mt-4 w-full rounded-lg bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] px-4 py-2.5 font-semibold text-black shadow-xl transition hover:shadow-2xl"
+            className="send-btn mt-5 w-full px-4 py-3 font-semibold text-white shadow-xl transition hover:scale-[1.02]"
           >
-            Confirm
+            Start Chatting
           </button>
         </div>
       </div>
@@ -807,13 +836,13 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="relative flex min-h-screen flex-col overflow-hidden text-white">
-      <AuroraBG />
+    <div className="starlight-bg flex min-h-screen flex-col text-white">
+      <StarsBackground />
 
       <main className="relative z-10 flex flex-1 flex-col">
-        {/* NEW: Relationship Header */}
+        {/* Relationship Header - Starlight Theme */}
         {relationship && (
-          <div className="border-b border-white/10 bg-gradient-to-r from-black/20 to-black/30 backdrop-blur-md">
+          <div className="rel-header">
             <div className="mx-auto max-w-4xl px-4 py-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -821,10 +850,10 @@ export default function ChatPage() {
                     {STAGE_STYLES[relationship.stage as keyof typeof STAGE_STYLES]?.emoji || "💬"}
                   </div>
                   <div>
-                    <div className="text-sm font-semibold">
+                    <div className="text-sm font-semibold text-[var(--accent-warm)]">
                       {relationship.stage}
                     </div>
-                    <div className="text-xs text-white/60">
+                    <div className="text-xs text-white/50">
                       {MOOD_INDICATORS[relationship.mood as keyof typeof MOOD_INDICATORS] || relationship.mood}
                     </div>
                   </div>
@@ -832,7 +861,7 @@ export default function ChatPage() {
 
                 <button
                   onClick={() => setShowRelDetails(!showRelDetails)}
-                  className="rounded-lg bg-white/5 px-3 py-1.5 text-xs font-medium hover:bg-white/10 transition"
+                  className="rounded-lg bg-white/5 border border-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/10 hover:border-[var(--accent-warm)]/30 transition"
                 >
                   {showRelDetails ? "Hide" : "Show"} Details
                 </button>
@@ -845,17 +874,19 @@ export default function ChatPage() {
                   exit={{ height: 0, opacity: 0 }}
                   className="mt-3 grid grid-cols-3 gap-3 text-xs"
                 >
-                  <div className="rounded-lg bg-white/5 p-2">
-                    <div className="text-white/60">Level</div>
-                    <div className="text-lg font-bold">{relationship.level}/100</div>
+                  <div className="rel-stat-card p-3">
+                    <div className="text-white/50">Level</div>
+                    <div className="text-lg font-bold text-[var(--accent-lavender)]">{relationship.level}/100</div>
                   </div>
-                  <div className="rounded-lg bg-white/5 p-2">
-                    <div className="text-white/60">Streak</div>
-                    <div className="text-lg font-bold">{relationship.streak} days</div>
+                  <div className="rel-stat-card p-3">
+                    <div className="text-white/50">Streak</div>
+                    <div className="text-lg font-bold text-[var(--accent-warm)]">
+                      <span className="streak-heart mr-1">❤️</span>{relationship.streak} days
+                    </div>
                   </div>
-                  <div className="rounded-lg bg-white/5 p-2">
-                    <div className="text-white/60">Investment</div>
-                    <div className="text-lg font-bold">
+                  <div className="rel-stat-card p-3">
+                    <div className="text-white/50">Investment</div>
+                    <div className="text-lg font-bold text-[var(--accent-rose)]">
                       {((relationship.emotionalInvestment || 0) * 100).toFixed(0)}%
                     </div>
                   </div>
@@ -865,23 +896,28 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* Top bar */}
-        <div className="border-b border-white/10 backdrop-blur-md">
+        {/* Top bar - Cozy header */}
+        <div className="border-b border-white/5 bg-black/20 backdrop-blur-md">
           <div className="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-full border-2 border-[#A78BFA] bg-gradient-to-br from-[#A78BFA] via-[#5EEAD4] to-[#A78BFA] shadow-xl" />
+              <div className="avatar-glow h-11 w-11 rounded-full bg-gradient-to-br from-[var(--accent-warm)] via-[var(--accent-lavender)] to-[var(--accent-rose)]">
+                <div className="relative h-full w-full rounded-full overflow-hidden flex items-center justify-center text-lg">
+                  ✨
+                </div>
+              </div>
               <div>
-                <div className="font-semibold leading-tight">Ellie</div>
-                <div className="text-xs text-white/60">
-                  {voiceMode ? `Voice: ${voiceMode}` : "Online"}
+                <div className="font-semibold leading-tight text-white">Ellie</div>
+                <div className="flex items-center gap-1.5 text-xs text-white/50">
+                  <span className="online-dot h-2 w-2 rounded-full bg-green-400" />
+                  {voiceMode ? `Voice: ${voiceMode}` : "Online now"}
                 </div>
               </div>
             </div>
             <button
               onClick={() => setSettingsOpen(true)}
-              className="rounded-md border border-white/15 bg-white/5 px-2 py-1 text-sm transition hover:bg-white/10"
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm transition hover:bg-white/10 hover:border-[var(--accent-lavender)]/30"
             >
-              Settings
+              ⚙️ Settings
             </button>
           </div>
         </div>
@@ -891,59 +927,58 @@ export default function ChatPage() {
           <div className="mx-auto max-w-4xl space-y-3">
             {messages.map((msg, i) => {
               // Find if this is the last user message
-              const isLastUserMessage = msg.from === "you" && 
+              const isLastUserMessage = msg.from === "you" &&
                 messages.slice(i + 1).every(m => m.from !== "you");
-              
+
               return (
                 <div
                   key={i}
-                  className={`animate-drop-in flex ${msg.from === "you" ? "justify-end" : "justify-start"}`}
+                  className={`msg-animate flex ${msg.from === "you" ? "justify-end" : "justify-start"}`}
                 >
                   {msg.from === "you" ? (
                     <div className="flex flex-col items-end gap-1 max-w-[75%]">
-                      <div className="w-full rounded-2xl px-4 py-2.5 shadow-lg bg-gradient-to-br from-[#A78BFA] to-[#8B5CF6] text-white">
-                        <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
-                        <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
+                      <div className="msg-user w-full px-4 py-3">
+                        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">{msg.text}</div>
+                        <div className="mt-1.5 text-right text-[10px] opacity-50">{fmtTime(msg.ts)}</div>
                       </div>
                       {msg.seen && isLastUserMessage && (
-                        <div className="text-[10px] text-white/40 px-1">Seen</div>
+                        <div className="text-[10px] text-[var(--accent-warm)]/60 px-1">✓ Seen</div>
                       )}
                     </div>
                   ) : (
                     <div className="max-w-[75%] flex flex-col gap-2">
-                      <div className="rounded-2xl px-4 py-2.5 shadow-lg border border-white/15 bg-white/5 backdrop-blur">
-                        <div className="whitespace-pre-wrap break-words text-sm">{msg.text}</div>
-                        <div className="mt-1 text-right text-[10px] opacity-60">{fmtTime(msg.ts)}</div>
+                      <div className="msg-ellie px-4 py-3">
+                        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-white/90">{msg.text}</div>
+                        <div className="mt-1.5 text-right text-[10px] text-white/40">{fmtTime(msg.ts)}</div>
                       </div>
                       {/* 📸 Photo Display */}
                       {msg.photo && (
-                        <div className="relative rounded-2xl overflow-hidden shadow-xl border border-white/20 bg-white/5 backdrop-blur animate-drop-in">
+                        <div className="photo-frame relative msg-animate">
                           {/* Milestone Badge */}
                           {msg.photo.isMilestone && (
-                            <div className="absolute top-3 right-3 z-10 bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg flex items-center gap-1.5 animate-bounce-in">
+                            <div className="absolute top-3 right-3 z-10 bg-gradient-to-r from-[var(--accent-soft-purple)] to-[var(--accent-warm)] text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg flex items-center gap-1.5 animate-bounce-in">
                               <span className="text-sm">🎉</span>
                               <span>First Photo!</span>
                             </div>
                           )}
-                          
+
                           {/* Photo Image */}
                           <div className="relative w-full max-w-sm">
-                            <img 
-                              src={msg.photo.url} 
-                              alt="Ellie" 
-                              className="w-full h-auto rounded-t-2xl object-cover"
+                            <img
+                              src={msg.photo.url}
+                              alt="Ellie"
+                              className="w-full h-auto object-cover"
                               loading="lazy"
                               onError={(e) => {
-                                // Fallback for broken images
                                 (e.target as HTMLImageElement).style.display = 'none';
                               }}
                             />
                           </div>
-                          
+
                           {/* Photo Caption */}
                           {msg.photo.message && (
-                            <div className="px-4 py-3 bg-white/10 backdrop-blur">
-                              <p className="text-sm text-white/90">{msg.photo.message}</p>
+                            <div className="px-4 py-3 bg-black/30 backdrop-blur">
+                              <p className="text-sm text-white/80">{msg.photo.message}</p>
                             </div>
                           )}
                         </div>
@@ -954,12 +989,12 @@ export default function ChatPage() {
               );
             })}
             {typing && (
-              <div className="flex justify-start">
-                <div className="rounded-2xl border border-white/15 bg-white/5 px-4 py-3 shadow-lg backdrop-blur">
-                  <div className="flex items-center gap-1">
-                    <div className="typing-dot bg-white" />
-                    <div className="typing-dot bg-white" />
-                    <div className="typing-dot bg-white" />
+              <div className="flex justify-start msg-animate">
+                <div className="msg-ellie px-5 py-3.5">
+                  <div className="flex items-center gap-2">
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
+                    <div className="typing-dot" />
                   </div>
                 </div>
               </div>
@@ -967,10 +1002,10 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* Composer */}
-        <div className="border-t border-white/10 backdrop-blur-md">
-          <div className="mx-auto max-w-4xl px-4 py-3">
-            <div className="flex items-end gap-2">
+        {/* Composer - Cozy Input */}
+        <div className="border-t border-white/5 bg-black/30 backdrop-blur-xl safe-bottom">
+          <div className="mx-auto max-w-4xl px-4 py-4">
+            <div className="flex items-end gap-3">
               <div className="relative flex-1">
                 <textarea
                   value={input}
@@ -984,16 +1019,16 @@ export default function ChatPage() {
                     }
                   }}
                   rows={1}
-                  placeholder={inManualOverride ? "Ellie is typing..." : "Type a message..."}
+                  placeholder={inManualOverride ? "Ellie is typing..." : "Say something sweet..."}
                   disabled={loading}
-                  className="w-full resize-none rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none backdrop-blur placeholder:text-white/40 focus:ring-2 focus:ring-[#A78BFA]/40 transition disabled:opacity-50"
-                  style={{ minHeight: "48px", maxHeight: "120px" }}
+                  className="input-cozy w-full resize-none px-5 py-3.5 text-sm outline-none disabled:opacity-50"
+                  style={{ minHeight: "52px", maxHeight: "120px" }}
                 />
               </div>
               <button
                 onClick={() => handleSendText(input.trim())}
                 disabled={loading || !input.trim()}
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-r from-[#A78BFA] to-[#5EEAD4] font-semibold text-black shadow-xl transition hover:shadow-2xl disabled:opacity-50 disabled:cursor-not-allowed"
+                className="send-btn flex h-12 w-12 shrink-0 items-center justify-center text-white disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -1005,32 +1040,31 @@ export default function ChatPage() {
                 </svg>
               </button>
 
-              {/* 🚫 Voice recording removed */}
-
               <Link
                 href="/call"
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/5 transition hover:bg-white/10 text-center text-xs"
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 transition hover:bg-white/10 hover:border-[var(--accent-warm)]/30 text-lg"
+                title="Call Ellie"
               >
-                📞 Call
+                📞
               </Link>
             </div>
           </div>
         </div>
       </main>
 
-      {/* Toasts */}
+      {/* Toasts - Cozy Notifications */}
       <div className="fixed top-4 right-4 z-50 space-y-2">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className="rounded-lg px-3 py-2 text-sm shadow-lg border border-white/15 bg-white/10 backdrop-blur"
+            className="toast-cozy px-4 py-3 text-sm msg-animate"
           >
             {t.text}
           </div>
         ))}
       </div>
 
-      {/* Settings Drawer */}
+      {/* Settings Drawer - Starlight */}
       <AnimatePresence>
         {settingsOpen && (
           <motion.div
@@ -1039,9 +1073,9 @@ export default function ChatPage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setSettingsOpen(false)} />
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setSettingsOpen(false)} />
             <motion.div
-              className="absolute right-0 top-0 h-full w-[92%] max-w-sm border-l border-white/15 bg-white/10 backdrop-blur-2xl p-5 shadow-[0_10px_80px_rgba(140,110,255,0.25)]"
+              className="settings-drawer absolute right-0 top-0 h-full w-[92%] max-w-sm p-5"
               initial={{ x: 420 }}
               animate={{ x: 0 }}
               exit={{ x: 420 }}
@@ -1049,35 +1083,35 @@ export default function ChatPage() {
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Settings</h3>
+                <h3 className="text-lg font-semibold text-[var(--accent-warm)]">Settings</h3>
                 <button
-                  className="rounded-md border border-white/15 bg-white/5 px-2 py-1 text-sm hover:bg-white/10 transition"
+                  className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-sm hover:bg-white/10 transition"
                   onClick={() => setSettingsOpen(false)}
                 >
-                  Close
+                  ✕ Close
                 </button>
               </div>
 
-              <div className="mt-5 space-y-6">
+              <div className="mt-5 space-y-6 overflow-y-auto max-h-[calc(100vh-100px)]">
                 {/* Relationship Info */}
                 {relationship && (
                   <section>
-                    <div className="text-sm font-medium mb-2">Relationship Progress</div>
-                    <div className="bg-white/5 rounded-lg p-3 space-y-2">
+                    <div className="text-sm font-medium mb-2 text-[var(--accent-lavender)]">💕 Relationship Progress</div>
+                    <div className="rel-stat-card p-4 space-y-3">
                       <div className="flex justify-between text-xs">
-                        <span className="text-white/60">Stage:</span>
-                        <span>{relationship.stage}</span>
+                        <span className="text-white/50">Stage:</span>
+                        <span className="text-[var(--accent-warm)]">{relationship.stage}</span>
                       </div>
                       <div className="flex justify-between text-xs">
-                        <span className="text-white/60">Level:</span>
-                        <span>{relationship.level}/100</span>
+                        <span className="text-white/50">Level:</span>
+                        <span className="text-[var(--accent-lavender)]">{relationship.level}/100</span>
                       </div>
                       <div className="flex justify-between text-xs">
-                        <span className="text-white/60">Current Streak:</span>
-                        <span>{relationship.streak} days</span>
+                        <span className="text-white/50">Current Streak:</span>
+                        <span><span className="streak-heart mr-1">❤️</span>{relationship.streak} days</span>
                       </div>
                       <div className="flex justify-between text-xs">
-                        <span className="text-white/60">Longest Streak:</span>
+                        <span className="text-white/50">Longest Streak:</span>
                         <span>{relationship.longestStreak || 0} days</span>
                       </div>
                     </div>
@@ -1086,12 +1120,12 @@ export default function ChatPage() {
 
                 {/* Language */}
                 <section>
-                  <div className="text-sm font-medium mb-2">Language</div>
+                  <div className="text-sm font-medium mb-2 text-[var(--accent-lavender)]">🌍 Language</div>
                   <div className="flex gap-2">
                     <select
                       value={chosenLang}
                       onChange={(e) => setChosenLang(e.target.value as LangCode)}
-                      className="flex-1 rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:ring-2 focus:ring-[#A78BFA]/40 transition"
+                      className="flex-1 rounded-lg bg-white/5 border border-white/10 px-3 py-2.5 outline-none focus:ring-2 focus:ring-[var(--accent-warm)]/30 focus:border-[var(--accent-warm)]/30 transition"
                     >
                       {LANGS.map((o) => (
                         <option key={o.code} value={o.code}>
@@ -1101,7 +1135,7 @@ export default function ChatPage() {
                     </select>
                     <button
                       onClick={confirmLanguage}
-                      className="rounded-lg bg-gradient-to-r from-white to-white text-black font-semibold px-3"
+                      className="send-btn px-4 text-sm font-medium"
                     >
                       Save
                     </button>
@@ -1110,10 +1144,10 @@ export default function ChatPage() {
 
                 {/* Voice preset */}
                 <section>
-                  <div className="text-sm font-medium mb-2">Voice preset</div>
+                  <div className="text-sm font-medium mb-2 text-[var(--accent-lavender)]">🎙️ Voice preset</div>
                   <div className="space-y-2 max-h-48 overflow-auto pr-1">
                     {presets.length === 0 && (
-                      <div className="text-white/60 text-sm">
+                      <div className="text-white/50 text-sm">
                         {loadingPresets.current
                           ? "Loading presets…"
                           : "Open Settings again to load presets."}
@@ -1123,14 +1157,14 @@ export default function ChatPage() {
                       <button
                         key={p.key}
                         onClick={() => void applyPreset(p.key)}
-                        className={`w-full text-left rounded-lg px-3 py-2 border transition ${
+                        className={`w-full text-left rounded-lg px-3 py-2.5 border transition ${
                           currentPreset === p.key
-                            ? "bg-white text-black border-white shadow"
-                            : "bg-white/5 border-white/10 hover:bg-white/10"
+                            ? "bg-[var(--accent-soft-purple)] text-white border-[var(--accent-lavender)] shadow-lg"
+                            : "bg-white/5 border-white/10 hover:bg-white/10 hover:border-[var(--accent-warm)]/30"
                         }`}
                       >
                         <div className="font-medium">{p.label}</div>
-                        <div className="text-xs text-white/60">voice: {p.voice}</div>
+                        <div className="text-xs text-white/50">voice: {p.voice}</div>
                       </button>
                     ))}
                   </div>
@@ -1138,28 +1172,28 @@ export default function ChatPage() {
 
                 {/* Memory */}
                 <section>
-                  <div className="text-sm font-medium mb-2">Memory</div>
+                  <div className="text-sm font-medium mb-2 text-[var(--accent-lavender)]">🧠 Memory</div>
                   <button
                     onClick={resetConversation}
-                    className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm hover:bg-white/10 transition"
+                    className="rounded-lg border border-white/10 bg-white/5 px-4 py-2.5 text-sm hover:bg-white/10 hover:border-red-500/30 transition"
                   >
                     Clear conversation (keeps saved facts)
                   </button>
-                  <div className="text-xs text-white/50 mt-1">
+                  <div className="text-xs text-white/40 mt-2">
                     Saved facts/emotions remain in your DB; this only resets chat history.
                   </div>
                 </section>
 
                 {/* Call */}
                 <section>
-                  <div className="text-sm font-medium mb-2">Call Mode</div>
+                  <div className="text-sm font-medium mb-2 text-[var(--accent-lavender)]">📞 Call Mode</div>
                   <Link
-                    className="rounded-lg bg-white text-black font-semibold px-3 py-2 inline-block hover:opacity-90 transition"
+                    className="send-btn inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium"
                     href="/call"
                   >
-                    Open Call
+                    <span>📞</span> Open Call
                   </Link>
-                  <div className="text-xs text-white/50 mt-1">
+                  <div className="text-xs text-white/40 mt-2">
                     Mic gain slider is available on the call screen.
                   </div>
                 </section>
@@ -1168,55 +1202,8 @@ export default function ChatPage() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Keyframes (global) */}
-      <StyleKeyframes />
     </div>
   );
 }
 
-/* ─────────────────────────────────────────────────────────────
-   Global keyframes (styled-jsx)
-───────────────────────────────────────────────────────────── */
-function StyleKeyframes() {
-  return (
-    <style jsx global>{`
-      @keyframes aurora {
-        0% { transform: translate3d(0,0,0) scale(1); }
-        50% { transform: translate3d(2%, -2%, 0) scale(1.03); }
-        100% { transform: translate3d(0,0,0) scale(1); }
-      }
-      .animate-aurora { animation: aurora 16s ease-in-out infinite; }
-
-      @keyframes dropIn {
-        0% { opacity: 0; transform: translateY(8px) scale(0.995); }
-        100% { opacity: 1; transform: translateY(0) scale(1); }
-      }
-      .animate-drop-in { animation: dropIn 420ms ease-out both; }
-
-      .typing-dot {
-        display: inline-block;
-        width: 0.35rem;
-        height: 0.35rem;
-        line-height: 0.35rem;
-        border-radius: 999px;
-        margin-right: 0.15rem;
-        color: rgba(255,255,255,0.85);
-        animation: typing 1.2s infinite ease-in-out;
-      }
-      .typing-dot:nth-child(2) { animation-delay: 0.15s; }
-      .typing-dot:nth-child(3) { animation-delay: 0.3s; }
-      @keyframes typing {
-        0%, 80%, 100% { transform: translateY(0); opacity: .6; }
-        40% { transform: translateY(-2px); opacity: 1; }
-      }
-      
-      @keyframes bounceIn {
-        0% { opacity: 0; transform: scale(0) rotate(-180deg); }
-        50% { transform: scale(1.1) rotate(10deg); }
-        100% { opacity: 1; transform: scale(1) rotate(0deg); }
-      }
-      .animate-bounce-in { animation: bounceIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) both; }
-    `}</style>
-  );
-}
+/* All animations are now defined in globals.css under Starlight Lounge theme */

@@ -2,7 +2,18 @@
 @import "tailwindcss";
 
 /* Base typography and smoothing */
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+  --starlight-bg: #0a0a12;
+  --starlight-surface: rgba(255, 255, 255, 0.03);
+  --starlight-border: rgba(255, 255, 255, 0.08);
+  --starlight-glow: rgba(147, 112, 219, 0.15);
+  --accent-warm: #e8b4b8;
+  --accent-rose: #d4a5a5;
+  --accent-lavender: #b8a9c9;
+  --accent-soft-purple: #9d8ec7;
+}
+
 html, body { min-height: 100%; }
 body {
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, sans-serif;
@@ -10,6 +21,379 @@ body {
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
 }
+
+/* ============================================================
+   ✨ STARLIGHT LOUNGE - Cozy Chat Theme
+   ============================================================ */
+
+/* Starlight Background - Deep night sky */
+.starlight-bg {
+  position: relative;
+  min-height: 100vh;
+  background: linear-gradient(180deg,
+    #0a0a12 0%,
+    #0d0d18 30%,
+    #12111f 60%,
+    #0f0e1a 100%
+  );
+  overflow: hidden;
+}
+
+/* Ambient glow layers */
+.starlight-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 800px 600px at 20% 20%, rgba(147, 112, 219, 0.08), transparent 50%),
+    radial-gradient(ellipse 600px 500px at 80% 30%, rgba(232, 180, 184, 0.06), transparent 50%),
+    radial-gradient(ellipse 700px 400px at 60% 80%, rgba(184, 169, 201, 0.05), transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+  animation: ambientShift 20s ease-in-out infinite;
+}
+
+@keyframes ambientShift {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.8; transform: scale(1.05); }
+}
+
+/* Floating Stars Container */
+.stars-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* Individual Star */
+.star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: white;
+  border-radius: 50%;
+  opacity: 0;
+  animation: twinkle var(--duration, 4s) ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+}
+
+.star::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 6px;
+  height: 6px;
+  background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+  border-radius: 50%;
+}
+
+.star.large {
+  width: 3px;
+  height: 3px;
+}
+
+.star.large::after {
+  width: 10px;
+  height: 10px;
+}
+
+@keyframes twinkle {
+  0%, 100% { opacity: 0.1; transform: scale(0.8); }
+  50% { opacity: 0.8; transform: scale(1.2); }
+}
+
+/* Shooting Star */
+.shooting-star {
+  position: absolute;
+  width: 100px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.8), transparent);
+  opacity: 0;
+  animation: shoot 8s ease-in-out infinite;
+  animation-delay: var(--delay, 3s);
+}
+
+@keyframes shoot {
+  0% { opacity: 0; transform: translateX(0) translateY(0); }
+  5% { opacity: 1; }
+  15% { opacity: 0; transform: translateX(300px) translateY(150px); }
+  100% { opacity: 0; transform: translateX(300px) translateY(150px); }
+}
+
+/* ============================================================
+   💬 Message Bubbles - Cozy Styling
+   ============================================================ */
+
+/* User Message - Warm rose gradient */
+.msg-user {
+  background: linear-gradient(135deg, #9d8ec7 0%, #b8a9c9 100%);
+  border-radius: 20px 20px 4px 20px;
+  box-shadow:
+    0 4px 15px rgba(157, 142, 199, 0.2),
+    inset 0 1px 0 rgba(255,255,255,0.1);
+  color: white;
+  position: relative;
+}
+
+.msg-user::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2), transparent);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Ellie Message - Soft glass with warm glow */
+.msg-ellie {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(232, 180, 184, 0.15);
+  border-radius: 20px 20px 20px 4px;
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.2),
+    0 0 30px rgba(232, 180, 184, 0.05);
+  position: relative;
+}
+
+.msg-ellie::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(232, 180, 184, 0.05) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+/* Message entrance animation */
+@keyframes messageSlide {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.msg-animate {
+  animation: messageSlide 0.3s ease-out forwards;
+}
+
+/* ============================================================
+   🌟 Avatar with breathing glow
+   ============================================================ */
+
+.avatar-glow {
+  position: relative;
+}
+
+.avatar-glow::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-warm), var(--accent-lavender));
+  opacity: 0.6;
+  animation: avatarBreath 3s ease-in-out infinite;
+  z-index: -1;
+}
+
+.avatar-glow::after {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(232, 180, 184, 0.3), transparent 70%);
+  animation: avatarGlow 3s ease-in-out infinite;
+  z-index: -2;
+}
+
+@keyframes avatarBreath {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.05); opacity: 0.8; }
+}
+
+@keyframes avatarGlow {
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50% { transform: scale(1.15); opacity: 0.5; }
+}
+
+/* Online indicator pulse */
+.online-dot {
+  position: relative;
+}
+
+.online-dot::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  background: #4ade80;
+  animation: onlinePulse 2s ease-in-out infinite;
+  z-index: -1;
+}
+
+@keyframes onlinePulse {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.5); opacity: 0; }
+}
+
+/* ============================================================
+   ⌨️ Input Area - Warm & Inviting
+   ============================================================ */
+
+.input-cozy {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  backdrop-filter: blur(10px);
+  transition: all 0.3s ease;
+}
+
+.input-cozy:focus {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(232, 180, 184, 0.3);
+  box-shadow:
+    0 0 0 3px rgba(232, 180, 184, 0.1),
+    0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.input-cozy::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+/* Send button glow */
+.send-btn {
+  background: linear-gradient(135deg, var(--accent-soft-purple), var(--accent-lavender));
+  border-radius: 50%;
+  box-shadow:
+    0 4px 15px rgba(157, 142, 199, 0.3),
+    inset 0 1px 0 rgba(255,255,255,0.2);
+  transition: all 0.2s ease;
+}
+
+.send-btn:hover:not(:disabled) {
+  transform: scale(1.05);
+  box-shadow:
+    0 6px 25px rgba(157, 142, 199, 0.4),
+    inset 0 1px 0 rgba(255,255,255,0.2);
+}
+
+.send-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+/* ============================================================
+   💕 Relationship Header - Cozy Stats
+   ============================================================ */
+
+.rel-header {
+  background: linear-gradient(180deg, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.1) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+}
+
+.rel-stat-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+
+.rel-stat-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(232, 180, 184, 0.2);
+}
+
+/* Heart streak animation */
+.streak-heart {
+  display: inline-block;
+  animation: heartBeat 1.5s ease-in-out infinite;
+}
+
+@keyframes heartBeat {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.15); }
+  30% { transform: scale(1); }
+  45% { transform: scale(1.1); }
+  60% { transform: scale(1); }
+}
+
+/* ============================================================
+   💫 Typing Indicator - Softer dots
+   ============================================================ */
+
+.typing-dot {
+  width: 8px;
+  height: 8px;
+  background: linear-gradient(135deg, var(--accent-warm), var(--accent-lavender));
+  border-radius: 50%;
+  animation: typingBounce 1.4s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(1) { animation-delay: 0s; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+
+/* ============================================================
+   🎨 Settings Drawer - Glass Panel
+   ============================================================ */
+
+.settings-drawer {
+  background: rgba(15, 15, 25, 0.95);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  box-shadow: -10px 0 40px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================================================
+   🍞 Toast Notifications
+   ============================================================ */
+
+.toast-cozy {
+  background: rgba(30, 30, 45, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* ============================================================
+   📸 Photo Display - Romantic frame
+   ============================================================ */
+
+.photo-frame {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(232, 180, 184, 0.2);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(232, 180, 184, 0.05);
+}
+
+/* ============================================================
+   🏠 Original styles (preserved)
+   ============================================================ */
 
 /* ===== Futuristic / neon background for the HOME page only ===== */
 .futuristic-bg {
@@ -56,17 +440,10 @@ body {
   filter: drop-shadow(0 0 18px rgba(80,150,255,.35));
 }
 
-
-/* tiny “glass” helpers */
+/* tiny "glass" helpers */
 .glass { backdrop-filter: blur(10px); background: color-mix(in oklab, #ffffff 6%, transparent); border: 1px solid color-mix(in oklab, #ffffff 12%, transparent); }
 .card-hover { transition: transform .2s, box-shadow .2s, border-color .2s; }
 .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 30px color-mix(in oklab, #000 60%, transparent); border-color: color-mix(in oklab, #fff 18%, transparent); }
-
-/* typing dots */
-@keyframes blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
-.typing-dot { animation: blink 1.4s infinite both; }
-.typing-dot:nth-child(2){ animation-delay:.2s }
-.typing-dot:nth-child(3){ animation-delay:.4s }
 
 /* Idle avatar pulse */
 @keyframes idlePulse { 0%,100%{opacity:.9} 50%{opacity:1} }
@@ -89,11 +466,8 @@ body {
 
 /* ============================================================
    📞 MISSED CALL MESSAGE STYLING
-   ============================================================
-   Add this CSS to your globals.css or component styles
-*/
+   ============================================================ */
 
-/* Missed Call Message Styling */
 .missed-call-message {
   background: linear-gradient(135deg, rgba(168, 85, 247, 0.1), rgba(236, 72, 153, 0.1));
   border-left: 3px solid #a855f7;
@@ -110,7 +484,6 @@ body {
   font-size: 1.2em;
 }
 
-/* Optional: Indicator Badge */
 .missed-call-indicator {
   display: flex;
   align-items: center;
@@ -133,13 +506,16 @@ body {
   font-weight: 500;
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-
 @keyframes shake {
   0%, 100% { transform: rotate(0deg); }
   25% { transform: rotate(-10deg); }
   75% { transform: rotate(10deg); }
 }
+
+/* Bounce in animation for milestone badges */
+@keyframes bounceIn {
+  0% { opacity: 0; transform: scale(0) rotate(-180deg); }
+  50% { transform: scale(1.1) rotate(10deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
+}
+.animate-bounce-in { animation: bounceIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55) both; }
