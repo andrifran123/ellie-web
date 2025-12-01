@@ -32,6 +32,8 @@ interface DbMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  photo_url?: string;
+  photo_id?: number;
   created_at: string;
 }
 
@@ -372,7 +374,14 @@ export default function ChatPage() {
                 from: msg.role === 'user' ? 'you' : 'ellie',
                 text: msg.content,
                 ts: new Date(msg.created_at).getTime(),
-                seen: true // Mark all historical messages as seen
+                seen: true, // Mark all historical messages as seen
+                // Include photo if present
+                ...(msg.photo_url && {
+                  photo: {
+                    url: msg.photo_url,
+                    id: msg.photo_id?.toString()
+                  }
+                })
               }));
             
             // Set the messages, replacing any existing ones
