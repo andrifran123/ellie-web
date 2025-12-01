@@ -297,8 +297,8 @@ export default function PricingInner() {
               Pricing
             </h1>
             <p className="mt-3 text-white/70">
-              Pick a plan. As soon as your payment is active, you'll see an
-              <strong> "Open Chat" </strong> button below.
+              Pick a plan. As soon as your payment is active, you&apos;ll see an
+              <strong> &quot;Open Chat&quot; </strong> button below.
             </p>
           </div>
 
