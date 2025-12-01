@@ -12,6 +12,7 @@ type StartResp = { ok?: boolean; message?: string };
 type VerifyResp = { ok?: boolean; paid?: boolean; message?: string };
 type SignupResp = { ok?: boolean; message?: string };
 type MeResponse = { ok?: boolean; loggedIn?: boolean; email: string | null; paid: boolean };
+type TermsResp = { ok?: boolean; terms?: { title: string; content: string; checkboxLabel: string } };
 type Mode = "signin" | "signup";
 type Flash = "none" | "signedin" | "signedup" | "signedout";
 
@@ -152,6 +153,12 @@ export default function LoginInnerPage() {
   const [password, setPassword] = useState("");
   const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+  // Terms modal state
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [termsData, setTermsData] = useState<TermsResp["terms"] | null>(null);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [loadingTerms, setLoadingTerms] = useState(false);
+
   async function sendCode() {
     setErr(null);
     const e = siEmail.trim().toLowerCase(); if (!emailRegex.test(e)) return setErr("Enter a valid email.");
@@ -188,16 +195,48 @@ export default function LoginInnerPage() {
     } catch { setErr("Network error."); } finally { setLoading(false); }
   }
 
-  async function signUp() {
+  // Step 1: Validate form and show terms modal
+  async function handleSignUpClick() {
     setErr(null);
     const n=name.trim(), e=suEmail.trim().toLowerCase(), p=password.trim();
-    if (!n) return setErr("Enter your name."); if (!emailRegex.test(e)) return setErr("Enter a valid email."); if (p.length<8) return setErr("Password must be at least 8 characters.");
+    if (!n) return setErr("Enter your name.");
+    if (!emailRegex.test(e)) return setErr("Enter a valid email.");
+    if (p.length<8) return setErr("Password must be at least 8 characters.");
+
+    // Fetch terms if not already loaded
+    if (!termsData) {
+      setLoadingTerms(true);
+      try {
+        const r = await fetch(toApi("/auth/terms"), { credentials: "include" });
+        const data: TermsResp = await r.json();
+        if (data.ok && data.terms) {
+          setTermsData(data.terms);
+        } else {
+          return setErr("Could not load terms. Please try again.");
+        }
+      } catch {
+        return setErr("Network error loading terms.");
+      } finally {
+        setLoadingTerms(false);
+      }
+    }
+
+    setAcceptedTerms(false);
+    setShowTermsModal(true);
+  }
+
+  // Step 2: Actually create the account after terms accepted
+  async function signUp() {
+    if (!acceptedTerms) return;
+    setErr(null);
+    const n=name.trim(), e=suEmail.trim().toLowerCase(), p=password.trim();
     setLoading(true);
+    setShowTermsModal(false);
     try {
       const r = await fetch(toApi("/auth/signup"), {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: n, email: e, password: p }),
+        body: JSON.stringify({ name: n, email: e, password: p, acceptedTerms: true }),
       });
       const data: SignupResp = await r.json();
       if (!r.ok || !data.ok) return setErr(data.message || "Could not create account.");
@@ -223,6 +262,59 @@ export default function LoginInnerPage() {
       {flash!=="none" && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 backdrop-blur-lg bg-white/10 text-white px-4 py-2 rounded-xl border border-white/15 shadow">
           <span className="mr-2">✅</span> {flashText}
+        </div>
+      )}
+
+      {/* Terms & Disclaimer Modal */}
+      {showTermsModal && termsData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+          <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl border border-white/20 bg-[#0d0a1a] shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-white/10">
+              <h2 className="text-xl font-bold text-white">{termsData.title}</h2>
+              <button
+                onClick={() => setShowTermsModal(false)}
+                className="text-white/60 hover:text-white text-2xl leading-none"
+                aria-label="Close"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-4 text-sm text-white/80 whitespace-pre-wrap leading-relaxed">
+              {termsData.content}
+            </div>
+
+            {/* Footer with checkbox and button */}
+            <div className="p-4 border-t border-white/10 space-y-4">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-1 w-5 h-5 rounded border-white/30 bg-white/10 accent-purple-500"
+                />
+                <span className="text-sm text-white/90">{termsData.checkboxLabel}</span>
+              </label>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowTermsModal(false)}
+                  className="flex-1 rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/10 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={signUp}
+                  disabled={!acceptedTerms || loading}
+                  className="flex-1 rounded-lg bg-white text-black px-4 py-2 text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {loading ? "Creating..." : "I Agree & Create Account"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -288,7 +380,7 @@ export default function LoginInnerPage() {
                         <input value={suEmail} onChange={(e)=>setSuEmail(e.target.value)} placeholder="you@example.com" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="email" autoComplete="email" />
                         <label className="text-sm text-white/80">Password</label>
                         <input value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="At least 8 characters" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="password" autoComplete="new-password" />
-                        <button disabled={loading} onClick={signUp} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading ? "true":"false"}>{loading ? "Creating…" : "Create account"}</button>
+                        <button disabled={loading || loadingTerms} onClick={handleSignUpClick} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading || loadingTerms ? "true":"false"}>{loading ? "Creating…" : loadingTerms ? "Loading…" : "Create account"}</button>
                       </>
                     )}
 
