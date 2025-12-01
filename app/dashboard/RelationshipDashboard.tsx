@@ -3,6 +3,18 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import LogoutButton from "@/app/components/LogoutButton";
 
+// 🔒 SECURITY: Helper to make authenticated admin API calls
+const adminFetch = (url: string, options: RequestInit = {}) => {
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      "Content-Type": "application/json",
+      "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_API_KEY || "",
+    },
+  });
+};
+
 // ============================================
 // INTERFACES
 // ============================================
@@ -229,13 +241,13 @@ export default function RelationshipDashboardEnhanced() {
   const fetchAnalytics = async () => {
     try {
       const [overviewRes, engagementRes, revenueRes, addictionRes, streakRes, analysisRes, forecastRes] = await Promise.all([
-        fetch("/api/analytics/overview"),
-        fetch("/api/analytics/engagement"),
-        fetch("/api/analytics/revenue"),
-        fetch("/api/analytics/addiction"),
-        fetch("/api/analytics/streak-recovery"),
-        fetch("/api/analytics/message-analysis"),
-        fetch("/api/analytics/forecast"),
+        adminFetch("/api/analytics/overview"),
+        adminFetch("/api/analytics/engagement"),
+        adminFetch("/api/analytics/revenue"),
+        adminFetch("/api/analytics/addiction"),
+        adminFetch("/api/analytics/streak-recovery"),
+        adminFetch("/api/analytics/message-analysis"),
+        adminFetch("/api/analytics/forecast"),
       ]);
 
       if (!overviewRes.ok || !engagementRes.ok || !revenueRes.ok || !addictionRes.ok) {
@@ -266,10 +278,10 @@ export default function RelationshipDashboardEnhanced() {
 
   const searchUser = async () => {
     if (!searchUserId.trim()) return;
-    
+
     setIsSearching(true);
     try {
-      const res = await fetch(`/api/analytics/user/${searchUserId}`);
+      const res = await adminFetch(`/api/analytics/user/${searchUserId}`);
       if (res.ok) {
         const data = await res.json();
         setUserProfile(data);
@@ -287,7 +299,7 @@ export default function RelationshipDashboardEnhanced() {
 
   const fetchActiveUsers = async () => {
     try {
-      const res = await fetch("/api/analytics/active-users");
+      const res = await adminFetch("/api/analytics/active-users");
       if (res.ok) {
         const data = await res.json();
         setActiveUsers(data.users || []);
@@ -304,7 +316,7 @@ export default function RelationshipDashboardEnhanced() {
     
     // Fetch chat history
     try {
-      const res = await fetch(`/api/analytics/chat/${userId}`);
+      const res = await adminFetch(`/api/analytics/chat/${userId}`);
       if (res.ok) {
         const data = await res.json();
         setChatMessages(data.messages || []);
@@ -326,10 +338,9 @@ export default function RelationshipDashboardEnhanced() {
   // Manual Override Functions
   const startManualOverride = async (userId: string) => {
     try {
-      const res = await fetch("/api/manual-override/start", {
+      const res = await adminFetch("/api/manual-override/start", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ user_id: userId }),
       });
 
       if (res.ok) {
@@ -346,10 +357,9 @@ export default function RelationshipDashboardEnhanced() {
     if (!overrideUserId) return;
 
     try {
-      const res = await fetch("/api/manual-override/end", {
+      const res = await adminFetch("/api/manual-override/end", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: overrideUserId }),
+        body: JSON.stringify({ user_id: overrideUserId }),
       });
 
       if (res.ok) {
@@ -373,17 +383,15 @@ export default function RelationshipDashboardEnhanced() {
       clearTimeout(typingTimeoutRef.current);
     }
 
-    fetch("/api/manual-override/typing", {
+    adminFetch("/api/manual-override/typing", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: overrideUserId, typing: true }),
+      body: JSON.stringify({ user_id: overrideUserId, is_typing: true }),
     });
 
     typingTimeoutRef.current = setTimeout(() => {
-      fetch("/api/manual-override/typing", {
+      adminFetch("/api/manual-override/typing", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: overrideUserId, typing: false }),
+        body: JSON.stringify({ user_id: overrideUserId, is_typing: false }),
       });
     }, 1000);
   };
@@ -392,11 +400,10 @@ export default function RelationshipDashboardEnhanced() {
     if (!overrideUserId || !manualResponseText.trim()) return;
 
     try {
-      const res = await fetch("/api/manual-override/respond", {
+      const res = await adminFetch("/api/manual-override/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userId: overrideUserId,
+          user_id: overrideUserId,
           message: manualResponseText,
         }),
       });
