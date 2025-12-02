@@ -60,15 +60,29 @@ type SetLanguageResponse = { ok?: boolean; language?: LangCode; label?: string }
 type GetNameResponse = { name?: string | null };
 type SetNameResponse = { ok?: boolean; name?: string };
 
-// UPDATED: Chat response now includes relationship status and manual override flag
-type ChatResponse = { 
-  reply?: string; 
-  language?: LangCode; 
+// Onboarding step from backend
+type OnboardingStep = {
+  step: "language" | "name" | "disclaimer";
+  message?: string;
+  required: boolean;
+  disclaimer?: {
+    title: string;
+    content: string;
+    checkboxLabel: string;
+    buttonText: string;
+  };
+};
+
+// UPDATED: Chat response now includes relationship status, manual override flag, and onboarding
+type ChatResponse = {
+  reply?: string;
+  language?: LangCode;
   voiceMode?: string;
   relationshipStatus?: RelationshipStatus;
   in_manual_override?: boolean; // NEW: Flag when admin is in control
   photo?: PhotoData; // 📸 NEW: Photo attachment
   photoRefused?: boolean; // 📸 NEW: Flag when user asked for photo and was refused
+  onboarding?: OnboardingStep; // Onboarding flow step
 };
 
 type VoiceResponse = {
@@ -711,6 +725,37 @@ export default function ChatPage() {
           setRelationship(data.relationshipStatus);
         }
 
+        // 🎯 Handle onboarding response - don't show "(No reply)"
+        if (data.onboarding) {
+          console.log("🎯 Onboarding step received:", data.onboarding.step);
+          setTyping(false);
+          setLoading(false);
+
+          // Handle each onboarding step
+          if (data.onboarding.step === "language") {
+            setLangReady(false);
+            return;
+          }
+          if (data.onboarding.step === "name") {
+            setNameReady(false);
+            setNameChecked(true);
+            return;
+          }
+          if (data.onboarding.step === "disclaimer" && data.onboarding.disclaimer) {
+            // Show the disclaimer modal
+            setTermsData({
+              title: data.onboarding.disclaimer.title,
+              content: data.onboarding.disclaimer.content,
+              checkboxLabel: data.onboarding.disclaimer.checkboxLabel,
+            });
+            setAcceptedTerms(false);
+            setShowTermsModal(true);
+            return;
+          }
+          return;
+        }
+
+        // Only show "(No reply)" if there's truly no reply and no onboarding
         const reply = data.reply || "(No reply)";
         const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now(), photo: data.photo };
 
@@ -725,10 +770,10 @@ export default function ChatPage() {
         // Track this message to prevent duplicate if polling fetches it later
         trackMessage(reply, ellieMsg.ts);
         console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
-        
+
         // ⚡ INSTANT: Hide typing immediately
         setTyping(false);
-        
+
         if (data.language && data.language !== chosenLang) {
           setChosenLang(data.language);
         }
@@ -806,12 +851,15 @@ export default function ChatPage() {
     setShowTermsModal(false);
 
     try {
+      // Save the name
       const data = await apiPost<SetNameResponse>("/api/set-name", {
         name: trimmedName,
       });
       if (data.ok) {
+        // Also acknowledge the disclaimer so backend knows user completed onboarding
+        await apiPost("/api/acknowledge-disclaimer", {});
         setNameReady(true);
-        show("Name saved");
+        show("Welcome! Let's chat");
       }
     } catch (e) {
       show("Error: " + errorMessage(e));
