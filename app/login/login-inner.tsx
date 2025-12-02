@@ -152,9 +152,9 @@ export default function LoginInnerPage() {
   const [signinMethod, setSigninMethod] = useState<SigninMethod>("code");
   const [loginPassword, setLoginPassword] = useState("");
 
-  const [name, setName] = useState("");
   const [suEmail, setSuEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const emailRegex = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
   // Terms modal state
@@ -223,10 +223,10 @@ export default function LoginInnerPage() {
   // Step 1: Validate form and show terms modal
   async function handleSignUpClick() {
     setErr(null);
-    const n=name.trim(), e=suEmail.trim().toLowerCase(), p=password.trim();
-    if (!n) return setErr("Enter your name.");
+    const e=suEmail.trim().toLowerCase(), p=password.trim(), cp=confirmPassword.trim();
     if (!emailRegex.test(e)) return setErr("Enter a valid email.");
     if (p.length<8) return setErr("Password must be at least 8 characters.");
+    if (p !== cp) return setErr("Passwords do not match.");
 
     // Fetch terms if not already loaded
     if (!termsData) {
@@ -254,18 +254,18 @@ export default function LoginInnerPage() {
   async function signUp() {
     if (!acceptedTerms) return;
     setErr(null);
-    const n=name.trim(), e=suEmail.trim().toLowerCase(), p=password.trim();
+    const e=suEmail.trim().toLowerCase(), p=password.trim();
     setLoading(true);
     setShowTermsModal(false);
     try {
       const r = await fetch(toApi("/auth/signup"), {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: n, email: e, password: p, acceptedTerms: true }),
+        body: JSON.stringify({ email: e, password: p, acceptedTerms: true }),
       });
       const data: SignupResp = await r.json();
       if (!r.ok || !data.ok) return setErr(data.message || "Could not create account.");
-      setMe({ email: e, paid: false }); setAuthedCookie(true); setName(""); setSuEmail(""); setPassword(""); setFlash("signedup");
+      setMe({ email: e, paid: false }); setAuthedCookie(true); setSuEmail(""); setPassword(""); setConfirmPassword(""); setFlash("signedup");
       window.location.href = `/pricing?signup=1&redirect=${encodeURIComponent(dest || "/chat")}`;
     } catch { setErr("Network error."); } finally { setLoading(false); }
   }
@@ -428,12 +428,12 @@ export default function LoginInnerPage() {
                       </>
                     ) : (
                       <>
-                        <label className="text-sm text-white/80">Name</label>
-                        <input value={name} onChange={(e)=>setName(e.target.value)} placeholder="Your name" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="text" autoComplete="name" />
                         <label className="text-sm text-white/80">Email</label>
                         <input value={suEmail} onChange={(e)=>setSuEmail(e.target.value)} placeholder="you@example.com" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="email" autoComplete="email" />
                         <label className="text-sm text-white/80">Password</label>
                         <input value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="At least 8 characters" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="password" autoComplete="new-password" />
+                        <label className="text-sm text-white/80">Confirm Password</label>
+                        <input value={confirmPassword} onChange={(e)=>setConfirmPassword(e.target.value)} placeholder="Confirm your password" className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 outline-none focus:border-white/30 transition" type="password" autoComplete="new-password" />
                         <button disabled={loading || loadingTerms} onClick={handleSignUpClick} className="w-full rounded-lg bg-white text-black font-semibold px-3 py-2 hover:opacity-90 transition disabled:opacity-60" aria-busy={loading || loadingTerms ? "true":"false"}>{loading ? "Creating…" : loadingTerms ? "Loading…" : "Create account"}</button>
                       </>
                     )}
