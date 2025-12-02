@@ -775,7 +775,7 @@ export default function ChatPage() {
       });
       if (data.ok) {
         setNameReady(true);
-        show(`Nice to meet you, ${data.name || trimmedName}!`);
+        show("Name saved");
       }
     } catch (e) {
       show("Error: " + errorMessage(e));
@@ -845,10 +845,10 @@ export default function ChatPage() {
           <select
             value={chosenLang}
             onChange={(e) => setChosenLang(e.target.value as LangCode)}
-            className="w-full rounded-xl border border-purple-500/20 bg-white/5 px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500/40 transition"
+            className="w-full rounded-xl border border-purple-500/20 bg-black/80 px-4 py-3 outline-none focus:ring-2 focus:ring-purple-500/30 focus:border-purple-500/40 transition text-white"
           >
             {LANGS.map((o) => (
-              <option key={o.code} value={o.code}>
+              <option key={o.code} value={o.code} className="bg-black text-white">
                 {o.name}
               </option>
             ))}
