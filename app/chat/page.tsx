@@ -50,7 +50,7 @@ interface RelationshipStatus {
 }
 
 type LangCode =
-  | "en" | "is" | "pt" | "es" | "fr" | "de" | "it" | "sv"
+  | "en" | "pt" | "es" | "fr" | "de" | "it" | "sv"
   | "da" | "no" | "nl" | "pl" | "ar" | "hi" | "ja" | "ko" | "zh";
 
 type LangOption = { code: LangCode; name: string };
@@ -96,7 +96,6 @@ type ApplyPresetResponse = { ok?: boolean; preset?: string; voice?: string };
 
 const LANGS: LangOption[] = [
   { code: "en", name: "English" },
-  { code: "is", name: "Icelandic" },
   { code: "pt", name: "Portuguese" },
   { code: "es", name: "Spanish" },
   { code: "fr", name: "French" },
@@ -185,6 +184,7 @@ export default function ChatPage() {
 
   // name gate (after language)
   const [nameReady, setNameReady] = useState(false);
+  const [nameChecked, setNameChecked] = useState(false); // Track if we've checked for existing name
   const [userName, setUserName] = useState("");
 
   // Ellie can hint voice mode
@@ -600,20 +600,22 @@ export default function ChatPage() {
   // Check if user already has a name set
   // IMPORTANT: Wait for userId to be available before checking name
   useEffect(() => {
-    if (langReady && !nameReady && userId) {
+    if (langReady && !nameChecked && userId) {
+      setNameChecked(true); // Mark that we're checking
       fetch("/api/get-name", { credentials: "include" })
         .then((r) => r.json())
         .then((d: GetNameResponse) => {
           if (d?.name && d.name.trim()) {
             setUserName(d.name);
             setNameReady(true);
-          } else {
-            setNameReady(false);
           }
+          // If no name, nameReady stays false and we show the name input
         })
-        .catch(() => setNameReady(false));
+        .catch(() => {
+          // On error, still show the name input
+        });
     }
-  }, [langReady, nameReady, userId]);
+  }, [langReady, nameChecked, userId]);
 
   const handleSendText = useCallback(
     async (txt: string) => {
@@ -862,8 +864,23 @@ export default function ChatPage() {
     );
   }
 
-  // Show name prompt after language is set
-  if (!nameReady) {
+  // Show loading while waiting for userId after language is set
+  if (langReady && !nameChecked) {
+    return (
+      <div className="chat-bg flex min-h-screen flex-col items-center justify-center text-white">
+        <div className="relative z-10 w-full max-w-sm rounded-2xl border border-purple-500/20 bg-black/50 p-8 shadow-2xl backdrop-blur-xl">
+          <div className="text-center">
+            <div className="text-4xl mb-3 animate-pulse">💜</div>
+            <p className="text-sm text-white/50">Loading...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show name prompt after language is set AND after we've checked if user has a name
+  // Wait for nameChecked to be true before showing input (prevents flash)
+  if (!nameReady && nameChecked) {
     return (
       <div className="chat-bg flex min-h-screen flex-col items-center justify-center text-white">
         <div className="relative z-10 w-full max-w-sm rounded-2xl border border-purple-500/20 bg-black/50 p-8 shadow-2xl backdrop-blur-xl">
