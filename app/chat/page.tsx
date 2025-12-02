@@ -598,8 +598,9 @@ export default function ChatPage() {
   }, [langReady]);
 
   // Check if user already has a name set
+  // IMPORTANT: Wait for userId to be available before checking name
   useEffect(() => {
-    if (langReady && !nameReady) {
+    if (langReady && !nameReady && userId) {
       fetch("/api/get-name", { credentials: "include" })
         .then((r) => r.json())
         .then((d: GetNameResponse) => {
@@ -612,7 +613,7 @@ export default function ChatPage() {
         })
         .catch(() => setNameReady(false));
     }
-  }, [langReady, nameReady]);
+  }, [langReady, nameReady, userId]);
 
   const handleSendText = useCallback(
     async (txt: string) => {
