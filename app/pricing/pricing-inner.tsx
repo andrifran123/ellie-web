@@ -341,6 +341,16 @@ export default function PricingInner() {
               </div>
             </div>
           </div>
+
+          {/* Back to login link */}
+          <div className="mt-8 text-center">
+            <a
+              href="/login"
+              className="text-sm text-white/60 hover:text-white transition underline"
+            >
+              Back to login
+            </a>
+          </div>
         </div>
       </main>
     </div>
