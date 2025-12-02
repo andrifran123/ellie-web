@@ -187,6 +187,12 @@ export default function ChatPage() {
   const [nameChecked, setNameChecked] = useState(false); // Track if we've checked for existing name
   const [userName, setUserName] = useState("");
 
+  // Terms/disclaimer modal state
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [termsData, setTermsData] = useState<{ title: string; content: string; checkboxLabel: string } | null>(null);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [loadingTerms, setLoadingTerms] = useState(false);
+
   // Ellie can hint voice mode
   const [voiceMode, setVoiceMode] = useState<string | null>(null);
 
@@ -763,12 +769,42 @@ export default function ChatPage() {
     }
   }, [chosenLang, show]);
 
+  // Step 1: Validate name and show terms modal
   const confirmName = useCallback(async () => {
     const trimmedName = userName.trim();
     if (!trimmedName) {
       show("Please enter your name");
       return;
     }
+
+    // Fetch terms if not already loaded
+    if (!termsData) {
+      setLoadingTerms(true);
+      try {
+        const r = await fetch("/api/auth/terms", { credentials: "include" });
+        const data = await r.json();
+        if (data.ok && data.terms) {
+          setTermsData(data.terms);
+        }
+      } catch {
+        show("Error loading terms");
+        setLoadingTerms(false);
+        return;
+      }
+      setLoadingTerms(false);
+    }
+
+    setAcceptedTerms(false);
+    setShowTermsModal(true);
+  }, [userName, show, termsData]);
+
+  // Step 2: Actually save the name after terms accepted
+  const saveNameAfterTerms = useCallback(async () => {
+    if (!acceptedTerms) return;
+
+    const trimmedName = userName.trim();
+    setShowTermsModal(false);
+
     try {
       const data = await apiPost<SetNameResponse>("/api/set-name", {
         name: trimmedName,
@@ -780,7 +816,7 @@ export default function ChatPage() {
     } catch (e) {
       show("Error: " + errorMessage(e));
     }
-  }, [userName, show]);
+  }, [userName, show, acceptedTerms]);
 
   const resetConversation = useCallback(async () => {
     if (!userId) return; // Wait for userId
@@ -883,6 +919,59 @@ export default function ChatPage() {
   if (!nameReady && nameChecked) {
     return (
       <div className="chat-bg flex min-h-screen flex-col items-center justify-center text-white">
+        {/* Terms & Disclaimer Modal */}
+        {showTermsModal && termsData && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl border border-white/20 bg-[#0d0a1a] shadow-2xl">
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-white/10">
+                <h2 className="text-xl font-bold text-white">{termsData.title}</h2>
+                <button
+                  onClick={() => setShowTermsModal(false)}
+                  className="text-white/60 hover:text-white text-2xl leading-none"
+                  aria-label="Close"
+                >
+                  &times;
+                </button>
+              </div>
+
+              {/* Scrollable Content */}
+              <div className="flex-1 overflow-y-auto p-4 text-sm text-white/80 whitespace-pre-wrap leading-relaxed">
+                {termsData.content}
+              </div>
+
+              {/* Footer with checkbox and button */}
+              <div className="p-4 border-t border-white/10 space-y-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={acceptedTerms}
+                    onChange={(e) => setAcceptedTerms(e.target.checked)}
+                    className="mt-1 w-5 h-5 rounded border-white/30 bg-white/10 accent-purple-500"
+                  />
+                  <span className="text-sm text-white/90">{termsData.checkboxLabel}</span>
+                </label>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowTermsModal(false)}
+                    className="flex-1 rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-white hover:bg-white/10 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveNameAfterTerms}
+                    disabled={!acceptedTerms}
+                    className="flex-1 rounded-lg bg-white text-black px-4 py-2 text-sm font-semibold hover:opacity-90 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    I Agree & Continue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="relative z-10 w-full max-w-sm rounded-2xl border border-purple-500/20 bg-black/50 p-8 shadow-2xl backdrop-blur-xl">
           <div className="text-center mb-6">
             <div className="text-4xl mb-3">💜</div>
@@ -900,10 +989,10 @@ export default function ChatPage() {
           />
           <button
             onClick={confirmName}
-            disabled={!userName.trim()}
+            disabled={!userName.trim() || loadingTerms}
             className="send-btn mt-5 w-full px-4 py-3 font-semibold text-white shadow-xl transition hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Continue
+            {loadingTerms ? "Loading..." : "Continue"}
           </button>
         </div>
       </div>
