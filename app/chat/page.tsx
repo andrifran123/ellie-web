@@ -83,6 +83,7 @@ type ChatResponse = {
   photo?: PhotoData; // 📸 NEW: Photo attachment
   photoRefused?: boolean; // 📸 NEW: Flag when user asked for photo and was refused
   onboarding?: OnboardingStep; // Onboarding flow step
+  followUp?: { text: string; delayMs: number }; // 💬 Double text follow-up
 };
 
 type VoiceResponse = {
@@ -788,6 +789,29 @@ export default function ChatPage() {
           typingDelayRef.current = null;
         }
         setTyping(false);
+
+        // 💬 DOUBLE TEXT: Handle follow-up message if present
+        if (data.followUp && data.followUp.text) {
+          const followUpDelay = data.followUp.delayMs || 2000;
+          console.log(`💬 Follow-up scheduled in ${followUpDelay}ms: "${data.followUp.text.substring(0, 30)}..."`);
+
+          // Wait a bit, show typing, then show follow-up
+          setTimeout(() => {
+            setTyping(true);
+          }, followUpDelay * 0.4); // Start typing indicator partway through
+
+          setTimeout(() => {
+            const followUpMsg: ChatMsg = {
+              from: "ellie",
+              text: data.followUp!.text,
+              ts: Date.now()
+            };
+            setMessages((m) => [...m, followUpMsg]);
+            trackMessage(data.followUp!.text, followUpMsg.ts);
+            setTyping(false);
+            console.log("💬 Follow-up message shown:", data.followUp!.text.substring(0, 30));
+          }, followUpDelay);
+        }
 
         if (data.language && data.language !== chosenLang) {
           setChosenLang(data.language);
