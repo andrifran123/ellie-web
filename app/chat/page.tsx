@@ -76,7 +76,6 @@ type OnboardingStep = {
 // UPDATED: Chat response now includes relationship status, manual override flag, and onboarding
 type ChatResponse = {
   reply?: string;
-  replies?: string[]; // 💬 Double text: array of messages
   language?: LangCode;
   voiceMode?: string;
   relationshipStatus?: RelationshipStatus;
@@ -767,42 +766,21 @@ export default function ChatPage() {
           return;
         }
 
-        // 💬 DOUBLE TEXT: Handle multiple messages
-        const messagesToShow = data.replies && data.replies.length > 1
-          ? data.replies
-          : [data.reply || "(No reply)"];
+        // Only show "(No reply)" if there's truly no reply and no onboarding
+        const reply = data.reply || "(No reply)";
+        const ellieMsg: ChatMsg = { from: "ellie", text: reply, ts: Date.now(), photo: data.photo };
 
         // 📸 Debug photo data
         if (data.photo) {
           console.log("📸 Photo received:", JSON.stringify(data.photo));
         }
 
-        // Show messages one by one with delays for double text
-        for (let i = 0; i < messagesToShow.length; i++) {
-          const msgText = messagesToShow[i];
-          // Only attach photo to last message
-          const isLastMessage = i === messagesToShow.length - 1;
-          const ellieMsg: ChatMsg = {
-            from: "ellie",
-            text: msgText,
-            ts: Date.now() + i, // Slightly different timestamps
-            photo: isLastMessage ? data.photo : undefined
-          };
+        // ✅ FIX: Add message first, THEN hide typing indicator
+        setMessages((m) => [...m, ellieMsg]);
 
-          if (i === 0) {
-            // First message - add immediately
-            setMessages((m) => [...m, ellieMsg]);
-            trackMessage(msgText, ellieMsg.ts);
-          } else {
-            // Subsequent messages - show typing then add after delay
-            setTyping(true);
-            await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 700)); // 0.8-1.5s delay
-            setMessages((m) => [...m, ellieMsg]);
-            trackMessage(msgText, ellieMsg.ts);
-          }
-
-          console.log(`✅ Message ${i + 1}/${messagesToShow.length} shown:`, msgText.substring(0, 30));
-        }
+        // Track this message to prevent duplicate if polling fetches it later
+        trackMessage(reply, ellieMsg.ts);
+        console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
 
         // ⚡ INSTANT: Hide typing immediately and clear any pending delay
         if (typingDelayRef.current) {
