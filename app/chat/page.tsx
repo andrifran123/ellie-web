@@ -233,6 +233,9 @@ export default function ChatPage() {
   // Typing timeout ref for auto-clearing typing indicator
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Ref for the initial typing delay (1 second before dots appear)
+  const typingDelayRef = useRef<NodeJS.Timeout | null>(null);
+
   // 📞 Missed call state
   const [missedCallChecked, setMissedCallChecked] = useState(false);
 
@@ -666,9 +669,17 @@ export default function ChatPage() {
         )
       );
       
-      // Show typing dots immediately (only in normal mode)
+      // Show typing dots after 1 second delay (simulates Ellie "seeing" the message)
+      // Only in normal mode
       if (!inManualOverride) {
-        setTyping(true);
+        // Clear any existing delay timeout
+        if (typingDelayRef.current) {
+          clearTimeout(typingDelayRef.current);
+        }
+        typingDelayRef.current = setTimeout(() => {
+          setTyping(true);
+          typingDelayRef.current = null;
+        }, 1000);
       }
 
       try {
@@ -771,7 +782,11 @@ export default function ChatPage() {
         trackMessage(reply, ellieMsg.ts);
         console.log("✅ Normal chat message tracked:", reply.substring(0, 30));
 
-        // ⚡ INSTANT: Hide typing immediately
+        // ⚡ INSTANT: Hide typing immediately and clear any pending delay
+        if (typingDelayRef.current) {
+          clearTimeout(typingDelayRef.current);
+          typingDelayRef.current = null;
+        }
         setTyping(false);
 
         if (data.language && data.language !== chosenLang) {
@@ -785,6 +800,11 @@ export default function ChatPage() {
         if (e instanceof Error && e.name === 'AbortError') {
           console.log("🛑 Request aborted");
           return;
+        }
+        // Clear typing delay and hide typing indicator
+        if (typingDelayRef.current) {
+          clearTimeout(typingDelayRef.current);
+          typingDelayRef.current = null;
         }
         setTyping(false);
         show("Error: " + errorMessage(e));
