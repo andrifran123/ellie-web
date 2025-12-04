@@ -3,54 +3,126 @@ export const metadata = { title: "Privacy Policy — Ellie" };
 
 export default function PrivacyPage() {
   return (
-    <main className="px-6 md:px-10 py-10 max-w-3xl mx-auto text-white">
-      <h1 className="text-3xl font-bold">Privacy Policy</h1>
-      <p className="mt-2 text-sm text-white/60">Last updated: {new Date().toLocaleDateString()}</p>
+    <main className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 px-6 md:px-10 py-10">
+      <div className="max-w-3xl mx-auto text-white">
+        <h1 className="text-3xl font-bold">Privacy Policy</h1>
+        <p className="mt-2 text-sm text-white/60">Last updated: December 4, 2025</p>
 
-      <section className="mt-6 space-y-4 text-white/90 leading-7">
-        <p>
-          Ellie (“we”, “us”) provides conversational features and subscriptions. This policy explains what
-          we collect, how we use it, and your choices.
-        </p>
+        <section className="mt-6 space-y-6 text-white/90 leading-7">
+          <p>
+            Ellie (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;) operates an AI-powered interactive entertainment platform.
+            This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our service.
+          </p>
 
-        <h2 className="text-xl font-semibold">Information we collect</h2>
-        <ul className="list-disc pl-5 space-y-2">
-          <li>Account info: email, name (if you sign up with a password flow).</li>
-          <li>Session data: authentication cookies, device/browser info.</li>
-          <li>Conversation data you send to Ellie to provide the service.</li>
-          <li>Billing info is handled by our payment processor (e.g., Stripe). We don’t store card numbers.</li>
-        </ul>
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Age Requirement</h2>
+            <p className="mt-2">
+              Our service is intended for users who are 18 years of age or older. By using Ellie, you confirm that you are
+              at least 18 years old. We do not knowingly collect information from anyone under the age of 18. If we learn
+              that we have collected personal information from a user under 18, we will delete that information immediately.
+            </p>
+          </div>
 
-        <h2 className="text-xl font-semibold">How we use information</h2>
-        <ul className="list-disc pl-5 space-y-2">
-          <li>Authenticate your account and maintain sessions.</li>
-          <li>Provide chat/voice features and improve quality.</li>
-          <li>Process payments, prevent fraud, and provide support.</li>
-        </ul>
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Information We Collect</h2>
+            <ul className="list-disc pl-5 space-y-2 mt-2">
+              <li><strong>Account Information:</strong> Email address, username, and authentication credentials when you create an account.</li>
+              <li><strong>Usage Data:</strong> Conversation logs, session data, device information, and browser type to provide and improve our service.</li>
+              <li><strong>Payment Information:</strong> Billing details are processed securely by our third-party payment processor. We do not store credit card numbers on our servers.</li>
+              <li><strong>Cookies:</strong> We use cookies and similar technologies to maintain sessions and improve user experience.</li>
+            </ul>
+          </div>
 
-        <h2 className="text-xl font-semibold">Sharing</h2>
-        <p>
-          We share data with service providers only as needed to operate the service (e.g., hosting, email,
-          payments). We don’t sell your personal data.
-        </p>
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Data Security & Encryption</h2>
+            <p className="mt-2">
+              We implement industry-standard security measures to protect your personal information. All data transmitted
+              between your device and our servers is encrypted using TLS/SSL encryption. Your conversation data is stored
+              on secure servers with access controls. While no method of transmission over the internet is 100% secure,
+              we strive to use commercially acceptable means to protect your personal information.
+            </p>
+          </div>
 
-        <h2 className="text-xl font-semibold">Retention</h2>
-        <p>
-          We keep data for as long as necessary to provide the service and comply with legal obligations.
-          You can request deletion of your account data by contacting us.
-        </p>
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">How We Use Your Information</h2>
+            <ul className="list-disc pl-5 space-y-2 mt-2">
+              <li>To provide, operate, and maintain our AI entertainment service</li>
+              <li>To authenticate your account and manage your subscription</li>
+              <li>To process payments and prevent fraudulent transactions</li>
+              <li>To improve our service and develop new features</li>
+              <li>To communicate with you about your account or service updates</li>
+              <li>To comply with legal obligations</li>
+            </ul>
+          </div>
 
-        <h2 className="text-xl font-semibold">Your rights</h2>
-        <p>
-          Subject to applicable law, you may access, correct, or delete your personal data. Contact us to
-          exercise these rights.
-        </p>
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">AI-Generated Content</h2>
+            <p className="mt-2">
+              Ellie is an artificial intelligence chatbot. All characters, images, and scenarios presented by Ellie are
+              entirely fictional and generated by computer software. No actual human beings are depicted in any content.
+              All characters are fictitious and represented as 18 years of age or older. Content is generated for
+              entertainment purposes only.
+            </p>
+          </div>
 
-        <h2 className="text-xl font-semibold">Contact</h2>
-        <p>
-          Questions? Email us at <a className="underline" href="mailto:support@ellie-elite.com">support@ellie-elite.com</a>.
-        </p>
-      </section>
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Data Sharing</h2>
+            <p className="mt-2">
+              We do not sell your personal information. We may share data with:
+            </p>
+            <ul className="list-disc pl-5 space-y-2 mt-2">
+              <li><strong>Service Providers:</strong> Third-party vendors who assist in operating our service (hosting, payment processing, analytics)</li>
+              <li><strong>Legal Requirements:</strong> When required by law or to protect our rights</li>
+              <li><strong>Business Transfers:</strong> In connection with a merger, acquisition, or sale of assets</li>
+            </ul>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Data Retention</h2>
+            <p className="mt-2">
+              We retain your personal information for as long as your account is active or as needed to provide services.
+              You may request deletion of your account and associated data at any time by contacting us. We will delete
+              your information within 30 days of a verified request, except where retention is required by law.
+            </p>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Your Rights</h2>
+            <p className="mt-2">
+              Depending on your location, you may have the right to:
+            </p>
+            <ul className="list-disc pl-5 space-y-2 mt-2">
+              <li>Access the personal information we hold about you</li>
+              <li>Request correction of inaccurate information</li>
+              <li>Request deletion of your personal information</li>
+              <li>Object to or restrict certain processing</li>
+              <li>Data portability</li>
+            </ul>
+            <p className="mt-2">
+              To exercise these rights, contact us at the email below.
+            </p>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Changes to This Policy</h2>
+            <p className="mt-2">
+              We may update this Privacy Policy from time to time. We will notify you of material changes by posting the
+              new policy on this page and updating the &quot;Last updated&quot; date. Your continued use of the service after
+              changes constitutes acceptance of the updated policy.
+            </p>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold text-purple-300">Contact Us</h2>
+            <p className="mt-2">
+              If you have questions about this Privacy Policy or our data practices, contact us at:{" "}
+              <a className="underline text-purple-400 hover:text-purple-300" href="mailto:support@ellie-elite.com">
+                support@ellie-elite.com
+              </a>
+            </p>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
