@@ -66,10 +66,10 @@ export default function TermsPage() {
           <div>
             <h2 className="text-xl font-semibold text-purple-300">Refund Policy</h2>
             <p className="mt-2">
-              Due to the nature of digital services, all sales are generally final. Refund requests are handled on a
-              case-by-case basis at our sole discretion. If you believe you are entitled to a refund due to technical
-              issues or billing errors, please contact us at support@ellie-elite.com within 7 days of the charge.
-              We reserve the right to deny refund requests for services that have been substantially used.
+              <strong>All sales are final. No refunds will be issued.</strong> Due to the nature of digital services
+              and instant access to content, we do not offer refunds once a purchase or subscription has been made.
+              By completing a purchase, you acknowledge and agree to this no-refund policy. If you experience a
+              billing error or unauthorized charge, please contact us at support@ellie-elite.com within 48 hours.
             </p>
           </div>
 
